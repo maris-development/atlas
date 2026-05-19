@@ -1,6 +1,6 @@
 /// Compression codec applied when writing new array blocks.
 ///
-/// The codec is stored per-variable in `array_store.json` so that each array
+/// The codec is stored per-variable in `atlas.json` so that each array
 /// can be reopened with the correct codec regardless of the store-level default.
 /// Existing blocks are always decompressed using whatever codec they were
 /// originally written with, so the choice only affects the write path.
@@ -15,7 +15,7 @@ pub enum Codec {
     Uncompressed,
 }
 
-/// Configuration for opening or creating an [`ArrayStore`](crate::ArrayStore).
+/// Configuration for opening or creating an [`Atlas`](crate::Atlas).
 #[derive(Debug, Clone, Default)]
 pub struct StoreConfig {
     /// Compression codec used when writing array blocks. Defaults to [`Codec::Zstd`].

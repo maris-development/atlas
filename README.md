@@ -1,4 +1,4 @@
-# array-store
+# ATLAS — Aggregated Tensor Large Array Store
 
 A directory-based store for thousands of named datasets, each holding N-dimensional typed arrays. Built on top of the [`array-format`](https://github.com/robinskil/array-format) (`.af`) binary format, with configurable compression (Zstd, LZ4, or none), chunked I/O, and an [`object_store`](https://crates.io/crates/object_store) backend that works on local disk, S3, GCS, Azure Blob, and in-memory.
 
@@ -6,13 +6,13 @@ A directory-based store for thousands of named datasets, each holding N-dimensio
 
 ## What it does
 
-`array-store` is designed for workloads where you have a large collection of similarly-shaped datasets — such as one dataset per time step, sensor station, or simulation run — and you want to query a single variable (e.g. `temperature`) across all of them efficiently.
+`atlas` is designed for workloads where you have a large collection of similarly-shaped datasets — such as one dataset per time step, sensor station, or simulation run — and you want to query a single variable (e.g. `temperature`) across all of them efficiently.
 
 Each dataset is a named group of N-dimensional arrays with typed per-dataset attributes. Datasets that share an array name (e.g. every `jan_2024`, `feb_2024`, … all have `temperature`) are stored together in the same physical file, keyed by dataset name inside the file.
 
 ```text
 my_store/
-├── array_store.json          ← dataset registry and per-dataset attributes (JSON)
+├── atlas.json               ← dataset registry and per-dataset attributes (JSON)
 ├── temperature/
 │   └── data.af         ← one ArrayFile holding temperature for every dataset
 ├── pressure/
@@ -25,7 +25,7 @@ my_store/
 
 ## File format
 
-### `array_store.json`
+### `atlas.json`
 
 The registry is a plain JSON file written on every `flush()`. It stores:
 
@@ -34,7 +34,7 @@ The registry is a plain JSON file written on every `flush()`. It stores:
 - **Per-dataset attributes** — typed key-value pairs (bool, int8/16/32/64, uint8/16/32/64, float32/64, string).
 - **Array schemas** — per array: dtype, shape, chunk shape, named dimensions, and the codec used when the array was first written.
 
-Because `array_store.json` is human-readable and self-describing, you can inspect or audit the store contents with any JSON tool without needing the library.
+Because `atlas.json` is human-readable and self-describing, you can inspect or audit the store contents with any JSON tool without needing the library.
 
 ### `<array_name>/data.af`
 
@@ -42,7 +42,7 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 
 - **Multiple datasets in one file** — every dataset that owns this variable is stored as a named entry inside the same file.
 - **Chunked layout** — arrays are split into chunks of a user-specified shape, so partial reads and writes touch only the relevant blocks.
-- **Configurable compression** — each block is compressed with the codec set when the store was created (default: Zstd; also LZ4 and uncompressed). The codec is persisted in `array_store.json` and restored automatically on `open` — no need to pass it again. Block target size is 8 MiB.
+- **Configurable compression** — each block is compressed with the codec set when the store was created (default: Zstd; also LZ4 and uncompressed). The codec is persisted in `atlas.json` and restored automatically on `open` — no need to pass it again. Block target size is 8 MiB.
 - **Persisted statistics** — on `flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Statistics survive store reopening.
 - **In-memory caches** — a 256 MiB decoded block cache and a 64 MiB raw I/O cache sit in front of the object store for repeated reads.
 
@@ -52,7 +52,7 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 
 ```rust
 use std::sync::Arc;
-use array_store::{ArrayStore, Attr, StoreConfig};
+use atlas::{Atlas, Attr, StoreConfig};
 use ndarray::Array2;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -61,8 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
     let prefix = Path::from_absolute_path("/tmp/my_store")?;
 
-    // Create a new store — codec is persisted to array_store.json
-    let mut s = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
+    // Create a new store — codec is persisted to atlas.json
+    let mut s = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
 
     // Create a dataset and write arrays
     let mut ds = s.create_dataset("jan_2024").await?;
@@ -81,8 +81,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ds.set_attribute("station", Attr::String("KNMI".into()));
     ds.flush().await?;
 
-    // Reopen — codec is read from array_store.json, no StoreConfig needed
-    let s2 = ArrayStore::open(store, prefix).await?;
+    // Reopen — codec is read from atlas.json, no StoreConfig needed
+    let s2 = Atlas::open(store, prefix).await?;
     let ds2 = s2.open_dataset("jan_2024").await?;
 
     // Full read
@@ -105,15 +105,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Concept | Description |
 | --- | --- |
-| **Store** | The root directory, managed by `ArrayStore`. |
+| **Store** | The root directory, managed by `Atlas`. |
 | **Dataset** | A named group of arrays + typed attributes, accessed via `DatasetView`. |
 | **Array** | An N-dimensional typed array with named dimensions and an optional chunk shape. |
 | **Attribute** | A typed scalar attached to a dataset (metadata, not array data). |
 | **Array file** | One `data.af` file per variable name, shared across all datasets that define that variable. |
 | **Flush** | Persists all pending writes and recomputes statistics. Must be called explicitly. |
 | **Compact** | Rewrites the `.af` file to reclaim space after deletes. |
-| **StoreConfig** | Configuration passed to `ArrayStore::create`. Currently holds the compression `Codec`. |
-| **Codec** | Compression codec for new array blocks: `Codec::Zstd` (default), `Codec::Lz4`, or `Codec::Uncompressed`. Persisted in `array_store.json`; `open` reads it automatically. |
+| **StoreConfig** | Configuration passed to `Atlas::create`. Currently holds the compression `Codec`. |
+| **Codec** | Compression codec for new array blocks: `Codec::Zstd` (default), `Codec::Lz4`, or `Codec::Uncompressed`. Persisted in `atlas.json`; `open` reads it automatically. |
 
 ---
 
@@ -149,10 +149,10 @@ zarr_store/
 
 Reading `temperature` for 1 000 time steps means opening 1 000 separate directories/files.
 
-**array-store** uses a *variable-first* layout:
+**ATLAS** uses a *variable-first* layout:
 
 ```text
-array_store/
+atlas_store/
 ├── temperature/
 │   └── data.af        ← temperature for ALL datasets in one file
 └── pressure/
@@ -163,7 +163,7 @@ Reading `temperature` for 1 000 datasets means opening exactly **one file**. Thi
 
 ### Feature comparison
 
-| Feature | NetCDF-4 | Zarr v3 | array-store |
+| Feature | NetCDF-4 | Zarr v3 | ATLAS |
 | --- | --- | --- | --- |
 | Layout | Dataset-first | Dataset-first | Variable-first |
 | Compression | Deflate / Zstd / … | Any codec plugin | Zstd / LZ4 / None |
@@ -174,11 +174,11 @@ Reading `temperature` for 1 000 datasets means opening exactly **one file**. Thi
 | Cross-dataset column scan | Slow (N file opens) | Slow (N directory opens) | Fast (1 file open) |
 | Partial reads | Yes | Yes | Yes |
 | Statistics (min/max/nulls) | No | No | Yes (persisted on flush) |
-| Self-describing metadata | Yes | Yes | Yes (`array_store.json`) |
+| Self-describing metadata | Yes | Yes | Yes (`atlas.json`) |
 | Language support | C/Python/Julia/… | Python/Java/… | Rust |
 | Mutable after write | Limited | Yes | Yes (chunked overwrites + compact) |
 
-### When to choose array-store
+### When to choose ATLAS
 
 - You have many homogeneous datasets (same variable schema, different instances — time steps, stations, runs).
 - Your primary query is "give me variable X across all datasets" — a column scan across the dataset dimension.
@@ -219,7 +219,7 @@ Two caches sit in front of the object store:
 | Decoded block cache | 256 MiB | Decompressed array chunks, ready for use |
 | I/O cache | 64 MiB | Raw compressed bytes from the object store |
 
-The decoded cache means repeated reads of the same chunk cost only a hash-map lookup. Both caches are shared across all `DatasetView`s that open the same `ArrayStore`.
+The decoded cache means repeated reads of the same chunk cost only a hash-map lookup. Both caches are shared across all `DatasetView`s that open the same `Atlas`.
 
 ### Persisted statistics
 
@@ -227,7 +227,7 @@ Min, max, null count, and row count are computed and persisted on every `flush()
 
 ### Compression
 
-The codec is chosen once at store creation via `StoreConfig` and written into `array_store.json`. `ArrayStore::open` reads it from there, so callers never need to repeat the codec choice. Each array also records its own codec in `array_store.json`, so a store can theoretically hold arrays written with different codecs if the schema is migrated.
+The codec is chosen once at store creation via `StoreConfig` and written into `atlas.json`. `Atlas::open` reads it from there, so callers never need to repeat the codec choice. Each array also records its own codec in `atlas.json`, so a store can theoretically hold arrays written with different codecs if the schema is migrated.
 
 | Codec | Trade-off |
 | --- | --- |
@@ -239,7 +239,7 @@ Choose LZ4 when decompression throughput matters more than storage size (e.g. la
 
 ### Write path
 
-Writes are buffered in-memory. Calling `flush()` compresses and writes all pending blocks and updates `array_store.json` atomically (a single `PUT`). This means the write path scales with the number of modified chunks, not the number of datasets.
+Writes are buffered in-memory. Calling `flush()` compresses and writes all pending blocks and updates `atlas.json` atomically (a single `PUT`). This means the write path scales with the number of modified chunks, not the number of datasets.
 
 ### Compaction
 
@@ -249,7 +249,7 @@ After deleting arrays or datasets, the underlying `.af` files may retain dead sp
 
 ## Thread safety
 
-`ArrayStore` and `DatasetView` are `Send + Sync` and work with the default multi-thread Tokio runtime.
+`Atlas` and `DatasetView` are `Send + Sync` and work with the default multi-thread Tokio runtime.
 
 Each physical array file is guarded by a `tokio::sync::RwLock`:
 

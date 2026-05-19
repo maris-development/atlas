@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use array_store::{ArrayStore, Attr, StoreConfig};
+use atlas::{Atlas, Attr, StoreConfig};
 use ndarray::{Array1, Array2};
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -21,8 +21,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = Path::from_absolute_path(tmp.path())?;
 
     // StoreConfig::default() uses Zstd compression. The codec is persisted in
-    // array_store.json so that ArrayStore::open() below needs no codec argument.
-    let mut s = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
+    // atlas.json so that Atlas::open() below needs no codec argument.
+    let mut s = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
 
     // ── Phase 1: create three datasets, two share "grid" ─────────────────────
 
@@ -146,8 +146,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Phase 6: reopen and verify ===");
 
-    // Codec is restored from array_store.json — no StoreConfig needed.
-    let s2 = ArrayStore::open(store, prefix).await?;
+    // Codec is restored from atlas.json — no StoreConfig needed.
+    let s2 = Atlas::open(store, prefix).await?;
 
     assert!(s2.dataset_exists("north"));
     assert!(!s2.dataset_exists("south"));

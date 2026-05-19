@@ -37,21 +37,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "array-store"
-version = "0.1.0"
-dependencies = [
- "array-format",
- "ndarray",
- "object_store",
- "parking_lot",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
-]
-
-[[package]]
 name = "async-lock"
 version = "3.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -71,6 +56,21 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "atlas"
+version = "0.1.0"
+dependencies = [
+ "array-format",
+ "ndarray",
+ "object_store",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

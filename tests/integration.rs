@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use array_store::{ArraySchema, ArrayStore, Attr, DatasetMeta, DType, StatValue, StoreConfig};
+use atlas::{ArraySchema, Atlas, Attr, DatasetMeta, DType, StatValue, StoreConfig};
 use ndarray::ArrayD;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -14,12 +14,12 @@ fn make_store(tmp: &tempfile::TempDir) -> (Arc<dyn object_store::ObjectStore>, P
 async fn create_write_read_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     let data = ArrayD::<f32>::from_elem(vec![4, 4], 42.0_f32);
 
     {
-        let mut ds = array_store.create_dataset("ds_jan").await.unwrap();
+        let mut ds = atlas.create_dataset("ds_jan").await.unwrap();
         ds.define_array::<f32>(
             "temperature",
             vec!["lat".into(), "lon".into()],
@@ -34,10 +34,10 @@ async fn create_write_read_roundtrip() {
         ds.flush().await.unwrap();
     }
 
-    let store2 = ArrayStore::open(store, prefix).await.unwrap();
-    assert!(store2.dataset_exists("ds_jan"));
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    assert!(atlas2.dataset_exists("ds_jan"));
 
-    let ds2 = store2.open_dataset("ds_jan").await.unwrap();
+    let ds2 = atlas2.open_dataset("ds_jan").await.unwrap();
     let result = ds2
         .read_array::<f32>("temperature", vec![], vec![])
         .await
@@ -51,13 +51,13 @@ async fn create_write_read_roundtrip() {
 async fn two_datasets_share_array_file() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     let data_jan = ArrayD::<f32>::from_elem(vec![2, 2], 1.0_f32);
     let data_feb = ArrayD::<f32>::from_elem(vec![2, 2], 2.0_f32);
 
     {
-        let mut ds = array_store.create_dataset("ds_jan").await.unwrap();
+        let mut ds = atlas.create_dataset("ds_jan").await.unwrap();
         ds.define_array::<f32>("temp", vec!["x".into(), "y".into()], vec![2, 2], None, None)
             .await
             .unwrap();
@@ -66,7 +66,7 @@ async fn two_datasets_share_array_file() {
     }
 
     {
-        let mut ds = array_store.create_dataset("ds_feb").await.unwrap();
+        let mut ds = atlas.create_dataset("ds_feb").await.unwrap();
         ds.define_array::<f32>("temp", vec!["x".into(), "y".into()], vec![2, 2], None, None)
             .await
             .unwrap();
@@ -74,13 +74,13 @@ async fn two_datasets_share_array_file() {
         ds.flush().await.unwrap();
     }
 
-    let store2 = ArrayStore::open(store, prefix).await.unwrap();
-    let mut datasets = store2.list_datasets();
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    let mut datasets = atlas2.list_datasets();
     datasets.sort();
     assert_eq!(datasets, vec!["ds_feb", "ds_jan"]);
 
-    let ds_jan = store2.open_dataset("ds_jan").await.unwrap();
-    let ds_feb = store2.open_dataset("ds_feb").await.unwrap();
+    let ds_jan = atlas2.open_dataset("ds_jan").await.unwrap();
+    let ds_feb = atlas2.open_dataset("ds_feb").await.unwrap();
 
     let jan = ds_jan.read_array::<f32>("temp", vec![], vec![]).await.unwrap().unwrap();
     let feb = ds_feb.read_array::<f32>("temp", vec![], vec![]).await.unwrap().unwrap();
@@ -93,53 +93,53 @@ async fn two_datasets_share_array_file() {
 async fn list_datasets_and_arrays() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     for name in &["a", "b", "c"] {
-        let mut ds = array_store.create_dataset(name).await.unwrap();
+        let mut ds = atlas.create_dataset(name).await.unwrap();
         ds.define_array::<f32>("x", vec!["i".into()], vec![3], None, None)
             .await
             .unwrap();
         ds.flush().await.unwrap();
     }
 
-    let store2 = ArrayStore::open(store, prefix).await.unwrap();
-    let mut names = store2.list_datasets();
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    let mut names = atlas2.list_datasets();
     names.sort();
     assert_eq!(names, vec!["a", "b", "c"]);
-    assert_eq!(store2.list_arrays(), vec!["x"]);
+    assert_eq!(atlas2.list_arrays(), vec!["x"]);
 }
 
 #[tokio::test]
 async fn delete_dataset() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     {
-        let mut ds = array_store.create_dataset("to_delete").await.unwrap();
+        let mut ds = atlas.create_dataset("to_delete").await.unwrap();
         ds.define_array::<f32>("arr", vec!["i".into()], vec![4], None, None)
             .await
             .unwrap();
         ds.flush().await.unwrap();
     }
 
-    assert!(array_store.dataset_exists("to_delete"));
-    array_store.delete_dataset("to_delete").await.unwrap();
-    assert!(!array_store.dataset_exists("to_delete"));
+    assert!(atlas.dataset_exists("to_delete"));
+    atlas.delete_dataset("to_delete").await.unwrap();
+    assert!(!atlas.dataset_exists("to_delete"));
 
-    let store2 = ArrayStore::open(store, prefix).await.unwrap();
-    assert!(!store2.dataset_exists("to_delete"));
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    assert!(!atlas2.dataset_exists("to_delete"));
 }
 
 #[tokio::test]
 async fn attributes_survive_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     {
-        let mut ds = array_store.create_dataset("meta_test").await.unwrap();
+        let mut ds = atlas.create_dataset("meta_test").await.unwrap();
         ds.define_array::<f32>("v", vec!["t".into()], vec![2], None, None)
             .await
             .unwrap();
@@ -148,8 +148,8 @@ async fn attributes_survive_reopen() {
         ds.flush().await.unwrap();
     }
 
-    let store2 = ArrayStore::open(store, prefix).await.unwrap();
-    let ds2 = store2.open_dataset("meta_test").await.unwrap();
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    let ds2 = atlas2.open_dataset("meta_test").await.unwrap();
     assert_eq!(ds2.get_attribute("sensor"), Some(&Attr::String("ABC".into())));
     assert_eq!(ds2.get_attribute("year"), Some(&Attr::UInt32(2023)));
 }
@@ -158,22 +158,22 @@ async fn attributes_survive_reopen() {
 async fn reject_invalid_names() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store, prefix, StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default()).await.unwrap();
 
-    assert!(array_store.create_dataset("").await.is_err());
-    assert!(array_store.create_dataset("..").await.is_err());
-    assert!(array_store.create_dataset("a/b").await.is_err());
-    assert!(array_store.create_dataset("_hidden").await.is_err());
+    assert!(atlas.create_dataset("").await.is_err());
+    assert!(atlas.create_dataset("..").await.is_err());
+    assert!(atlas.create_dataset("a/b").await.is_err());
+    assert!(atlas.create_dataset("_hidden").await.is_err());
 }
 
 #[tokio::test]
 async fn meta_survives_flush_and_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     {
-        let mut ds = array_store.create_dataset("meta_test").await.unwrap();
+        let mut ds = atlas.create_dataset("meta_test").await.unwrap();
         ds.define_array::<f32>(
             "temp",
             vec!["lat".into(), "lon".into()],
@@ -191,8 +191,8 @@ async fn meta_survives_flush_and_reopen() {
         ds.flush().await.unwrap();
     }
 
-    let store2 = ArrayStore::open(store, prefix).await.unwrap();
-    let ds2 = store2.open_dataset("meta_test").await.unwrap();
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    let ds2 = atlas2.open_dataset("meta_test").await.unwrap();
     let meta: &DatasetMeta = ds2.meta();
 
     let temp_schema: &ArraySchema = meta.arrays.get("temp").expect("temp array schema missing");
@@ -214,9 +214,9 @@ async fn meta_survives_flush_and_reopen() {
 async fn array_stats_after_flush() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store, prefix, StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default()).await.unwrap();
 
-    let mut ds = array_store.create_dataset("stats_test").await.unwrap();
+    let mut ds = atlas.create_dataset("stats_test").await.unwrap();
 
     // f32 array — stats track min/max as Float
     ds.define_array::<f32>("temp", vec!["x".into()], vec![4], None, None)
@@ -255,10 +255,10 @@ async fn array_stats_after_flush() {
 async fn array_stats_survive_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     {
-        let mut ds = array_store.create_dataset("ds").await.unwrap();
+        let mut ds = atlas.create_dataset("ds").await.unwrap();
         ds.define_array::<f64>("values", vec!["i".into()], vec![5], None, None)
             .await
             .unwrap();
@@ -268,8 +268,8 @@ async fn array_stats_survive_reopen() {
     }
 
     // Reopen and verify stats persisted
-    let store2 = ArrayStore::open(store, prefix).await.unwrap();
-    let ds2 = store2.open_dataset("ds").await.unwrap();
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    let ds2 = atlas2.open_dataset("ds").await.unwrap();
     let stats = ds2.array_stats("values").await.unwrap().unwrap();
     assert_eq!(stats.row_count, 5);
     assert_eq!(stats.min, Some(StatValue::Float(1.0)));
@@ -280,10 +280,10 @@ async fn array_stats_survive_reopen() {
 async fn array_stats_unknown_array_errors() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store, prefix, StoreConfig::default()).await.unwrap();
-    let ds = array_store.create_dataset("ds").await.unwrap();
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default()).await.unwrap();
+    let ds = atlas.create_dataset("ds").await.unwrap();
     assert!(matches!(
         ds.array_stats("ghost").await,
-        Err(array_store::Error::ArrayNotFound(_))
+        Err(atlas::Error::ArrayNotFound(_))
     ));
 }

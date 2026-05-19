@@ -7,7 +7,7 @@
 //!
 //! This example uses `Codec::Lz4` — a good choice for read-heavy analytics
 //! workloads because LZ4 decompresses faster than Zstd at the cost of slightly
-//! larger files. The codec is persisted in `array_store.json`, so `open` picks
+//! larger files. The codec is persisted in `atlas.json`, so `open` picks
 //! it up automatically without any extra argument.
 //!
 //! After writing, we scan stats across all sensors to find the one with the
@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use array_store::{ArrayStore, Attr, Codec, StatValue, StoreConfig};
+use atlas::{Atlas, Attr, Codec, StatValue, StoreConfig};
 use ndarray::Array1;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -29,9 +29,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = Path::from_absolute_path(tmp.path())?;
 
     // LZ4 decompresses faster than Zstd — well suited for reading many dataset
-    // entries in a tight stats-scan loop. The codec is stored in array_store.json
-    // so ArrayStore::open() restores it without any extra argument.
-    let mut s = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig { codec: Codec::Lz4 }).await?;
+    // entries in a tight stats-scan loop. The codec is stored in atlas.json
+    // so Atlas::open() restores it without any extra argument.
+    let mut s = Atlas::create(
+        store.clone(),
+        prefix.clone(),
+        StoreConfig { codec: Codec::Lz4 },
+    )
+    .await?;
 
     // ── Write one dataset per sensor ──────────────────────────────────────────
 
@@ -90,15 +95,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n─── Per-sensor stats (from stats file, no raw I/O) ────────────");
 
-    // Codec is read from array_store.json — no StoreConfig needed on reopen.
-    let s2 = ArrayStore::open(store, prefix).await?;
+    // Codec is read from atlas.json — no StoreConfig needed on reopen.
+    let s2 = Atlas::open(store, prefix).await?;
 
     let mut peak_sensor = String::new();
     let mut peak_max = f64::NEG_INFINITY;
     let mut peak_min = f64::INFINITY;
 
-    let mut dataset_names: Vec<String> =
-        s2.list_datasets().iter().map(|s| s.to_string()).collect();
+    let mut dataset_names: Vec<String> = s2.list_datasets().iter().map(|s| s.to_string()).collect();
     dataset_names.sort();
 
     for name in &dataset_names {
@@ -110,7 +114,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ => continue,
         };
 
-        println!("  {name}: min={lo:.2}  max={hi:.2}  rows={}", stats.row_count);
+        println!(
+            "  {name}: min={lo:.2}  max={hi:.2}  rows={}",
+            stats.row_count
+        );
 
         if hi > peak_max {
             peak_max = hi;
@@ -126,10 +133,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n─── Timestamp consistency check ───────────────────────────────");
 
     let ds0 = s2.open_dataset("sensor_00").await?;
-    let ts0 = ds0.read_array::<i64>("timestamps", vec![], vec![]).await?.unwrap();
+    let ts0 = ds0
+        .read_array::<i64>("timestamps", vec![], vec![])
+        .await?
+        .unwrap();
 
     let ds7 = s2.open_dataset("sensor_07").await?;
-    let ts7 = ds7.read_array::<i64>("timestamps", vec![], vec![]).await?.unwrap();
+    let ts7 = ds7
+        .read_array::<i64>("timestamps", vec![], vec![])
+        .await?
+        .unwrap();
 
     assert_eq!(ts0, ts7, "timestamps are identical across sensors");
     println!("sensor_00 and sensor_07 share identical timestamps ✓");

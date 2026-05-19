@@ -1,4 +1,4 @@
-//! `array-store` is a directory-based store for thousands of named datasets.
+//! ATLAS (Aggregated Tensor Large Array Store) is a directory-based store for thousands of named datasets.
 //!
 //! Each dataset is a virtual collection of named N-dimensional arrays with per-dataset and
 //! per-array attributes, backed by the `array-format` crate. Datasets sharing an array name
@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! my_store/
-//! ├── array_store.json    <- dataset registry + per-dataset attributes
+//! ├── atlas.json          <- dataset registry + per-dataset attributes
 //! ├── temperature/
 //! │   └── data.af         <- ArrayFile: one named array per dataset
 //! └── latitude/
@@ -17,7 +17,7 @@
 //!
 //! # Thread safety
 //!
-//! `ArrayStore` and `DatasetView` are `Send + Sync`. Each physical array file
+//! `Atlas` and `DatasetView` are `Send + Sync`. Each physical array file
 //! is guarded by a `tokio::sync::RwLock`: concurrent reads (`read_array`,
 //! `array_stats`) proceed in parallel without contention, while writes
 //! (`write_array`, `define_array`, `flush`, `compact`, …) take an exclusive
@@ -35,7 +35,7 @@ pub use config::{Codec, StoreConfig};
 pub use dataset::DatasetView;
 pub use error::{Error, Result};
 pub use meta::DatasetMeta;
-pub use store::ArrayStore;
+pub use store::Atlas;
 
 pub use array_format::{ArrayElement, ArrayStats, DType, FillValue, MergedArrayMeta, StatValue};
 pub use schema::{ArraySchema, Attr};
@@ -96,8 +96,8 @@ mod send_check {
     use super::*;
     fn _assert_send<T: Send>() {}
     fn _assert_sync<T: Sync>() {}
-    #[test] fn store_send() { _assert_send::<ArrayStore>(); }
+    #[test] fn store_send() { _assert_send::<Atlas>(); }
     #[test] fn view_send() { _assert_send::<DatasetView>(); }
-    #[test] fn store_sync() { _assert_sync::<ArrayStore>(); }
+    #[test] fn store_sync() { _assert_sync::<Atlas>(); }
     #[test] fn view_sync() { _assert_sync::<DatasetView>(); }
 }

@@ -1,10 +1,10 @@
 //! Demonstrates creating a weather data store with multiple datasets that share physical
 //! array files. Shows chunked and full writes, partial reads, attributes, reopening, and
-//! how the codec is persisted in `array_store.json` so `open` needs no codec argument.
+//! how the codec is persisted in `atlas.json` so `open` needs no codec argument.
 
 use std::sync::Arc;
 
-use array_store::{ArrayStore, Attr, DType, StatValue, StoreConfig};
+use atlas::{Atlas, Attr, DType, StatValue, StoreConfig};
 use ndarray::{Array1, Array2};
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -25,11 +25,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Create store ──────────────────────────────────────────────────────────
     //
-    // StoreConfig sets the codec for this store. It is written to array_store.json
-    // so that ArrayStore::open() picks it up automatically — no need to pass the
+    // StoreConfig sets the codec for this store. It is written to atlas.json
+    // so that Atlas::open() picks it up automatically — no need to pass the
     // codec again on reopen.
 
-    let mut s = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
+    let mut s = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
     println!("Created store at {}", tmp.path().display());
 
     // ── Dataset 1: January 2024 ───────────────────────────────────────────────
@@ -181,9 +181,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Reopen and read back ──────────────────────────────────────────────────
 
-    // Codec was saved in array_store.json — open() restores it without any argument.
+    // Codec was saved in atlas.json — open() restores it without any argument.
     println!("\n─── Reopening store ───────────────────────────────────────────");
-    let s2 = ArrayStore::open(store, prefix).await?;
+    let s2 = Atlas::open(store, prefix).await?;
 
     // --- Read jan_2024 ---
     let ds_jan = s2.open_dataset("jan_2024").await?;
