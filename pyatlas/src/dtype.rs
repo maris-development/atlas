@@ -11,6 +11,7 @@ use pyo3::PyResult;
 ///   - `f32`/`float32`, `f64`/`float64`
 ///   - `string`/`str`
 ///   - `binary`/`bytes`
+///   - `timestamp_ns`/`timestamp_nanoseconds`/`datetime64[ns]`
 ///   - `list[<inner>]`
 ///   - `fixed_size_list[<inner>,<n>]`
 pub fn parse_dtype(s: &str) -> PyResult<DType> {
@@ -47,6 +48,7 @@ fn parse_dtype_inner(s: &str) -> Option<DType> {
         "f64" | "float64" => DType::Float64,
         "string" | "str" => DType::String,
         "binary" | "bytes" => DType::Binary,
+        "timestamp_ns" | "timestamp_nanoseconds" | "datetime64[ns]" => DType::TimestampNs,
         _ => return None,
     })
 }
@@ -71,6 +73,7 @@ pub fn dtype_to_string(dtype: &DType) -> String {
         DType::Float64 => "float64".into(),
         DType::String => "string".into(),
         DType::Binary => "binary".into(),
+        DType::TimestampNs => "timestamp_nanoseconds".into(),
         DType::List { child } => format!("list[{}]", dtype_to_string(child)),
         DType::FixedSizeList { child, size } => {
             format!("fixed_size_list[{},{}]", dtype_to_string(child), size)

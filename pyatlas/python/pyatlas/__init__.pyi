@@ -73,6 +73,26 @@ class Atlas:
         """Open dataset `name` and return it as an `xarray.Dataset` (eager read)."""
         ...
 
+    def flush(self) -> None:
+        """Persist the in-memory atlas.json + every cached array file.
+
+        This is the single durability boundary; until called, no mutation
+        reaches disk (dropping the Atlas without flushing abandons every
+        pending write).
+        """
+        ...
+
+    def close(self) -> None:
+        """Final flush; alias for `flush()`. Mirrors the context-manager exit."""
+        ...
+
+    def compact(self) -> None:
+        """Compact every cached array file in place (reclaim tombstoned space)."""
+        ...
+
+    def __enter__(self) -> "Atlas": ...
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None: ...
+
 
 class DatasetView:
     """A handle to a single dataset within an `Atlas` store.
@@ -166,14 +186,6 @@ class DatasetView:
 
     def get_attribute(self, key: str) -> Any:
         """Returns the attribute value or `None` if not set."""
-        ...
-
-    def flush(self) -> None:
-        """Persist all pending writes and recompute statistics."""
-        ...
-
-    def compact(self) -> None:
-        """Rewrite array files in place to reclaim tombstoned space."""
         ...
 
     def __repr__(self) -> str: ...

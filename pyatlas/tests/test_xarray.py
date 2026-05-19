@@ -1,4 +1,5 @@
 """xarray integration tests."""
+import os
 import tempfile
 
 import dask.array as dask_array
@@ -7,6 +8,9 @@ import pytest
 import xarray as xr
 
 import pyatlas  # noqa: F401  — side-effect import registers the ds.atlas accessor
+
+
+_DATA_DIR = os.path.dirname(__file__)
 
 
 def _make_dataset() -> xr.Dataset:
@@ -34,8 +38,8 @@ def _make_dataset() -> xr.Dataset:
 def test_basic_roundtrip():
     ds = _make_dataset()
     with tempfile.TemporaryDirectory() as d:
-        atlas = pyatlas.Atlas.create(d)
-        atlas.add_xr_dataset(ds, "ds_jan")
+        with pyatlas.Atlas.create(d) as atlas:
+            atlas.add_xr_dataset(ds, "ds_jan")
 
         atlas2 = pyatlas.Atlas.open(d)
         ds_back = atlas2.to_xarray("ds_jan")
@@ -48,14 +52,13 @@ def test_per_var_attrs_roundtrip():
     with tempfile.TemporaryDirectory() as d:
         atlas = pyatlas.Atlas.create(d)
         atlas.add_xr_dataset(ds, "ds_jan")
+        atlas.flush()
 
-        # Verify per-var attrs are present on disk under the {var}.{attr} convention.
         view = atlas.open_dataset("ds_jan")
         all_attrs = view.attributes()
         assert all_attrs["temperature.units"] == "celsius"
         assert all_attrs["temperature.long_name"] == "surface temperature"
         assert all_attrs["pressure.units"] == "hPa"
-        # Plain dataset attrs are still themselves
         assert all_attrs["month"] == 1
         assert all_attrs["station"] == "KNMI"
 
@@ -80,8 +83,8 @@ def test_non_scalar_attr_value():
     with tempfile.TemporaryDirectory() as d:
         atlas = pyatlas.Atlas.create(d)
         atlas.add_xr_dataset(ds, "ds")
+        atlas.flush()
 
-        # The on-disk values are JSON-encoded
         view = atlas.open_dataset("ds")
         on_disk = view.attributes()
         assert on_disk["v.valid_range"].startswith("json:")
@@ -100,13 +103,11 @@ def test_no_coords_marker_fallback():
     with tempfile.TemporaryDirectory() as d:
         atlas = pyatlas.Atlas.create(d)
         view = atlas.create_dataset("ds")
-        # Define an array `lat` over dim `lat` (1D, same name) — should become a coord on read.
         view.define_array("lat", dtype="float32", dims=["lat"], shape=[4])
         view.write_array("lat", start=[0], data=np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
-        # And a 2D data var
         view.define_array("temp", dtype="float32", dims=["lat", "lon"], shape=[4, 2])
         view.write_array("temp", start=[0, 0], data=np.full((4, 2), 5.0, dtype=np.float32))
-        view.flush()
+        atlas.flush()
 
         atlas2 = pyatlas.Atlas.open(d)
         ds_back = atlas2.to_xarray("ds")
@@ -114,6 +115,73 @@ def test_no_coords_marker_fallback():
     assert "lat" in ds_back.coords
     assert "temp" in ds_back.data_vars
     assert ds_back["temp"].dims == ("lat", "lon")
+
+
+def test_netcdf_file_roundtrip():
+    """Open a real NetCDF file (datetime64[ns] + object-string + scalar vars), roundtrip."""
+    ds = xr.open_dataset(os.path.join(_DATA_DIR, "GL_PR_BO_JLKU.nc"))
+
+    assert ds["TIME"].dtype == np.dtype("datetime64[ns]")
+    assert ds["DC_REFERENCE"].dtype.kind == "O"
+    assert ds["DIRECTION"].dtype.kind == "O"
+    assert ds["TRAJECTORY"].ndim == 0  # |S5 scalar
+
+    with tempfile.TemporaryDirectory() as d:
+        atlas = pyatlas.Atlas.create(d)
+        atlas.add_xr_dataset(ds, "obs")
+        atlas.flush()
+
+        view = atlas.open_dataset("obs")
+        assert view.array_meta("TIME")["dtype"] == "timestamp_nanoseconds"
+        assert view.array_meta("DC_REFERENCE")["dtype"] == "string"
+        assert view.array_meta("DIRECTION")["dtype"] == "string"
+        assert view.array_meta("TRAJECTORY")["dtype"] == "string"
+        assert view.array_meta("TRAJECTORY")["shape"] == []
+
+        atlas2 = pyatlas.Atlas.open(d)
+        ds_back = atlas2.to_xarray("obs")
+
+    assert ds_back["TIME"].dtype == np.dtype("datetime64[ns]")
+    np.testing.assert_array_equal(ds_back["TIME"].values, ds["TIME"].values)
+    np.testing.assert_array_equal(ds_back["LATITUDE"].values, ds["LATITUDE"].values)
+    np.testing.assert_array_equal(ds_back["FLU2"].values, ds["FLU2"].values)
+
+    def _decode_one(v):
+        return v.decode() if isinstance(v, bytes) else v
+
+    def _decode(arr):
+        return np.array([_decode_one(v) for v in arr], dtype=object)
+
+    np.testing.assert_array_equal(ds_back["DC_REFERENCE"].values, _decode(ds["DC_REFERENCE"].values))
+    np.testing.assert_array_equal(ds_back["DIRECTION"].values, _decode(ds["DIRECTION"].values))
+    assert _decode_one(ds_back["TRAJECTORY"].values.item()) == _decode_one(ds["TRAJECTORY"].values.item())
+
+
+def test_atlas_xr_batched_roundtrip():
+    """Many add_xr_dataset calls accumulate; one atlas.flush persists them all."""
+    ds_a = _make_dataset()
+    ds_b = _make_dataset()
+    with tempfile.TemporaryDirectory() as d:
+        with pyatlas.Atlas.create(d) as atlas:
+            atlas.add_xr_dataset(ds_a, "jan")
+            atlas.add_xr_dataset(ds_b, "feb")
+
+        atlas2 = pyatlas.Atlas.open(d)
+        assert sorted(atlas2.list_datasets()) == ["feb", "jan"]
+        xr.testing.assert_identical(ds_a, atlas2.to_xarray("jan"))
+        xr.testing.assert_identical(ds_b, atlas2.to_xarray("feb"))
+
+
+def test_atlas_xr_no_implicit_flush():
+    """add_xr_dataset doesn't auto-persist — fresh Atlas sees nothing without atlas.flush."""
+    ds = _make_dataset()
+    with tempfile.TemporaryDirectory() as d:
+        atlas = pyatlas.Atlas.create(d)
+        atlas.add_xr_dataset(ds, "jan")
+        # No flush.
+
+        atlas_peek = pyatlas.Atlas.open(d)
+        assert atlas_peek.list_datasets() == []
 
 
 def test_unsupported_dtype_raises():
@@ -129,8 +197,8 @@ def test_accessor_write():
     """`ds.atlas.write(atlas, name)` performs the same roundtrip as the method form."""
     ds = _make_dataset()
     with tempfile.TemporaryDirectory() as d:
-        atlas = pyatlas.Atlas.create(d)
-        ds.atlas.write(atlas, "ds_jan")  # accessor path
+        with pyatlas.Atlas.create(d) as atlas:
+            ds.atlas.write(atlas, "ds_jan")  # accessor path
 
         atlas2 = pyatlas.Atlas.open(d)
         ds_back = atlas2.to_xarray("ds_jan")
@@ -142,11 +210,10 @@ def test_accessor_and_method_equivalent():
     """The accessor and `atlas.add_xr_dataset` produce identical Datasets on roundtrip."""
     ds = _make_dataset()
     with tempfile.TemporaryDirectory() as d_a, tempfile.TemporaryDirectory() as d_b:
-        atlas_a = pyatlas.Atlas.create(d_a)
-        atlas_a.add_xr_dataset(ds, "ds_jan")
-
-        atlas_b = pyatlas.Atlas.create(d_b)
-        ds.atlas.write(atlas_b, "ds_jan")
+        with pyatlas.Atlas.create(d_a) as atlas_a:
+            atlas_a.add_xr_dataset(ds, "ds_jan")
+        with pyatlas.Atlas.create(d_b) as atlas_b:
+            ds.atlas.write(atlas_b, "ds_jan")
 
         ds_a = pyatlas.Atlas.open(d_a).to_xarray("ds_jan")
         ds_b = pyatlas.Atlas.open(d_b).to_xarray("ds_jan")
@@ -166,8 +233,8 @@ def test_dask_chunked_roundtrip():
     with tempfile.TemporaryDirectory() as d:
         atlas = pyatlas.Atlas.create(d)
         atlas.add_xr_dataset(ds, "ds")
+        atlas.flush()
 
-        # dask chunk shape becomes the atlas chunk_shape on disk
         view = atlas.open_dataset("ds")
         meta = view.array_meta("temp")
         assert meta["chunk_shape"] == [4, 8]
@@ -175,7 +242,6 @@ def test_dask_chunked_roundtrip():
         atlas2 = pyatlas.Atlas.open(d)
         ds_back = atlas2.to_xarray("ds")
 
-    # Compare against the computed (eager) form
     xr.testing.assert_identical(ds.compute(), ds_back)
 
 
@@ -183,7 +249,6 @@ def test_streaming_write_call_count(monkeypatch):
     """`write_array` is called once per dask block (not once for the whole array)."""
     from pyatlas._pyatlas import DatasetView
 
-    # Build a 1-D dask array of size 16 split into 4 blocks of size 4.
     arr = dask_array.arange(16, dtype=np.int32, chunks=4)  # type: ignore[arg-type]
     da = xr.DataArray(arr, dims=["x"])
     ds = xr.Dataset(data_vars={"v": da})
@@ -200,8 +265,8 @@ def test_streaming_write_call_count(monkeypatch):
     with tempfile.TemporaryDirectory() as d:
         atlas = pyatlas.Atlas.create(d)
         atlas.add_xr_dataset(ds, "ds")
+        atlas.flush()
 
-    # Exactly 4 calls for the 4 dask blocks, each carrying 4 elements.
     v_calls = [c for c in calls if c[0] == "v"]
     assert len(v_calls) == 4
     assert [c[1] for c in v_calls] == [[0], [4], [8], [12]]

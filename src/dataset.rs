@@ -6,18 +6,18 @@ use array_format::{
 };
 use ndarray::{ArcArray, ArrayView, IxDyn};
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as OsPath};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::{
     Error, Result,
     config::Codec,
-    meta::{DatasetMeta, StoreMeta, load_meta, save_meta},
+    meta::{DatasetMeta, StoreMeta},
     schema::{Attr, ArraySchema},
 };
 
 /// Per-file lock: readers (`read_array`, `array_stats`) share concurrent access;
-/// writers (`write_array`, `flush`, …) take an exclusive lock.
+/// writers (`write_array`, …) take an exclusive lock.
 pub(crate) type CachedFile = Arc<AsyncRwLock<ArrayFile>>;
 /// Shared cache map: array_name → open ArrayFile.
 /// Uses `parking_lot::RwLock` — never held across an `await` point.
@@ -28,7 +28,10 @@ pub struct DatasetView {
     cache: Arc<ArrayCache>,
     name: String,
     arrays: HashMap<String, CachedFile>,
-    meta: DatasetMeta,
+    /// Shared handle to the parent `Atlas`'s in-memory `StoreMeta`. All
+    /// mutations on this view go through here; persistence happens on
+    /// `Atlas::flush()`.
+    atlas_meta: Arc<Mutex<StoreMeta>>,
     codec: Codec,
 }
 
@@ -38,44 +41,59 @@ impl DatasetView {
         cache: Arc<ArrayCache>,
         name: String,
         arrays: HashMap<String, CachedFile>,
-        meta: DatasetMeta,
+        atlas_meta: Arc<Mutex<StoreMeta>>,
         codec: Codec,
     ) -> Self {
-        Self { store, cache, name, arrays, meta, codec }
+        Self { store, cache, name, arrays, atlas_meta, codec }
     }
 
-    /// Returns the metadata for this dataset: array schemas and per-dataset attributes.
-    pub fn meta(&self) -> &DatasetMeta {
-        &self.meta
+    /// Returns a clone of the metadata for this dataset.
+    pub fn meta(&self) -> DatasetMeta {
+        self.atlas_meta
+            .lock()
+            .datasets
+            .get(&self.name)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn list_arrays(&self) -> Vec<&str> {
-        self.arrays.keys().map(|s| s.as_str()).collect()
+    pub fn list_arrays(&self) -> Vec<String> {
+        self.arrays.keys().cloned().collect()
     }
 
     pub fn set_attribute(&mut self, key: &str, value: Attr) {
-        self.meta.attributes.insert(key.to_string(), value);
+        let mut meta = self.atlas_meta.lock();
+        meta.datasets
+            .entry(self.name.clone())
+            .or_default()
+            .attributes
+            .insert(key.to_string(), value);
     }
 
-    pub fn get_attribute(&self, key: &str) -> Option<&Attr> {
-        self.meta.attributes.get(key)
+    pub fn get_attribute(&self, key: &str) -> Option<Attr> {
+        self.atlas_meta
+            .lock()
+            .datasets
+            .get(&self.name)
+            .and_then(|d| d.attributes.get(key).cloned())
     }
 
-    /// Returns the cached schema for `array` (dtype, shape, chunk shape, dimension names).
+    /// Returns the cached schema for `array`.
     pub fn array_meta(&self, array: &str) -> Result<ArraySchema> {
-        self.meta
-            .arrays
-            .get(array)
-            .cloned()
+        self.atlas_meta
+            .lock()
+            .datasets
+            .get(&self.name)
+            .and_then(|d| d.arrays.get(array).cloned())
             .ok_or_else(|| Error::ArrayNotFound(array.to_string()))
     }
 
-    /// Returns aggregate statistics (min, max, null count, row count) for `array` in this
-    /// dataset, or `Ok(None)` if no stats exist yet (stats are computed on flush).
+    /// Returns aggregate statistics for `array` in this dataset, or `Ok(None)`
+    /// if no stats exist yet (stats are computed on flush).
     pub async fn array_stats(&self, array: &str) -> Result<Option<ArrayStats>> {
         let arc = match self.arrays.get(array) {
             Some(arc) => arc.clone(),
@@ -104,13 +122,19 @@ impl DatasetView {
         self.arrays.insert(array.to_string(), arc);
 
         let actual_chunk = chunk_shape.unwrap_or_else(|| shape.clone());
-        self.meta.arrays.insert(array.to_string(), ArraySchema {
+        let schema = ArraySchema {
             dtype: T::DTYPE.clone(),
             shape,
             chunk_shape: actual_chunk,
             dimension_names: dims,
             codec: self.codec.clone(),
-        });
+        };
+        let mut meta = self.atlas_meta.lock();
+        meta.datasets
+            .entry(self.name.clone())
+            .or_default()
+            .arrays
+            .insert(array.to_string(), schema);
         Ok(())
     }
 
@@ -131,7 +155,6 @@ impl DatasetView {
     }
 
     /// Returns `Ok(None)` if this dataset has no array with that name.
-    /// Returns `Err` only for I/O or format errors.
     pub async fn read_array<T: ArrayElement>(
         &self,
         array: &str,
@@ -154,23 +177,9 @@ impl DatasetView {
             .clone();
         arc.write().await.delete(&self.name)?;
         self.arrays.remove(array);
-        self.meta.arrays.remove(array);
-        Ok(())
-    }
-
-    pub async fn flush(&mut self) -> Result<()> {
-        for arc in self.arrays.values() {
-            arc.write().await.flush().await?;
-        }
-        let mut store_meta = load_meta(&self.store).await?;
-        store_meta.datasets.insert(self.name.clone(), self.meta.clone());
-        save_meta(&self.store, &store_meta).await?;
-        Ok(())
-    }
-
-    pub async fn compact(&mut self) -> Result<()> {
-        for arc in self.arrays.values() {
-            arc.write().await.compact().await?;
+        let mut meta = self.atlas_meta.lock();
+        if let Some(ds_meta) = meta.datasets.get_mut(&self.name) {
+            ds_meta.arrays.shift_remove(array);
         }
         Ok(())
     }
@@ -179,23 +188,18 @@ impl DatasetView {
 pub(crate) async fn open_dataset_view(
     store: Arc<dyn ObjectStore>,
     cache: Arc<ArrayCache>,
+    atlas_meta: Arc<Mutex<StoreMeta>>,
     name: &str,
-    meta: &StoreMeta,
+    array_specs: Vec<(String, Codec)>,
     codec: Codec,
 ) -> Result<DatasetView> {
-    let dataset_meta = meta
-        .datasets
-        .get(name)
-        .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?;
-
     let mut arrays = HashMap::new();
-    for (array_name, array_schema) in &dataset_meta.arrays {
-        // Use the codec recorded when this array was first defined, not the store default.
-        let arc = get_or_open_cached(&store, &cache, array_name, &array_schema.codec).await?;
-        arrays.insert(array_name.clone(), arc);
+    for (array_name, array_codec) in array_specs {
+        let arc = get_or_open_cached(&store, &cache, &array_name, &array_codec).await?;
+        arrays.insert(array_name, arc);
     }
 
-    Ok(DatasetView::new(store, cache, name.to_string(), arrays, dataset_meta.clone(), codec))
+    Ok(DatasetView::new(store, cache, name.to_string(), arrays, atlas_meta, codec))
 }
 
 /// Returns the cached `ArrayFile` for `array_name`, opening it first if needed.
@@ -206,7 +210,6 @@ pub(crate) async fn get_or_open_cached(
     array_name: &str,
     codec: &Codec,
 ) -> Result<CachedFile> {
-    // Fast path: already cached.
     {
         let guard = cache.read();
         if let Some(arc) = guard.get(array_name) {
@@ -214,7 +217,6 @@ pub(crate) async fn get_or_open_cached(
         }
     }
 
-    // Slow path: open (or create) the file without holding the cache lock.
     let path = OsPath::from(format!("{}/data.af", array_name));
     let file = match store.head(&path).await {
         Ok(_) => open_array_file(store.clone(), path, codec).await?,
@@ -224,7 +226,6 @@ pub(crate) async fn get_or_open_cached(
         Err(e) => return Err(Error::ObjectStore(e)),
     };
 
-    // Insert — use `entry` to avoid overwriting a concurrent insert.
     let arc = Arc::new(AsyncRwLock::new(file));
     let mut guard = cache.write();
     Ok(guard.entry(array_name.to_string()).or_insert(arc).clone())
@@ -264,13 +265,19 @@ mod tests {
         Arc::new(InMemory::new())
     }
 
+    fn shared_meta_with(name: &str) -> Arc<Mutex<StoreMeta>> {
+        let mut meta = StoreMeta::default();
+        meta.datasets.insert(name.to_string(), DatasetMeta::default());
+        Arc::new(Mutex::new(meta))
+    }
+
     fn empty_view(store: Arc<dyn ObjectStore>, name: &str) -> DatasetView {
         DatasetView::new(
             store,
             Arc::new(ArrayCache::new(HashMap::new())),
             name.to_string(),
             HashMap::new(),
-            DatasetMeta::default(),
+            shared_meta_with(name),
             Codec::default(),
         )
     }
@@ -286,16 +293,16 @@ mod tests {
     #[test]
     fn set_and_get_attribute_roundtrip() {
         let mut view = empty_view(make_store(), "ds");
-        view.set_attribute("k", Attr::Int32(42));
-        assert_eq!(view.get_attribute("k"), Some(&Attr::Int32(42)));
+        view.set_attribute("k", Attr::Int64(42));
+        assert_eq!(view.get_attribute("k"), Some(Attr::Int64(42)));
     }
 
     #[test]
     fn set_attribute_overwrites_previous() {
         let mut view = empty_view(make_store(), "ds");
-        view.set_attribute("k", Attr::Int32(1));
-        view.set_attribute("k", Attr::Int32(2));
-        assert_eq!(view.get_attribute("k"), Some(&Attr::Int32(2)));
+        view.set_attribute("k", Attr::Int64(1));
+        view.set_attribute("k", Attr::Int64(2));
+        assert_eq!(view.get_attribute("k"), Some(Attr::Int64(2)));
     }
 
     #[test]
@@ -420,7 +427,8 @@ mod tests {
             .await
             .unwrap();
 
-        let arr_schema = view.meta().arrays.get("arr").unwrap();
+        let meta = view.meta();
+        let arr_schema = meta.arrays.get("arr").unwrap();
         assert_eq!(arr_schema.dtype, DType::Int32);
         assert_eq!(arr_schema.chunk_shape, vec![10]);
     }
@@ -428,11 +436,11 @@ mod tests {
     #[test]
     fn set_attribute_records_value_in_meta() {
         let mut view = empty_view(make_store(), "ds");
-        view.set_attribute("count", Attr::UInt32(5));
+        view.set_attribute("count", Attr::Int64(5));
         view.set_attribute("label", Attr::String("x".into()));
 
         let meta = view.meta();
-        assert_eq!(meta.attributes.get("count"), Some(&Attr::UInt32(5)));
+        assert_eq!(meta.attributes.get("count"), Some(&Attr::Int64(5)));
         assert_eq!(meta.attributes.get("label"), Some(&Attr::String("x".into())));
     }
 
@@ -473,7 +481,6 @@ mod tests {
         view.define_array::<f32>("arr", vec!["x".into()], vec![4], None, None)
             .await
             .unwrap();
-        // Stats are computed on flush; before that they are None.
         let stats = view.array_stats("arr").await.unwrap();
         assert!(stats.is_none());
     }
@@ -488,7 +495,10 @@ mod tests {
             .unwrap();
         let data = ndarray::arr1(&[1.0_f32, 3.0, 2.0, 4.0]).into_dyn();
         view.write_array("arr", vec![0], data.view()).await.unwrap();
-        view.flush().await.unwrap();
+        // Flush via direct ArrayFile flush (view no longer exposes flush).
+        for arc in view.arrays.values() {
+            arc.write().await.flush().await.unwrap();
+        }
 
         let stats = view.array_stats("arr").await.unwrap().unwrap();
         assert_eq!(stats.row_count, 4);
@@ -503,13 +513,19 @@ mod tests {
     async fn two_views_share_cached_array_file() {
         let store = make_store();
         let cache = Arc::new(ArrayCache::new(HashMap::new()));
+        let shared = Arc::new(Mutex::new({
+            let mut m = StoreMeta::default();
+            m.datasets.insert("ds_a".into(), DatasetMeta::default());
+            m.datasets.insert("ds_b".into(), DatasetMeta::default());
+            m
+        }));
 
         let mut view_a = DatasetView::new(
             store.clone(),
             cache.clone(),
             "ds_a".to_string(),
             HashMap::new(),
-            DatasetMeta::default(),
+            shared.clone(),
             Codec::default(),
         );
         view_a
@@ -522,7 +538,7 @@ mod tests {
             cache.clone(),
             "ds_b".to_string(),
             HashMap::new(),
-            DatasetMeta::default(),
+            shared.clone(),
             Codec::default(),
         );
         view_b

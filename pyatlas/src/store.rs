@@ -35,7 +35,7 @@ impl PyAtlas {
         let codec = parse_codec(codec)?;
         let config = StoreConfig { codec };
         let inner = py
-            .allow_threads(|| runtime().block_on(Atlas::create_path(path, config)))
+            .detach(|| runtime().block_on(Atlas::create_path(path, config)))
             .map_err(to_py_err)?;
         Ok(Self { inner })
     }
@@ -44,27 +44,27 @@ impl PyAtlas {
     #[staticmethod]
     fn open(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
         let inner = py
-            .allow_threads(|| runtime().block_on(Atlas::open_path(path)))
+            .detach(|| runtime().block_on(Atlas::open_path(path)))
             .map_err(to_py_err)?;
         Ok(Self { inner })
     }
 
     fn create_dataset(&mut self, py: Python<'_>, name: &str) -> PyResult<PyDatasetView> {
         let view = py
-            .allow_threads(|| runtime().block_on(self.inner.create_dataset(name)))
+            .detach(|| runtime().block_on(self.inner.create_dataset(name)))
             .map_err(to_py_err)?;
         Ok(PyDatasetView::new(view))
     }
 
     fn open_dataset(&self, py: Python<'_>, name: &str) -> PyResult<PyDatasetView> {
         let view = py
-            .allow_threads(|| runtime().block_on(self.inner.open_dataset(name)))
+            .detach(|| runtime().block_on(self.inner.open_dataset(name)))
             .map_err(to_py_err)?;
         Ok(PyDatasetView::new(view))
     }
 
     fn delete_dataset(&mut self, py: Python<'_>, name: &str) -> PyResult<()> {
-        py.allow_threads(|| runtime().block_on(self.inner.delete_dataset(name)))
+        py.detach(|| runtime().block_on(self.inner.delete_dataset(name)))
             .map_err(to_py_err)
     }
 
@@ -84,6 +84,39 @@ impl PyAtlas {
         format!("<Atlas datasets={}>", self.inner.list_datasets().len())
     }
 
+    /// Persist the in-memory atlas.json + every cached array file. This is
+    /// the single durability boundary; until this is called nothing reaches
+    /// disk.
+    fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| runtime().block_on(self.inner.flush()))
+            .map_err(to_py_err)
+    }
+
+    /// Final flush; alias for `flush()`. Mirrors the context-manager exit.
+    fn close(&mut self, py: Python<'_>) -> PyResult<()> {
+        self.flush(py)
+    }
+
+    /// Compact every cached array file in place (reclaims tombstoned space).
+    fn compact(&mut self, py: Python<'_>) -> PyResult<()> {
+        py.detach(|| runtime().block_on(self.inner.compact()))
+            .map_err(to_py_err)
+    }
+
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __exit__(
+        &mut self,
+        py: Python<'_>,
+        _exc_type: Py<PyAny>,
+        _exc_val: Py<PyAny>,
+        _exc_tb: Py<PyAny>,
+    ) -> PyResult<()> {
+        self.close(py)
+    }
+
     /// Append an atlas dataset populated from an `xarray.Dataset`.
     ///
     /// Dask-backed variables are streamed one chunk at a time, with the dask
@@ -92,26 +125,26 @@ impl PyAtlas {
     fn add_xr_dataset(
         slf: Py<Self>,
         py: Python<'_>,
-        ds: PyObject,
+        ds: Py<PyAny>,
         name: &str,
-        chunks: Option<PyObject>,
+        chunks: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let helper = py
-            .import_bound("pyatlas.xarray")?
+            .import("pyatlas.xarray")?
             .getattr("_write_xarray_new_dataset")?;
-        let chunks_arg: PyObject = chunks.unwrap_or_else(|| py.None());
+        let chunks_arg: Py<PyAny> = chunks.unwrap_or_else(|| py.None());
         helper.call1((slf, ds, name, chunks_arg))?;
         Ok(())
     }
 
     /// Open `name` and return it as an `xarray.Dataset` (eager read).
-    fn to_xarray(&self, py: Python<'_>, name: &str) -> PyResult<PyObject> {
+    fn to_xarray(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         let view = py
-            .allow_threads(|| runtime().block_on(self.inner.open_dataset(name)))
+            .detach(|| runtime().block_on(self.inner.open_dataset(name)))
             .map_err(to_py_err)?;
         let py_view = Py::new(py, PyDatasetView::new(view))?;
         let helper = py
-            .import_bound("pyatlas.xarray")?
+            .import("pyatlas.xarray")?
             .getattr("_view_to_xarray")?;
         Ok(helper.call1((py_view,))?.unbind())
     }

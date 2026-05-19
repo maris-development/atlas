@@ -23,6 +23,14 @@
 //! (`write_array`, `define_array`, `flush`, `compact`, …) take an exclusive
 //! lock. The cache map uses a `parking_lot::RwLock` that is never held across
 //! an `await` point.
+//!
+//! # Durability
+//!
+//! `atlas.json` is loaded **once** when the store is opened or created; from
+//! then on every mutation (`create_dataset`, `define_array`, `set_attribute`,
+//! …) only touches the in-memory `StoreMeta`. The store does **not** persist
+//! until [`Atlas::flush`] or [`Atlas::close`] is called. Dropping an `Atlas`
+//! without flushing abandons every pending in-memory write.
 
 mod config;
 mod dataset;
@@ -37,15 +45,13 @@ pub use error::{Error, Result};
 pub use meta::DatasetMeta;
 pub use store::Atlas;
 
-pub use array_format::{ArrayElement, ArrayStats, DType, FillValue, MergedArrayMeta, StatValue};
+pub use array_format::{
+    ArrayElement, ArrayStats, DType, FillValue, MergedArrayMeta, StatValue, TimestampNs,
+};
 pub use schema::{ArraySchema, Attr};
 
 pub(crate) fn validate_name(name: &str) -> Result<()> {
-    if name.is_empty()
-        || name.starts_with('_')
-        || name.contains('/')
-        || name == ".."
-        || name == "."
+    if name.is_empty() || name.starts_with('_') || name.contains('/') || name == ".." || name == "."
     {
         return Err(Error::InvalidName(name.to_string()));
     }
@@ -70,7 +76,10 @@ mod tests {
 
     #[test]
     fn leading_underscore_rejected() {
-        assert!(matches!(validate_name("_hidden"), Err(Error::InvalidName(_))));
+        assert!(matches!(
+            validate_name("_hidden"),
+            Err(Error::InvalidName(_))
+        ));
         assert!(matches!(validate_name("_"), Err(Error::InvalidName(_))));
     }
 
@@ -96,8 +105,20 @@ mod send_check {
     use super::*;
     fn _assert_send<T: Send>() {}
     fn _assert_sync<T: Sync>() {}
-    #[test] fn store_send() { _assert_send::<Atlas>(); }
-    #[test] fn view_send() { _assert_send::<DatasetView>(); }
-    #[test] fn store_sync() { _assert_sync::<Atlas>(); }
-    #[test] fn view_sync() { _assert_sync::<DatasetView>(); }
+    #[test]
+    fn store_send() {
+        _assert_send::<Atlas>();
+    }
+    #[test]
+    fn view_send() {
+        _assert_send::<DatasetView>();
+    }
+    #[test]
+    fn store_sync() {
+        _assert_sync::<Atlas>();
+    }
+    #[test]
+    fn view_sync() {
+        _assert_sync::<DatasetView>();
+    }
 }

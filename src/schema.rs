@@ -3,22 +3,49 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Codec;
 
-/// A per-dataset attribute value stored in `_meta.json`.
+/// A per-dataset attribute value stored in `atlas.json`.
+///
+/// Atlas supports five attribute types — booleans, 64-bit signed integers,
+/// 64-bit floats, UTF-8 strings, and nanosecond-precision timestamps. The
+/// JSON form is untagged: each variant serializes as its natural JSON value
+/// (`true`, `42`, `1.5`, `"hello"`, or an RFC 3339 string for the timestamp).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value")]
+#[serde(untagged)]
 pub enum Attr {
+    // Bool first — only matches JSON `true`/`false`, never any other shape.
     Bool(bool),
-    Int8(i8),
-    Int16(i16),
-    Int32(i32),
-    Int64(i64),
-    UInt8(u8),
-    UInt16(u16),
-    UInt32(u32),
-    UInt64(u64),
-    Float32(f32),
-    Float64(f64),
+    // TimestampNanoseconds before String: a strict RFC 3339 parse. Strings
+    // that fail this parse fall through to the plain `String` variant.
+    #[serde(with = "timestamp_ns_serde")]
+    TimestampNanoseconds(i64),
     String(String),
+    // Numeric variants. Integers (no decimal point) match Int64; numbers
+    // with decimals/exponents match Float64.
+    Int64(i64),
+    Float64(f64),
+}
+
+mod timestamp_ns_serde {
+    use chrono::{DateTime, SecondsFormat, Utc};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(nanos: &i64, s: S) -> Result<S::Ok, S::Error> {
+        let dt = DateTime::<Utc>::from_timestamp_nanos(*nanos);
+        // AutoSi: shortest faithful repr (drops trailing-zero subsecond digits).
+        s.serialize_str(&dt.to_rfc3339_opts(SecondsFormat::AutoSi, true))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
+        let s = <&str>::deserialize(d)?;
+        let dt = DateTime::parse_from_rfc3339(s)
+            .map_err(serde::de::Error::custom)?
+            .with_timezone(&Utc);
+        dt.timestamp_nanos_opt().ok_or_else(|| {
+            serde::de::Error::custom(
+                "timestamp out of nanosecond range (1677-09-21 .. 2262-04-11)",
+            )
+        })
+    }
 }
 
 /// Schema for a single named array within a dataset.
@@ -62,8 +89,15 @@ pub(crate) mod dtype_serde {
         Float64,
         String,
         Binary,
-        FixedSizeList { child: Box<DTypeRepr>, size: u32 },
-        List { child: Box<DTypeRepr> },
+        #[serde(rename = "timestamp_nanoseconds")]
+        TimestampNs,
+        FixedSizeList {
+            child: Box<DTypeRepr>,
+            size: u32,
+        },
+        List {
+            child: Box<DTypeRepr>,
+        },
     }
 
     impl From<DType> for DTypeRepr {
@@ -82,10 +116,14 @@ pub(crate) mod dtype_serde {
                 DType::Float64 => Self::Float64,
                 DType::String => Self::String,
                 DType::Binary => Self::Binary,
-                DType::FixedSizeList { child, size } => {
-                    Self::FixedSizeList { child: Box::new((*child).into()), size }
-                }
-                DType::List { child } => Self::List { child: Box::new((*child).into()) },
+                DType::TimestampNs => Self::TimestampNs,
+                DType::FixedSizeList { child, size } => Self::FixedSizeList {
+                    child: Box::new((*child).into()),
+                    size,
+                },
+                DType::List { child } => Self::List {
+                    child: Box::new((*child).into()),
+                },
             }
         }
     }
@@ -106,10 +144,14 @@ pub(crate) mod dtype_serde {
                 DTypeRepr::Float64 => Self::Float64,
                 DTypeRepr::String => Self::String,
                 DTypeRepr::Binary => Self::Binary,
-                DTypeRepr::FixedSizeList { child, size } => {
-                    Self::FixedSizeList { child: Box::new((*child).into()), size }
-                }
-                DTypeRepr::List { child } => Self::List { child: Box::new((*child).into()) },
+                DTypeRepr::TimestampNs => Self::TimestampNs,
+                DTypeRepr::FixedSizeList { child, size } => Self::FixedSizeList {
+                    child: Box::new((*child).into()),
+                    size,
+                },
+                DTypeRepr::List { child } => Self::List {
+                    child: Box::new((*child).into()),
+                },
             }
         }
     }

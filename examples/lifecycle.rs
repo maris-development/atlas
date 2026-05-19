@@ -39,8 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let elev = Array2::<f64>::from_elem([4, 4], 100.0_f64).into_dyn();
         ds.write_array("elevation", vec![0, 0], elev.view()).await?;
         ds.set_attribute("region", Attr::String("north".into()));
-        ds.flush().await?;
     }
+    s.flush().await?;
 
     {
         let mut ds = s.create_dataset("south").await?;
@@ -49,16 +49,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let data = Array2::<f32>::from_elem([4, 4], 2.0_f32).into_dyn();
         ds.write_array("grid", vec![0, 0], data.view()).await?;
         ds.set_attribute("region", Attr::String("south".into()));
-        ds.flush().await?;
     }
+    s.flush().await?;
 
     {
         let mut ds = s.create_dataset("scratch").await?;
         ds.define_array::<i32>("ids", vec!["n".into()], vec![8], None, None).await?;
         let ids = Array1::from_iter(0..8_i32).into_dyn();
         ds.write_array("ids", vec![0], ids.view()).await?;
-        ds.flush().await?;
     }
+    s.flush().await?;
 
     let mut names = s.list_datasets();
     names.sort();
@@ -78,7 +78,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
 
         north.delete_array("elevation").await?;
-        north.flush().await?;
+    }
+    s.flush().await?;
+    {
+        let north = s.open_dataset("north").await?;
 
         println!("north arrays after:  {:?}", {
             let mut v = north.list_arrays();
@@ -128,16 +131,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n=== Phase 5: compact 'north' ===");
 
-    let mut north4 = s.open_dataset("north").await?;
+    let north4 = s.open_dataset("north").await?;
 
     // Read the grid once more before compacting to confirm it still works
     let before = north4.read_array::<f32>("grid", vec![], vec![]).await?.unwrap();
     println!("grid[0,0] before compact = {:.1}", before[[0, 0]]);
+    drop(north4);
 
-    north4.compact().await?;
+    s.compact().await?;
     println!("compact done");
 
     // Data must be intact after compaction
+    let north4 = s.open_dataset("north").await?;
     let after = north4.read_array::<f32>("grid", vec![], vec![]).await?.unwrap();
     assert_eq!(before, after, "data unchanged after compact");
     println!("grid[0,0] after  compact = {:.1} (unchanged ✓)", after[[0, 0]]);
@@ -154,7 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!s2.dataset_exists("scratch"));
 
     let north5 = s2.open_dataset("north").await?;
-    assert_eq!(north5.get_attribute("region"), Some(&Attr::String("north".into())));
+    assert_eq!(north5.get_attribute("region"), Some(Attr::String("north".into())));
 
     let final_grid = north5.read_array::<f32>("grid", vec![], vec![]).await?.unwrap();
     assert_eq!(final_grid[[0, 0]], 1.0_f32);

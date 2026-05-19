@@ -1,5 +1,5 @@
-use atlas::{DType, DatasetView};
-use numpy::{IntoPyArray, PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
+use atlas::{DType, DatasetView, TimestampNs};
+use numpy::{IntoPyArray, PyArray, PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -11,7 +11,7 @@ use crate::runtime::runtime;
 
 #[pyclass(name = "DatasetView", module = "pyatlas._pyatlas")]
 pub struct PyDatasetView {
-    inner: DatasetView,
+    pub(crate) inner: DatasetView,
 }
 
 impl PyDatasetView {
@@ -35,12 +35,13 @@ macro_rules! numeric_dispatch {
             DType::UInt64 => $body!(u64),
             DType::Float32 => $body!(f32),
             DType::Float64 => $body!(f64),
+            DType::TimestampNs => unreachable!(
+                "TimestampNs is handled before numeric_dispatch!",
+            ),
             DType::Bool => return Err(PyNotImplementedError::new_err(
                 "Bool arrays are not supported by the underlying array-format crate",
             )),
-            DType::String => return Err(PyNotImplementedError::new_err(
-                "String arrays are not yet exposed in the Python bindings",
-            )),
+            DType::String => unreachable!("String is handled before numeric_dispatch!"),
             DType::Binary => return Err(PyNotImplementedError::new_err(
                 "Binary arrays are not yet exposed in the Python bindings",
             )),
@@ -66,9 +67,9 @@ impl PyDatasetView {
 
     /// Returns a dict of attribute name -> Python value.
     fn attributes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         for (k, v) in &self.inner.meta().attributes {
-            dict.set_item(k, attr_to_py(py, v))?;
+            dict.set_item(k, attr_to_py(py, v)?)?;
         }
         Ok(dict)
     }
@@ -85,14 +86,14 @@ impl PyDatasetView {
         Ok(())
     }
 
-    fn get_attribute(&self, py: Python<'_>, key: &str) -> Option<PyObject> {
-        self.inner.get_attribute(key).map(|attr| attr_to_py(py, attr))
+    fn get_attribute(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyAny>>> {
+        self.inner.get_attribute(key).map(|attr| attr_to_py(py, &attr)).transpose()
     }
 
     /// Returns `{"dtype", "shape", "chunk_shape", "dimension_names"}` for `array`.
     fn array_meta<'py>(&self, py: Python<'py>, array: &str) -> PyResult<Bound<'py, PyDict>> {
         let schema = self.inner.array_meta(array).map_err(to_py_err)?;
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         dict.set_item("dtype", dtype_to_string(&schema.dtype))?;
         dict.set_item("shape", schema.shape)?;
         dict.set_item("chunk_shape", schema.chunk_shape)?;
@@ -108,14 +109,14 @@ impl PyDatasetView {
         array: &str,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
         let stats = py
-            .allow_threads(|| runtime().block_on(self.inner.array_stats(array)))
+            .detach(|| runtime().block_on(self.inner.array_stats(array)))
             .map_err(to_py_err)?;
         let Some(stats) = stats else { return Ok(None) };
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
         dict.set_item("row_count", stats.row_count)?;
         dict.set_item("null_count", stats.null_count)?;
-        dict.set_item("min", stat_value_to_py(py, &stats.min))?;
-        dict.set_item("max", stat_value_to_py(py, &stats.max))?;
+        dict.set_item("min", stat_value_to_py(py, &stats.min)?)?;
+        dict.set_item("max", stat_value_to_py(py, &stats.max)?)?;
         Ok(Some(dict))
     }
 
@@ -131,9 +132,37 @@ impl PyDatasetView {
     ) -> PyResult<()> {
         let dtype = parse_dtype(dtype)?;
 
+        if matches!(&dtype, DType::TimestampNs) {
+            py.detach(|| {
+                runtime().block_on(self.inner.define_array::<TimestampNs>(
+                    name,
+                    dims.clone(),
+                    shape.clone(),
+                    chunk_shape.clone(),
+                    None,
+                ))
+            })
+            .map_err(to_py_err)?;
+            return Ok(());
+        }
+
+        if matches!(&dtype, DType::String) {
+            py.detach(|| {
+                runtime().block_on(self.inner.define_array::<String>(
+                    name,
+                    dims.clone(),
+                    shape.clone(),
+                    chunk_shape.clone(),
+                    None,
+                ))
+            })
+            .map_err(to_py_err)?;
+            return Ok(());
+        }
+
         macro_rules! define_typed {
             ($t:ty) => {{
-                py.allow_threads(|| {
+                py.detach(|| {
                     runtime().block_on(self.inner.define_array::<$t>(
                         name,
                         dims.clone(),
@@ -159,6 +188,81 @@ impl PyDatasetView {
     ) -> PyResult<()> {
         let stored = self.inner.array_meta(name).map_err(to_py_err)?.dtype;
 
+        if matches!(&stored, DType::String) {
+            // Normalize |S<n>, |U<n>, and object inputs to object dtype so they
+            // flow through one extraction path. astype('object') is a no-op for
+            // already-object arrays.
+            let obj = data.call_method1("astype", ("object",))?;
+            let arr = obj.downcast::<PyArrayDyn<Py<PyAny>>>().map_err(|_| {
+                PyTypeError::new_err(format!(
+                    "expected numpy ndarray of object/bytes/unicode strings for array {:?}",
+                    name
+                ))
+            })?;
+            if !arr.is_c_contiguous() {
+                return Err(PyValueError::new_err(
+                    "input numpy array must be C-contiguous",
+                ));
+            }
+            let view = unsafe { arr.as_array() };
+            let elem_shape: Vec<usize> = view.shape().to_vec();
+            let mut owned: Vec<String> = Vec::with_capacity(view.len());
+            for obj in view.iter() {
+                let bound = obj.bind(py);
+                let s = if let Ok(s) = bound.extract::<String>() {
+                    s
+                } else if let Ok(b) = bound.extract::<Vec<u8>>() {
+                    String::from_utf8_lossy(&b).into_owned()
+                } else {
+                    return Err(PyTypeError::new_err(format!(
+                        "string array element must be str or bytes, got {:?}",
+                        bound.get_type().name()?
+                    )));
+                };
+                owned.push(s);
+            }
+            let nd = ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&elem_shape), owned)
+                .map_err(|e| PyValueError::new_err(e.to_string()))?;
+
+            py.detach(|| {
+                runtime().block_on(self.inner.write_array::<String>(name, start, nd.view()))
+            })
+            .map_err(to_py_err)?;
+            return Ok(());
+        }
+
+        if matches!(&stored, DType::TimestampNs) {
+            // Accept np.int64 input. For datetime64[ns] callers should pass
+            // arr.view(np.int64) -- pyo3-numpy distinguishes the dtype kinds.
+            let arr = data.downcast::<PyArrayDyn<i64>>().map_err(|_| {
+                PyTypeError::new_err(format!(
+                    "expected numpy ndarray with dtype int64 (use arr.view(np.int64) \
+                     for datetime64[ns]) for array {:?}",
+                    name
+                ))
+            })?;
+            if !arr.is_c_contiguous() {
+                return Err(PyValueError::new_err(
+                    "input numpy array must be C-contiguous",
+                ));
+            }
+            let view_i64 = unsafe { arr.as_array() };
+            // SAFETY: TimestampNs is #[repr(transparent)] over i64, so the in-memory
+            // layout of ArrayViewD<i64> and ArrayViewD<TimestampNs> is identical
+            // (the type parameter only affects the pointee-type and a zero-sized
+            // PhantomData in ViewRepr).
+            let view_ts: ndarray::ArrayViewD<TimestampNs> = unsafe {
+                std::mem::transmute::<ndarray::ArrayViewD<i64>, ndarray::ArrayViewD<TimestampNs>>(
+                    view_i64,
+                )
+            };
+            py.detach(|| {
+                runtime().block_on(self.inner.write_array::<TimestampNs>(name, start, view_ts))
+            })
+            .map_err(to_py_err)?;
+            return Ok(());
+        }
+
         macro_rules! write_typed {
             ($t:ty) => {{
                 let arr = data.downcast::<PyArrayDyn<$t>>().map_err(|_| {
@@ -174,7 +278,7 @@ impl PyDatasetView {
                     ));
                 }
                 let view = unsafe { arr.as_array() };
-                py.allow_threads(|| {
+                py.detach(|| {
                     runtime().block_on(self.inner.write_array::<$t>(name, start, view))
                 })
                 .map_err(to_py_err)?
@@ -198,10 +302,71 @@ impl PyDatasetView {
         let shape = shape.unwrap_or_default();
         let stored = self.inner.array_meta(name).map_err(to_py_err)?.dtype;
 
+        if matches!(&stored, DType::String) {
+            let result = py
+                .detach(|| {
+                    runtime().block_on(self.inner.read_array::<String>(
+                        name,
+                        start.clone(),
+                        shape.clone(),
+                    ))
+                })
+                .map_err(to_py_err)?;
+            return Ok(match result {
+                Some(arc) => {
+                    let owned: ndarray::ArrayD<String> = arc.to_owned();
+                    let out_shape: Vec<usize> = owned.shape().to_vec();
+                    let py_objs: Vec<Py<PyAny>> = {
+                        use pyo3::IntoPyObjectExt;
+                        owned
+                            .iter()
+                            .map(|s| s.as_str().into_py_any(py))
+                            .collect::<PyResult<Vec<_>>>()?
+                    };
+                    let nd: ndarray::ArrayD<Py<PyAny>> =
+                        ndarray::ArrayD::from_shape_vec(ndarray::IxDyn(&out_shape), py_objs)
+                            .map_err(|e| PyValueError::new_err(e.to_string()))?;
+                    Some(PyArray::from_owned_object_array(py, nd).into_any())
+                }
+                None => None,
+            });
+        }
+
+        if matches!(&stored, DType::TimestampNs) {
+            let result = py
+                .detach(|| {
+                    runtime().block_on(self.inner.read_array::<TimestampNs>(
+                        name,
+                        start.clone(),
+                        shape.clone(),
+                    ))
+                })
+                .map_err(to_py_err)?;
+            return Ok(match result {
+                Some(arc) => {
+                    let owned: ndarray::ArrayD<TimestampNs> = arc.to_owned();
+                    // SAFETY: TimestampNs is #[repr(transparent)] over i64, so
+                    // ArrayD<TimestampNs> and ArrayD<i64> share an identical
+                    // in-memory layout.
+                    let as_i64: ndarray::ArrayD<i64> = unsafe {
+                        std::mem::transmute::<
+                            ndarray::ArrayD<TimestampNs>,
+                            ndarray::ArrayD<i64>,
+                        >(owned)
+                    };
+                    let py_arr = as_i64.into_pyarray(py);
+                    let np = py.import("numpy")?;
+                    let dt_dtype = np.getattr("dtype")?.call1(("datetime64[ns]",))?;
+                    Some(py_arr.call_method1("view", (dt_dtype,))?.into_any())
+                }
+                None => None,
+            });
+        }
+
         macro_rules! read_typed {
             ($t:ty) => {{
                 let result = py
-                    .allow_threads(|| {
+                    .detach(|| {
                         runtime().block_on(self.inner.read_array::<$t>(
                             name,
                             start.clone(),
@@ -210,7 +375,7 @@ impl PyDatasetView {
                     })
                     .map_err(to_py_err)?;
                 return Ok(match result {
-                    Some(arc) => Some(arc.to_owned().into_pyarray_bound(py).into_any()),
+                    Some(arc) => Some(arc.to_owned().into_pyarray(py).into_any()),
                     None => None,
                 });
             }};
@@ -219,17 +384,7 @@ impl PyDatasetView {
     }
 
     fn delete_array(&mut self, py: Python<'_>, name: &str) -> PyResult<()> {
-        py.allow_threads(|| runtime().block_on(self.inner.delete_array(name)))
-            .map_err(to_py_err)
-    }
-
-    fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| runtime().block_on(self.inner.flush()))
-            .map_err(to_py_err)
-    }
-
-    fn compact(&mut self, py: Python<'_>) -> PyResult<()> {
-        py.allow_threads(|| runtime().block_on(self.inner.compact()))
+        py.detach(|| runtime().block_on(self.inner.delete_array(name)))
             .map_err(to_py_err)
     }
 
@@ -242,13 +397,15 @@ impl PyDatasetView {
     }
 }
 
-fn stat_value_to_py(py: Python<'_>, val: &Option<atlas::StatValue>) -> PyObject {
+fn stat_value_to_py(py: Python<'_>, val: &Option<atlas::StatValue>) -> PyResult<Py<PyAny>> {
     use atlas::StatValue;
+    use pyo3::IntoPyObjectExt;
     match val {
-        None => py.None(),
-        Some(StatValue::Float(f)) => (*f).into_py(py),
-        Some(StatValue::Int(i)) => (*i).into_py(py),
-        Some(StatValue::UInt(u)) => (*u).into_py(py),
-        Some(StatValue::Bytes(b)) => PyList::new_bound(py, b).into_py(py),
+        None => Ok(py.None()),
+        Some(StatValue::Float(f)) => (*f).into_py_any(py),
+        Some(StatValue::Int(i)) => (*i).into_py_any(py),
+        Some(StatValue::UInt(u)) => (*u).into_py_any(py),
+        Some(StatValue::Bytes(b)) => PyList::new(py, b)?.into_py_any(py),
+        Some(StatValue::TimestampNs(t)) => (*t).into_py_any(py),
     }
 }

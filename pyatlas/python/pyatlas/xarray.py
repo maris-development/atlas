@@ -13,6 +13,13 @@ These functions are also reachable via methods on `Atlas` and `DatasetView`:
     Atlas.to_xarray(name)
     DatasetView.write_xarray(ds)
     DatasetView.to_xarray()
+
+Bulk ingestion — Atlas itself batches; explicit flush on the atlas persists:
+    with atlas:
+        for nc_path in nc_paths:
+            ds = xr.open_dataset(nc_path)
+            atlas.add_xr_dataset(ds, name=Path(nc_path).stem)
+    # atlas.close() (== flush) runs on __exit__.
 """
 from __future__ import annotations
 
@@ -42,18 +49,22 @@ _NUMPY_TO_ATLAS = {
     np.dtype("uint64"): "uint64",
     np.dtype("float32"): "float32",
     np.dtype("float64"): "float64",
+    np.dtype("datetime64[ns]"): "timestamp_nanoseconds",
 }
 
 
 def _np_to_atlas_dtype(np_dtype: np.dtype) -> str:
-    try:
+    if np_dtype in _NUMPY_TO_ATLAS:
         return _NUMPY_TO_ATLAS[np_dtype]
-    except KeyError as exc:
-        supported = ", ".join(sorted(set(_NUMPY_TO_ATLAS.values())))
-        raise NotImplementedError(
-            f"numpy dtype {np_dtype!r} is not supported by pyatlas "
-            f"(supported: {supported})"
-        ) from exc
+    # Object (Python str/bytes) and fixed-size byte/unicode strings all
+    # become variable-length atlas strings.
+    if np_dtype.kind in ("O", "S", "U"):
+        return "string"
+    supported = ", ".join(sorted(set(_NUMPY_TO_ATLAS.values())))
+    raise NotImplementedError(
+        f"numpy dtype {np_dtype!r} is not supported by pyatlas "
+        f"(supported: {supported}, plus object/bytes/unicode → string)"
+    )
 
 
 def _encode_attr_value(value: Any) -> Any:
@@ -114,16 +125,25 @@ def _iter_blocks(arr: Any) -> Iterator[tuple[list[int], np.ndarray]]:
     memory is bounded by a single chunk per variable rather than the full
     array.
     """
+    def _contiguous(a: np.ndarray) -> np.ndarray:
+        # np.ascontiguousarray promotes 0-D arrays to 1-D (ndmin=1 default),
+        # which breaks scalar-array writes. Force-copy non-contiguous arrays
+        # via np.asarray + .copy(order='C') instead, which preserves rank.
+        if a.flags["C_CONTIGUOUS"]:
+            return a
+        return a.copy(order="C")
+
     if _is_dask_array(arr):
         chunks = arr.chunks
         # Per-dim cumulative starts: e.g. ((4,4,4,4),) -> [[0,4,8,12]]
         offsets = [[0, *itertools.accumulate(c)][:-1] for c in chunks]
         for block_idx in itertools.product(*[range(len(c)) for c in chunks]):
             start = [offsets[d][i] for d, i in enumerate(block_idx)]
-            block = np.ascontiguousarray(arr.blocks[block_idx].compute())
+            block = _contiguous(arr.blocks[block_idx].compute())
             yield start, block
     else:
-        yield [0] * np.ndim(arr), np.ascontiguousarray(np.asarray(arr))
+        a = np.asarray(arr)
+        yield [0] * a.ndim, _contiguous(a)
 
 
 def _write_xarray_to_view(
@@ -169,6 +189,10 @@ def _write_xarray_to_view(
         # Stream blocks: one chunk at a time for dask-backed data, a single
         # full-shape block for numpy-backed data.
         for start, block in _iter_blocks(var.data):
+            # TimestampNs columns: the bindings accept np.int64 only; cast the
+            # numpy datetime64 view to int64 without copying.
+            if block.dtype.kind == "M":
+                block = block.view(np.int64)
             view.write_array(var_name, start=start, data=block)
 
         # Per-variable attrs → flattened as `{var}.{attr}`
@@ -183,8 +207,6 @@ def _write_xarray_to_view(
 
     # Marker so we can faithfully restore coord/var distinction on read.
     view.set_attribute(_COORDS_ATTR, json.dumps(coord_names))
-
-    view.flush()
 
 
 def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":

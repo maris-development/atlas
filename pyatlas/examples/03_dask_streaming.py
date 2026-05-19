@@ -34,15 +34,17 @@ def main() -> None:
     print(f"  total blocks        = {int(np.prod([len(c) for c in temperature.chunks]))}")
 
     with tempfile.TemporaryDirectory() as store_dir:
-        atlas = pyatlas.Atlas.create(store_dir)
-        atlas.add_xr_dataset(ds, "ds")  # streams chunk-by-chunk
+        with pyatlas.Atlas.create(store_dir) as atlas:
+            atlas.add_xr_dataset(ds, "ds")  # streams chunk-by-chunk
 
-        # Verify the dask chunk shape became the atlas on-disk chunk shape
-        view = atlas.open_dataset("ds")
-        meta = view.array_meta("temperature")
-        print(f"\nAtlas chunk_shape for 'temperature': {meta['chunk_shape']}")
+            # Verify the dask chunk shape became the atlas on-disk chunk shape
+            view = atlas.open_dataset("ds")
+            meta = view.array_meta("temperature")
+            print(f"\nAtlas chunk_shape for 'temperature': {meta['chunk_shape']}")
+        # `with` block calls atlas.close() (== flush) on exit.
 
-        # Read back as a fully-materialised numpy array
+        # Reopen and read back as a fully-materialised xr.Dataset
+        atlas = pyatlas.Atlas.open(store_dir)
         ds_back = atlas.to_xarray("ds")
         print(f"Read-back shape: {ds_back['temperature'].shape}")
         xr.testing.assert_identical(ds.compute(), ds_back)

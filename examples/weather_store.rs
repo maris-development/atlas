@@ -94,14 +94,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ds.write_array("time", vec![0], time.view()).await?;
 
         // --- per-dataset attributes ---
-        ds.set_attribute("month", Attr::UInt32(1));
-        ds.set_attribute("year", Attr::UInt32(2024));
+        ds.set_attribute("month", Attr::Int64(1));
+        ds.set_attribute("year", Attr::Int64(2024));
         ds.set_attribute("station", Attr::String("KNMI".into()));
         ds.set_attribute("has_qc", Attr::Bool(true));
 
-        ds.flush().await?;
-        println!("jan_2024: flushed");
     }
+    s.flush().await?;
+    println!("jan_2024: flushed");
 
     // ── Dataset 2: February 2024 ──────────────────────────────────────────────
     //
@@ -140,12 +140,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let humidity = Array2::<f32>::from_elem([NLAT, NLON], 78.5_f32).into_dyn();
         ds.write_array("humidity", vec![0, 0], humidity.view()).await?;
 
-        ds.set_attribute("month", Attr::UInt32(2));
-        ds.set_attribute("year", Attr::UInt32(2024));
+        ds.set_attribute("month", Attr::Int64(2));
+        ds.set_attribute("year", Attr::Int64(2024));
 
-        ds.flush().await?;
-        println!("feb_2024: flushed");
     }
+    s.flush().await?;
+    println!("feb_2024: flushed");
 
     // ── Dataset 3: sparse — only a time axis, no spatial grid ─────────────────
 
@@ -168,9 +168,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ds.set_attribute("lon", Attr::Float64(5.18));
         ds.set_attribute("name", Attr::String("De Bilt".into()));
 
-        ds.flush().await?;
-        println!("station_obs: flushed");
     }
+    s.flush().await?;
+    println!("station_obs: flushed");
 
     // ── Overview before reopening ─────────────────────────────────────────────
 
@@ -304,6 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(StatValue::Int(i)) => i.to_string(),
             Some(StatValue::UInt(u)) => u.to_string(),
             Some(StatValue::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
+            Some(StatValue::TimestampNs(t)) => t.to_string(),
         }
     }
 

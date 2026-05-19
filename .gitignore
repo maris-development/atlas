@@ -22,3 +22,5 @@ target
 .venv/
 __pycache__/
 .pytest_cache/
+raw_smoke_tests/
+.DS_Store

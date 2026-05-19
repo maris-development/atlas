@@ -23,15 +23,25 @@ my_store/
 
 ---
 
+## Durability model
+
+`atlas.json` is read **once** when the store is opened or created. Every subsequent mutation — `create_dataset`, `define_array`, `set_attribute`, `delete_array`, `delete_dataset` — only touches the in-memory `StoreMeta`; writes to `ArrayFile`s buffer inside the per-array in-memory layer. **Nothing reaches disk until `Atlas::flush()` (or `Atlas::close()`).** Dropping an `Atlas` without flushing abandons every pending in-memory write.
+
+A single `Atlas::flush()` walks every cached `ArrayFile` (writing deltas + stats) and then serialises the in-memory `StoreMeta` to `atlas.json`. This gives one durability boundary for the whole store: N datasets ⇒ one delta file per touched array name (not one per dataset) and one `atlas.json` rewrite (not N).
+
+`DatasetView` is a borrowed handle into the atlas's shared meta — it has no `flush()` of its own.
+
+---
+
 ## File format
 
 ### `atlas.json`
 
-The registry is a plain JSON file written on every `flush()`. It stores:
+The registry is a plain JSON file written on `Atlas::flush()` / `Atlas::close()`. It stores:
 
 - **Store version** — for future format upgrades.
 - **Dataset names** — the complete list of datasets in the store.
-- **Per-dataset attributes** — typed key-value pairs (bool, int8/16/32/64, uint8/16/32/64, float32/64, string).
+- **Per-dataset attributes** — typed key-value pairs serialized as plain JSON values: bool, 64-bit integer, 64-bit float, UTF-8 string, or an RFC 3339 nanosecond-precision timestamp string (e.g. `"2023-11-15T07:33:20.123456789Z"`). Atlas's `Attr` enum has five variants (`Bool`/`Int64`/`Float64`/`String`/`TimestampNanoseconds`); there are no narrow integer/float types on disk.
 - **Array schemas** — per array: dtype, shape, chunk shape, named dimensions, and the codec used when the array was first written.
 
 Because `atlas.json` is human-readable and self-describing, you can inspect or audit the store contents with any JSON tool without needing the library.
@@ -43,7 +53,7 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 - **Multiple datasets in one file** — every dataset that owns this variable is stored as a named entry inside the same file.
 - **Chunked layout** — arrays are split into chunks of a user-specified shape, so partial reads and writes touch only the relevant blocks.
 - **Configurable compression** — each block is compressed with the codec set when the store was created (default: Zstd; also LZ4 and uncompressed). The codec is persisted in `atlas.json` and restored automatically on `open` — no need to pass it again. Block target size is 8 MiB.
-- **Persisted statistics** — on `flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Statistics survive store reopening.
+- **Persisted statistics** — on `Atlas::flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Statistics survive store reopening.
 - **In-memory caches** — a 256 MiB decoded block cache and a 64 MiB raw I/O cache sit in front of the object store for repeated reads.
 
 ---
@@ -59,22 +69,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a new store — codec is persisted to atlas.json
     let mut s = Atlas::create_path("/tmp/my_store", StoreConfig::default()).await?;
 
-    // Create a dataset and write arrays
-    let mut ds = s.create_dataset("jan_2024").await?;
-    ds.define_array::<f32>(
-        "temperature",
-        vec!["lat".into(), "lon".into()],
-        vec![8, 16],
-        Some(vec![4, 8]),  // chunk shape
-        None,
-    ).await?;
+    {
+        // Create a dataset and write arrays
+        let mut ds = s.create_dataset("jan_2024").await?;
+        ds.define_array::<f32>(
+            "temperature",
+            vec!["lat".into(), "lon".into()],
+            vec![8, 16],
+            Some(vec![4, 8]),  // chunk shape
+            None,
+        ).await?;
 
-    let data = Array2::<f32>::from_elem([8, 16], 20.0).into_dyn();
-    ds.write_array("temperature", vec![0, 0], data.view()).await?;
+        let data = Array2::<f32>::from_elem([8, 16], 20.0).into_dyn();
+        ds.write_array("temperature", vec![0, 0], data.view()).await?;
 
-    ds.set_attribute("month", Attr::UInt32(1));
-    ds.set_attribute("station", Attr::String("KNMI".into()));
-    ds.flush().await?;
+        ds.set_attribute("month", Attr::UInt32(1));
+        ds.set_attribute("station", Attr::String("KNMI".into()));
+    }
+
+    // One flush persists atlas.json + every cached array file.
+    s.flush().await?;
 
     // Reopen — codec is read from atlas.json, no StoreConfig needed
     let s2 = Atlas::open_path("/tmp/my_store").await?;
@@ -105,8 +119,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | **Array** | An N-dimensional typed array with named dimensions and an optional chunk shape. |
 | **Attribute** | A typed scalar attached to a dataset (metadata, not array data). |
 | **Array file** | One `data.af` file per variable name, shared across all datasets that define that variable. |
-| **Flush** | Persists all pending writes and recomputes statistics. Must be called explicitly. |
-| **Compact** | Rewrites the `.af` file to reclaim space after deletes. |
+| **Flush** | `Atlas::flush()` — the single durability boundary. Persists every cached array file and rewrites `atlas.json` from the in-memory `StoreMeta`. Must be called explicitly (or via `Atlas::close()` / Python's `with atlas:`). |
+| **Compact** | `Atlas::compact()` rewrites every cached `.af` file to reclaim space after deletes. |
 | **StoreConfig** | Configuration passed to `Atlas::create`. Currently holds the compression `Codec`. |
 | **Codec** | Compression codec for new array blocks: `Codec::Zstd` (default), `Codec::Lz4`, or `Codec::Uncompressed`. Persisted in `atlas.json`; `open` reads it automatically. |
 
@@ -114,7 +128,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Supported dtypes
 
-`bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `String`, `Binary`, `List<T>`, `FixedSizeList<T, N>`
+`bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `TimestampNs`, `String`, `Binary`, `List<T>`, `FixedSizeList<T, N>`
+
+0-D scalar arrays (`shape = []`) are supported for any element type — useful for single-valued metadata variables like a trajectory identifier.
 
 ---
 
@@ -218,7 +234,7 @@ The decoded cache means repeated reads of the same chunk cost only a hash-map lo
 
 ### Persisted statistics
 
-Min, max, null count, and row count are computed and persisted on every `flush()`. Downstream systems can read these statistics from the opened `DatasetView` without touching array data at all — useful for query planning, dashboards, or data-quality checks.
+Min, max, null count, and row count are computed and persisted on every `Atlas::flush()`. Downstream systems can read these statistics from the opened `DatasetView` without touching array data at all — useful for query planning, dashboards, or data-quality checks.
 
 ### Compression
 
@@ -234,11 +250,11 @@ Choose LZ4 when decompression throughput matters more than storage size (e.g. la
 
 ### Write path
 
-Writes are buffered in-memory. Calling `flush()` compresses and writes all pending blocks and updates `atlas.json` atomically (a single `PUT`). This means the write path scales with the number of modified chunks, not the number of datasets.
+Writes are buffered in-memory across the whole atlas. Calling `Atlas::flush()` compresses and writes every modified block across every cached array file, then rewrites `atlas.json` atomically (a single `PUT`). The write path scales with the number of modified chunks, not the number of datasets, and N consecutive `add_xr_dataset` / `create_dataset` calls amortise to a single flush.
 
 ### Compaction
 
-After deleting arrays or datasets, the underlying `.af` files may retain dead space. Calling `compact()` on a `DatasetView` rewrites the file in-place, reclaiming storage.
+After deleting arrays or datasets, the underlying `.af` files may retain dead space. Calling `Atlas::compact()` rewrites every cached file in place, reclaiming storage.
 
 ---
 
@@ -251,9 +267,9 @@ Each physical array file is guarded by a `tokio::sync::RwLock`:
 | Operation | Lock held |
 | --- | --- |
 | `read_array`, `array_stats` | Shared read lock — multiple callers on the same file proceed in parallel |
-| `write_array`, `define_array`, `delete_array`, `flush`, `compact` | Exclusive write lock — serialised against all other access |
+| `write_array`, `define_array`, `delete_array`, `Atlas::flush`, `Atlas::compact` | Exclusive write lock — serialised against all other access |
 
-The store-level cache map uses a `parking_lot::RwLock` that is never held across an `await` point.
+The store-level array-file cache map uses a `parking_lot::RwLock` that is never held across an `await` point. The shared `StoreMeta` uses a separate `parking_lot::Mutex` and is only mutated through short, lock-release-await-free critical sections (so `list_datasets`, `dataset_exists`, etc. remain synchronous).
 
 ---
 

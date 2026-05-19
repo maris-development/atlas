@@ -46,15 +46,17 @@ def main() -> None:
     ds = build_dataset()
 
     with tempfile.TemporaryDirectory() as store_dir:
-        atlas = pyatlas.Atlas.create(store_dir)
+        with pyatlas.Atlas.create(store_dir) as atlas:
+            # Two equivalent ways to write
+            atlas.add_xr_dataset(ds, "jan_2024")
+            ds.atlas.write(atlas, "feb_2024")
 
-        # Two equivalent ways to write
-        atlas.add_xr_dataset(ds, "jan_2024")
-        ds.atlas.write(atlas, "feb_2024")
+            print(f"Datasets in store: {atlas.list_datasets()}")
+        # `with` block calls atlas.close() (== flush) on exit; without it
+        # the in-memory writes would never reach disk.
 
-        print(f"Datasets in store: {atlas.list_datasets()}")
-
-        # Read back
+        # Reopen and read back
+        atlas = pyatlas.Atlas.open(store_dir)
         ds_jan = atlas.to_xarray("jan_2024")
         ds_feb = atlas.to_xarray("feb_2024")
 

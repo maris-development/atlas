@@ -28,7 +28,6 @@ def main() -> None:
                         data=np.full((4, 4), 5.0, dtype=np.float32))
         jan.set_attribute("month", 1)
         jan.set_attribute("station", "KNMI")
-        jan.flush()
 
         # ── Dataset 2: same shape, different values, shares the "temperature"
         #              physical array file with jan_2024 inside atlas. ─────
@@ -43,7 +42,9 @@ def main() -> None:
         feb.write_array("temperature", start=[0, 0],
                         data=np.full((4, 4), 7.5, dtype=np.float32))
         feb.set_attribute("month", 2)
-        feb.flush()
+
+        # Persist atlas.json + every cached array file in one shot.
+        atlas.flush()
 
         print("\nDatasets:", atlas.list_datasets())
         print("Physical arrays:", atlas.list_arrays())

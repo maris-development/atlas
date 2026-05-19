@@ -1,18 +1,21 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use indexmap::IndexMap;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, Result, config::Codec, schema::{ArraySchema, Attr}};
 
 /// Metadata for a single dataset: array schemas and per-dataset attributes.
+/// Both maps preserve insertion order (via [`IndexMap`]) so on-disk layouts
+/// and Python-side dict iteration mirror the order arrays/attributes were
+/// added.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DatasetMeta {
     #[serde(default)]
-    pub arrays: HashMap<String, ArraySchema>,
+    pub arrays: IndexMap<String, ArraySchema>,
     #[serde(default)]
-    pub attributes: HashMap<String, Attr>,
+    pub attributes: IndexMap<String, Attr>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -23,7 +26,7 @@ pub(crate) struct StoreMeta {
     /// created before this field existed.
     #[serde(default)]
     pub codec: Codec,
-    pub datasets: HashMap<String, DatasetMeta>,
+    pub datasets: IndexMap<String, DatasetMeta>,
 }
 
 const META_PATH: &str = "atlas.json";
@@ -72,7 +75,7 @@ mod tests {
         meta.datasets.insert(
             "ds1".into(),
             DatasetMeta {
-                arrays: HashMap::from([(
+                arrays: IndexMap::from([(
                     "temp".into(),
                     ArraySchema {
                         dtype: DType::Float32,
@@ -82,8 +85,8 @@ mod tests {
                         codec: Codec::default(),
                     },
                 )]),
-                attributes: HashMap::from([
-                    ("month".into(), Attr::Int32(6)),
+                attributes: IndexMap::from([
+                    ("month".into(), Attr::Int64(6)),
                     ("active".into(), Attr::Bool(true)),
                 ]),
             },
@@ -97,7 +100,7 @@ mod tests {
         assert!(dm.arrays.contains_key("temp"));
         assert_eq!(dm.arrays["temp"].dtype, DType::Float32);
         assert_eq!(dm.arrays["temp"].shape, vec![4, 8]);
-        assert!(matches!(dm.attributes["month"], Attr::Int32(6)));
+        assert!(matches!(dm.attributes["month"], Attr::Int64(6)));
         assert!(matches!(dm.attributes["active"], Attr::Bool(true)));
     }
 
@@ -120,23 +123,36 @@ mod tests {
     fn attr_roundtrip_via_serde() {
         let cases = vec![
             Attr::Bool(true),
-            Attr::Int8(-1),
-            Attr::Int16(-100),
-            Attr::Int32(-1_000),
             Attr::Int64(-1_000_000),
-            Attr::UInt8(1),
-            Attr::UInt16(100),
-            Attr::UInt32(1_000),
-            Attr::UInt64(1_000_000),
-            Attr::Float32(1.5),
             Attr::Float64(2.5),
             Attr::String("hello".into()),
+            Attr::TimestampNanoseconds(1_700_000_000_000_000_000),
         ];
         for v in cases {
             let json = serde_json::to_string(&v).unwrap();
             let back: Attr = serde_json::from_str(&json).unwrap();
             assert_eq!(v, back);
         }
+    }
+
+    #[test]
+    fn attr_json_shapes() {
+        assert_eq!(serde_json::to_string(&Attr::Bool(true)).unwrap(), "true");
+        assert_eq!(serde_json::to_string(&Attr::Int64(42)).unwrap(), "42");
+        assert_eq!(serde_json::to_string(&Attr::Float64(1.5)).unwrap(), "1.5");
+        assert_eq!(serde_json::to_string(&Attr::String("x".into())).unwrap(), "\"x\"");
+        assert_eq!(
+            serde_json::to_string(&Attr::TimestampNanoseconds(1_700_000_000_000_000_000)).unwrap(),
+            "\"2023-11-14T22:13:20Z\"",
+        );
+
+        // Round-tripped non-RFC-3339 string stays as String, not TimestampNanoseconds.
+        let back: Attr = serde_json::from_str("\"not-a-date\"").unwrap();
+        assert_eq!(back, Attr::String("not-a-date".into()));
+
+        // RFC 3339 string deserializes as TimestampNanoseconds (won the order race).
+        let back: Attr = serde_json::from_str("\"2023-11-14T22:13:20Z\"").unwrap();
+        assert_eq!(back, Attr::TimestampNanoseconds(1_700_000_000_000_000_000));
     }
 
     #[test]

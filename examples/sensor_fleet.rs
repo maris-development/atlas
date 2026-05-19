@@ -77,11 +77,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ts = Array1::from_iter((0..N_READINGS as i64).map(|h| base_ts + h * 3600)).into_dyn();
         ds.write_array("timestamps", vec![0], ts.view()).await?;
 
-        ds.set_attribute("sensor_id", Attr::UInt32(i as u32));
+        ds.set_attribute("sensor_id", Attr::Int64(i as i64));
         ds.set_attribute("unit", Attr::String("°C".into()));
-
-        ds.flush().await?;
     }
+    s.flush().await?;
 
     // ── Two physical files, N_SENSORS logical datasets ────────────────────────
 

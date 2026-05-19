@@ -26,7 +26,7 @@ def test_numeric_roundtrip():
         ds.write_array("temp", start=[0, 0], data=data)
         ds.set_attribute("month", 1)
         ds.set_attribute("station", "KNMI")
-        ds.flush()
+        s.flush()
 
         s2 = pyatlas.Atlas.open(d)
         assert s2.dataset_exists("ds_jan")
@@ -77,7 +77,7 @@ def test_all_numeric_dtypes():
             ds.define_array(name, dtype=name, dims=["x"], shape=[4])
             data = np.array(values, dtype=np_dtype)
             ds.write_array(name, start=[0], data=data)
-        ds.flush()
+        s.flush()
 
         s2 = pyatlas.Atlas.open(d)
         ds2 = s2.open_dataset("ds")
@@ -94,7 +94,7 @@ def test_lz4_codec_roundtrip():
         ds = s.create_dataset("ds")
         ds.define_array("arr", dtype="float32", dims=["x"], shape=[4])
         ds.write_array("arr", start=[0], data=np.array([1, 2, 3, 4], dtype=np.float32))
-        ds.flush()
+        s.flush()
 
         s2 = pyatlas.Atlas.open(d)
         ds2 = s2.open_dataset("ds")
@@ -114,7 +114,9 @@ def test_attribute_dtypes():
         ds.set_attribute("name", "alpha")
         ds.set_attribute("small_int", 7, dtype="int8")
         ds.set_attribute("ratio32", 1.25, dtype="float32")
-        ds.flush()
+        ds.set_attribute("created_at", 1700000000000000000, dtype="timestamp_nanoseconds")
+        ds.set_attribute("updated_at", 1700000000000000001, dtype="datetime64[ns]")
+        s.flush()
 
         s2 = pyatlas.Atlas.open(d)
         ds2 = s2.open_dataset("ds")
@@ -124,6 +126,167 @@ def test_attribute_dtypes():
         assert ds2.get_attribute("name") == "alpha"
         assert ds2.get_attribute("small_int") == 7
         assert abs(ds2.get_attribute("ratio32") - 1.25) < 1e-6
+        assert ds2.get_attribute("created_at") == 1700000000000000000
+        assert ds2.get_attribute("updated_at") == 1700000000000000001
+
+
+def test_timestamp_ns_roundtrip():
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("ts")
+        ds.define_array("event_time", dtype="timestamp_nanoseconds", dims=["t"], shape=[3])
+
+        data = np.array(
+            [1700000000000000000, 1700000000000000001, 1700000000000000002],
+            dtype=np.int64,
+        )
+        ds.write_array("event_time", start=[0], data=data)
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(d)
+        ds2 = s2.open_dataset("ts")
+        assert ds2.array_meta("event_time")["dtype"] == "timestamp_nanoseconds"
+
+        arr = ds2.read_array("event_time")
+        assert arr is not None
+        assert arr.dtype == np.dtype("datetime64[ns]")
+        assert list(arr.view(np.int64)) == [
+            1700000000000000000,
+            1700000000000000001,
+            1700000000000000002,
+        ]
+
+
+def test_string_array_roundtrip():
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("strs")
+
+        ds.define_array("names", dtype="string", dims=["i"], shape=[3])
+        ds.write_array(
+            "names",
+            start=[0],
+            data=np.array(["alpha", "beta", "gamma"], dtype=object),
+        )
+
+        # Fixed-size byte array |S5 -> stored as vlen string.
+        ds.define_array("codes", dtype="string", dims=["i"], shape=[3])
+        ds.write_array(
+            "codes",
+            start=[0],
+            data=np.array([b"AAA", b"BB", b"C"], dtype="|S5"),
+        )
+
+        # Fixed-size unicode array |U4 -> stored as vlen string.
+        ds.define_array("tags", dtype="string", dims=["i"], shape=[2])
+        ds.write_array(
+            "tags",
+            start=[0],
+            data=np.array(["foo", "barr"], dtype="|U4"),
+        )
+
+        ds.define_array("grid", dtype="string", dims=["r", "c"], shape=[2, 2])
+        ds.write_array(
+            "grid",
+            start=[0, 0],
+            data=np.array([["a", "b"], ["c", "d"]], dtype=object),
+        )
+
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(d)
+        ds2 = s2.open_dataset("strs")
+
+        assert ds2.array_meta("names")["dtype"] == "string"
+        assert list(ds2.read_array("names")) == ["alpha", "beta", "gamma"]
+        assert list(ds2.read_array("codes")) == ["AAA", "BB", "C"]
+        assert list(ds2.read_array("tags")) == ["foo", "barr"]
+
+        grid = ds2.read_array("grid")
+        assert grid.shape == (2, 2)
+        assert grid.tolist() == [["a", "b"], ["c", "d"]]
+
+
+def test_zero_dim_scalar_roundtrip():
+    """0-D (shape=()) arrays for all dtype families round-trip end-to-end."""
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("scalars")
+
+        ds.define_array("count", dtype="int32", dims=[], shape=[])
+        ds.write_array("count", start=[], data=np.array(7, dtype=np.int32))
+
+        ds.define_array("ratio", dtype="float64", dims=[], shape=[])
+        ds.write_array("ratio", start=[], data=np.array(0.25, dtype=np.float64))
+
+        ds.define_array("name", dtype="string", dims=[], shape=[])
+        ds.write_array("name", start=[], data=np.array("alpha", dtype=object))
+
+        ds.define_array("created_at", dtype="timestamp_nanoseconds", dims=[], shape=[])
+        ds.write_array("created_at", start=[], data=np.array(1700000000000000000, dtype=np.int64))
+
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(d)
+        ds2 = s2.open_dataset("scalars")
+
+        assert ds2.array_meta("count")["shape"] == []
+        assert ds2.read_array("count").item() == 7
+
+        assert ds2.read_array("ratio").item() == 0.25
+
+        assert ds2.read_array("name").item() == "alpha"
+
+        ct = ds2.read_array("created_at")
+        assert ct.dtype == np.dtype("datetime64[ns]")
+        assert ct.view(np.int64).item() == 1700000000000000000
+
+
+def test_atlas_batched_roundtrip():
+    """Multiple datasets accumulated in memory; single atlas.flush persists everything."""
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        a = s.create_dataset("a")
+        a.define_array("temp", dtype="float32", dims=["x"], shape=[4])
+        a.write_array("temp", start=[0], data=np.array([1, 2, 3, 4], dtype=np.float32))
+
+        b = s.create_dataset("b")
+        b.define_array("temp", dtype="float32", dims=["x"], shape=[4])
+        b.write_array("temp", start=[0], data=np.array([5, 6, 7, 8], dtype=np.float32))
+
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(d)
+        assert sorted(s2.list_datasets()) == ["a", "b"]
+        assert list(s2.open_dataset("a").read_array("temp")) == [1.0, 2.0, 3.0, 4.0]
+        assert list(s2.open_dataset("b").read_array("temp")) == [5.0, 6.0, 7.0, 8.0]
+
+
+def test_atlas_no_implicit_flush():
+    """add_xr_dataset (or any mutation) doesn't auto-persist — a fresh Atlas
+    sees nothing until atlas.flush() is called."""
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        a = s.create_dataset("a")
+        a.define_array("temp", dtype="float32", dims=["x"], shape=[2])
+        a.write_array("temp", start=[0], data=np.array([1, 2], dtype=np.float32))
+        # No flush.
+
+        s2 = pyatlas.Atlas.open(d)
+        assert s2.list_datasets() == []
+
+
+def test_atlas_context_manager():
+    """with atlas: ... auto-flushes on exit."""
+    with tempfile.TemporaryDirectory() as d:
+        with pyatlas.Atlas.create(d) as s:
+            ds = s.create_dataset("x")
+            ds.define_array("v", dtype="int32", dims=["i"], shape=[3])
+            ds.write_array("v", start=[0], data=np.array([10, 20, 30], dtype=np.int32))
+
+        s2 = pyatlas.Atlas.open(d)
+        assert s2.list_datasets() == ["x"]
+        assert list(s2.open_dataset("x").read_array("v")) == [10, 20, 30]
 
 
 def test_delete_dataset_and_array():
@@ -135,7 +298,7 @@ def test_delete_dataset_and_array():
         ds.delete_array("a")
         assert "a" not in ds.list_arrays()
         assert "b" in ds.list_arrays()
-        ds.flush()
+        s.flush()
 
         s.create_dataset("ghost")
         s.delete_dataset("ghost")
@@ -165,6 +328,12 @@ if __name__ == "__main__":
     test_all_numeric_dtypes()
     test_lz4_codec_roundtrip()
     test_attribute_dtypes()
+    test_timestamp_ns_roundtrip()
+    test_string_array_roundtrip()
+    test_zero_dim_scalar_roundtrip()
+    test_atlas_batched_roundtrip()
+    test_atlas_no_implicit_flush()
+    test_atlas_context_manager()
     test_delete_dataset_and_array()
     test_array_meta()
     print("All smoke tests passed.")
