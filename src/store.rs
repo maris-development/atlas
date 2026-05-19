@@ -114,7 +114,7 @@ mod tests {
         (Arc::new(InMemory::new()), Path::from(""))
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn empty_store_lists_nothing() {
         let (store, prefix) = make_store();
         let s = ArrayStore::create(store, prefix).await.unwrap();
@@ -122,14 +122,14 @@ mod tests {
         assert!(s.list_arrays().is_empty());
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn dataset_exists_false_on_empty_store() {
         let (store, prefix) = make_store();
         let s = ArrayStore::create(store, prefix).await.unwrap();
         assert!(!s.dataset_exists("any"));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn create_dataset_makes_it_visible() {
         let (store, prefix) = make_store();
         let mut s = ArrayStore::create(store, prefix).await.unwrap();
@@ -138,7 +138,7 @@ mod tests {
         assert!(s.list_datasets().contains(&"ds"));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn duplicate_dataset_name_rejected() {
         let (store, prefix) = make_store();
         let mut s = ArrayStore::create(store, prefix).await.unwrap();
@@ -147,7 +147,7 @@ mod tests {
         assert!(matches!(err, crate::Error::DatasetAlreadyExists(_)));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn open_nonexistent_dataset_errors() {
         let (store, prefix) = make_store();
         let s = ArrayStore::create(store, prefix).await.unwrap();
@@ -155,7 +155,7 @@ mod tests {
         assert!(matches!(err, crate::Error::DatasetNotFound(_)));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn delete_nonexistent_dataset_errors() {
         let (store, prefix) = make_store();
         let mut s = ArrayStore::create(store, prefix).await.unwrap();
@@ -163,7 +163,7 @@ mod tests {
         assert!(matches!(err, crate::Error::DatasetNotFound(_)));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn delete_dataset_removes_it() {
         let (store, prefix) = make_store();
         let mut s = ArrayStore::create(store, prefix).await.unwrap();
@@ -173,7 +173,7 @@ mod tests {
         assert!(!s.dataset_exists("to_delete"));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn list_datasets_returns_all_created() {
         let (store, prefix) = make_store();
         let mut s = ArrayStore::create(store, prefix).await.unwrap();
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(names, vec!["a", "b", "c"]);
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn invalid_dataset_name_rejected() {
         let (store, prefix) = make_store();
         let mut s = ArrayStore::create(store, prefix).await.unwrap();
@@ -195,7 +195,7 @@ mod tests {
         assert!(matches!(s.create_dataset("..").await, Err(crate::Error::InvalidName(_))));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn list_arrays_deduplicates_shared_names() {
         let (store, prefix) = make_store();
         let mut s = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();

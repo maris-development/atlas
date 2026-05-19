@@ -10,7 +10,7 @@ fn make_store(tmp: &tempfile::TempDir) -> (Arc<dyn object_store::ObjectStore>, P
     (store, prefix)
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn create_write_read_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
@@ -47,7 +47,7 @@ async fn create_write_read_roundtrip() {
     assert_eq!(ds2.get_attribute("month"), Some(&Attr::Int32(1)));
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn two_datasets_share_array_file() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
@@ -89,7 +89,7 @@ async fn two_datasets_share_array_file() {
     assert_eq!(feb, data_feb.into_shared());
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn list_datasets_and_arrays() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
@@ -110,7 +110,7 @@ async fn list_datasets_and_arrays() {
     assert_eq!(store2.list_arrays(), vec!["x"]);
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn delete_dataset() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
@@ -132,7 +132,7 @@ async fn delete_dataset() {
     assert!(!store2.dataset_exists("to_delete"));
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn attributes_survive_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
@@ -154,7 +154,7 @@ async fn attributes_survive_reopen() {
     assert_eq!(ds2.get_attribute("year"), Some(&Attr::UInt32(2023)));
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn reject_invalid_names() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
@@ -166,7 +166,7 @@ async fn reject_invalid_names() {
     assert!(array_store.create_dataset("_hidden").await.is_err());
 }
 
-#[tokio::test(flavor = "current_thread")]
+#[tokio::test]
 async fn meta_survives_flush_and_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);

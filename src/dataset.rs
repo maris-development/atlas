@@ -275,14 +275,14 @@ mod tests {
 
     // --- array lookup without I/O ---
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn read_array_returns_none_for_unknown_array() {
         let view = empty_view(make_store(), "ds");
         let result = view.read_array::<f32>("missing", vec![], vec![]).await.unwrap();
         assert!(result.is_none());
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn array_meta_errors_for_unknown_array() {
         let view = empty_view(make_store(), "ds");
         assert!(matches!(view.array_meta("missing"), Err(crate::Error::ArrayNotFound(_))));
@@ -290,7 +290,7 @@ mod tests {
 
     // --- define_array behaviour ---
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn define_array_appears_in_list() {
         let mut view = empty_view(make_store(), "ds");
         view.define_array::<f32>("arr", vec!["x".into()], vec![4], None, None)
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(view.list_arrays(), vec!["arr"]);
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn define_duplicate_array_rejected() {
         let mut view = empty_view(make_store(), "ds");
         view.define_array::<f32>("arr", vec!["x".into()], vec![4], None, None)
@@ -312,7 +312,7 @@ mod tests {
         assert!(matches!(err, crate::Error::ArrayAlreadyExists(_)));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn define_array_invalid_name_rejected() {
         let mut view = empty_view(make_store(), "ds");
         let err = view
@@ -324,7 +324,7 @@ mod tests {
 
     // --- write / read roundtrip ---
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn write_then_read_returns_data() {
         use ndarray::ArrayD;
         let mut view = empty_view(make_store(), "ds");
@@ -339,7 +339,7 @@ mod tests {
 
     // --- delete_array ---
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn delete_array_removes_from_list() {
         let mut view = empty_view(make_store(), "ds");
         view.define_array::<f32>("arr", vec!["x".into()], vec![4], None, None)
@@ -349,7 +349,7 @@ mod tests {
         assert!(view.list_arrays().is_empty());
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn delete_nonexistent_array_errors() {
         let mut view = empty_view(make_store(), "ds");
         let err = view.delete_array("ghost").await.unwrap_err();
@@ -358,7 +358,7 @@ mod tests {
 
     // --- meta ---
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn define_array_records_meta() {
         use array_format::DType;
         let mut view = empty_view(make_store(), "ds");
@@ -375,7 +375,7 @@ mod tests {
         assert!(meta.attributes.is_empty());
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn define_array_default_chunk_equals_shape() {
         use array_format::DType;
         let mut view = empty_view(make_store(), "ds");
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(meta.attributes.get("label"), Some(&Attr::String("x".into())));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn delete_array_removes_meta_entry() {
         let mut view = empty_view(make_store(), "ds");
         view.define_array::<f64>("arr", vec!["x".into()], vec![4], None, None)
@@ -410,7 +410,7 @@ mod tests {
         assert!(!view.meta().arrays.contains_key("arr"));
     }
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn array_meta_returns_schema_after_define() {
         use array_format::DType;
         let mut view = empty_view(make_store(), "ds");
@@ -424,7 +424,7 @@ mod tests {
 
     // --- cache sharing ---
 
-    #[tokio::test(flavor = "current_thread")]
+    #[tokio::test]
     async fn two_views_share_cached_array_file() {
         let store = make_store();
         let cache = Arc::new(ArrayCache::new(HashMap::new()));
