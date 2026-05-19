@@ -51,18 +51,13 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 ## Quick start
 
 ```rust
-use std::sync::Arc;
 use atlas::{Atlas, Attr, StoreConfig};
 use ndarray::Array2;
-use object_store::{local::LocalFileSystem, path::Path};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let store: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
-    let prefix = Path::from_absolute_path("/tmp/my_store")?;
-
     // Create a new store — codec is persisted to atlas.json
-    let mut s = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
+    let mut s = Atlas::create_path("/tmp/my_store", StoreConfig::default()).await?;
 
     // Create a dataset and write arrays
     let mut ds = s.create_dataset("jan_2024").await?;
@@ -82,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ds.flush().await?;
 
     // Reopen — codec is read from atlas.json, no StoreConfig needed
-    let s2 = Atlas::open(store, prefix).await?;
+    let s2 = Atlas::open_path("/tmp/my_store").await?;
     let ds2 = s2.open_dataset("jan_2024").await?;
 
     // Full read

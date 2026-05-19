@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "pyatlas"
+version = "0.1.0"
+description = "Python bindings for the ATLAS array store"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.23",
+    "xarray>=2023.1",
+    "dask>=2023.1",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "pyatlas._pyatlas"
+python-source = "python"

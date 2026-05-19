@@ -1,0 +1,15 @@
+[package]
+name = "pyatlas"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "_pyatlas"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+atlas = { path = ".." }
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+numpy = "0.22"
+ndarray = "0.16"
+tokio = { version = "1", features = ["rt-multi-thread"] }

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use object_store::{ObjectStore, path::Path, prefix::PrefixStore};
+use object_store::{ObjectStore, local::LocalFileSystem, path::Path, prefix::PrefixStore};
 
 use crate::{
     Error, Result,
@@ -36,6 +36,18 @@ impl Atlas {
         let meta = StoreMeta { version: 1, codec: config.codec.clone(), ..Default::default() };
         save_meta(&store, &meta).await?;
         Ok(Self { store, meta, cache: default_cache(), codec: config.codec })
+    }
+
+    /// Open an existing store at the given local filesystem path.
+    pub async fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let store = Arc::new(LocalFileSystem::new_with_prefix(path.as_ref())?);
+        Self::open(store, Path::from("")).await
+    }
+
+    /// Create a new store at the given local filesystem path.
+    pub async fn create_path(path: impl AsRef<std::path::Path>, config: StoreConfig) -> Result<Self> {
+        let store = Arc::new(LocalFileSystem::new_with_prefix(path.as_ref())?);
+        Self::create(store, Path::from(""), config).await
     }
 
     pub async fn create_dataset(&mut self, name: &str) -> Result<DatasetView> {
@@ -267,6 +279,25 @@ mod tests {
         let s2 = Atlas::open(store, prefix).await.unwrap();
         let ds2 = s2.open_dataset("ds").await.unwrap();
         let result = ds2.read_array::<i32>("arr", vec![], vec![]).await.unwrap().unwrap();
+        assert_eq!(result, data.into_shared());
+    }
+
+    #[tokio::test]
+    async fn path_api_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = ndarray::arr1(&[1.0_f32, 2.0, 3.0]).into_dyn();
+
+        {
+            let mut s = Atlas::create_path(tmp.path(), StoreConfig::default()).await.unwrap();
+            let mut ds = s.create_dataset("ds").await.unwrap();
+            ds.define_array::<f32>("arr", vec!["x".into()], vec![3], None, None).await.unwrap();
+            ds.write_array("arr", vec![0], data.view()).await.unwrap();
+            ds.flush().await.unwrap();
+        }
+
+        let s2 = Atlas::open_path(tmp.path()).await.unwrap();
+        let ds2 = s2.open_dataset("ds").await.unwrap();
+        let result = ds2.read_array::<f32>("arr", vec![], vec![]).await.unwrap().unwrap();
         assert_eq!(result, data.into_shared());
     }
 }
