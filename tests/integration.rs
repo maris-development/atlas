@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use array_store::{ArraySchema, ArrayStore, Attr, DatasetMeta, DType, StatValue};
+use array_store::{ArraySchema, ArrayStore, Attr, DatasetMeta, DType, StatValue, StoreConfig};
 use ndarray::ArrayD;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -14,7 +14,7 @@ fn make_store(tmp: &tempfile::TempDir) -> (Arc<dyn object_store::ObjectStore>, P
 async fn create_write_read_roundtrip() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();
+    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     let data = ArrayD::<f32>::from_elem(vec![4, 4], 42.0_f32);
 
@@ -51,7 +51,7 @@ async fn create_write_read_roundtrip() {
 async fn two_datasets_share_array_file() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();
+    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     let data_jan = ArrayD::<f32>::from_elem(vec![2, 2], 1.0_f32);
     let data_feb = ArrayD::<f32>::from_elem(vec![2, 2], 2.0_f32);
@@ -93,7 +93,7 @@ async fn two_datasets_share_array_file() {
 async fn list_datasets_and_arrays() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();
+    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     for name in &["a", "b", "c"] {
         let mut ds = array_store.create_dataset(name).await.unwrap();
@@ -114,7 +114,7 @@ async fn list_datasets_and_arrays() {
 async fn delete_dataset() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();
+    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     {
         let mut ds = array_store.create_dataset("to_delete").await.unwrap();
@@ -136,7 +136,7 @@ async fn delete_dataset() {
 async fn attributes_survive_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();
+    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     {
         let mut ds = array_store.create_dataset("meta_test").await.unwrap();
@@ -158,7 +158,7 @@ async fn attributes_survive_reopen() {
 async fn reject_invalid_names() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store, prefix).await.unwrap();
+    let mut array_store = ArrayStore::create(store, prefix, StoreConfig::default()).await.unwrap();
 
     assert!(array_store.create_dataset("").await.is_err());
     assert!(array_store.create_dataset("..").await.is_err());
@@ -170,7 +170,7 @@ async fn reject_invalid_names() {
 async fn meta_survives_flush_and_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();
+    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     {
         let mut ds = array_store.create_dataset("meta_test").await.unwrap();
@@ -214,7 +214,7 @@ async fn meta_survives_flush_and_reopen() {
 async fn array_stats_after_flush() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store, prefix).await.unwrap();
+    let mut array_store = ArrayStore::create(store, prefix, StoreConfig::default()).await.unwrap();
 
     let mut ds = array_store.create_dataset("stats_test").await.unwrap();
 
@@ -255,7 +255,7 @@ async fn array_stats_after_flush() {
 async fn array_stats_survive_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();
+    let mut array_store = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await.unwrap();
 
     {
         let mut ds = array_store.create_dataset("ds").await.unwrap();
@@ -280,7 +280,7 @@ async fn array_stats_survive_reopen() {
 async fn array_stats_unknown_array_errors() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut array_store = ArrayStore::create(store, prefix).await.unwrap();
+    let mut array_store = ArrayStore::create(store, prefix, StoreConfig::default()).await.unwrap();
     let ds = array_store.create_dataset("ds").await.unwrap();
     assert!(matches!(
         ds.array_stats("ghost").await,

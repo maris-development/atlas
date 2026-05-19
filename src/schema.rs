@@ -1,6 +1,8 @@
 use array_format::DType;
 use serde::{Deserialize, Serialize};
 
+use crate::config::Codec;
+
 /// A per-dataset attribute value stored in `_meta.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value")]
@@ -27,6 +29,8 @@ pub struct ArraySchema {
     pub shape: Vec<usize>,
     pub chunk_shape: Vec<usize>,
     pub dimension_names: Vec<String>,
+    /// Codec used when this array was first created; controls how new blocks are written.
+    pub codec: Codec,
 }
 
 /// Serde helpers for [`DType`] (which uses rkyv, not serde).

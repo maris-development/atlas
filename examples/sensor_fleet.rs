@@ -5,12 +5,17 @@
 //! `timestamps/data.af` — keyed by dataset name inside each file. The store
 //! holds only 2 physical arrays regardless of how many sensors exist.
 //!
+//! This example uses `Codec::Lz4` — a good choice for read-heavy analytics
+//! workloads because LZ4 decompresses faster than Zstd at the cost of slightly
+//! larger files. The codec is persisted in `array_store.json`, so `open` picks
+//! it up automatically without any extra argument.
+//!
 //! After writing, we scan stats across all sensors to find the one with the
 //! highest peak reading without loading any raw data.
 
 use std::sync::Arc;
 
-use array_store::{ArrayStore, Attr, StatValue};
+use array_store::{ArrayStore, Attr, Codec, StatValue, StoreConfig};
 use ndarray::Array1;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -23,7 +28,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
     let prefix = Path::from_absolute_path(tmp.path())?;
 
-    let mut s = ArrayStore::create(store.clone(), prefix.clone()).await?;
+    // LZ4 decompresses faster than Zstd — well suited for reading many dataset
+    // entries in a tight stats-scan loop. The codec is stored in array_store.json
+    // so ArrayStore::open() restores it without any extra argument.
+    let mut s = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig { codec: Codec::Lz4 }).await?;
 
     // ── Write one dataset per sensor ──────────────────────────────────────────
 
@@ -82,6 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n─── Per-sensor stats (from stats file, no raw I/O) ────────────");
 
+    // Codec is read from array_store.json — no StoreConfig needed on reopen.
     let s2 = ArrayStore::open(store, prefix).await?;
 
     let mut peak_sensor = String::new();

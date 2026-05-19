@@ -4,7 +4,7 @@ use std::sync::Arc;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result, schema::{ArraySchema, Attr}};
+use crate::{Error, Result, config::Codec, schema::{ArraySchema, Attr}};
 
 /// Metadata for a single dataset: array schemas and per-dataset attributes.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -18,6 +18,11 @@ pub struct DatasetMeta {
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub(crate) struct StoreMeta {
     pub version: u32,
+    /// Codec used when new arrays are defined in this store.
+    /// Written by `create`, read by `open`. Defaults to `Zstd` for stores
+    /// created before this field existed.
+    #[serde(default)]
+    pub codec: Codec,
     pub datasets: HashMap<String, DatasetMeta>,
 }
 
@@ -44,6 +49,7 @@ pub(crate) async fn save_meta(store: &Arc<dyn ObjectStore>, meta: &StoreMeta) ->
 mod tests {
     use super::*;
     use array_format::DType;
+    use crate::config::Codec;
     use object_store::memory::InMemory;
 
     fn make_store() -> Arc<dyn ObjectStore> {
@@ -73,6 +79,7 @@ mod tests {
                         shape: vec![4, 8],
                         chunk_shape: vec![2, 4],
                         dimension_names: vec!["lat".into(), "lon".into()],
+                        codec: Codec::default(),
                     },
                 )]),
                 attributes: HashMap::from([
@@ -140,6 +147,7 @@ mod tests {
             shape: vec![10, 20],
             chunk_shape: vec![5, 5],
             dimension_names: vec!["lat".into(), "lon".into()],
+            codec: Codec::default(),
         };
         let json = serde_json::to_string(&schema).unwrap();
         let back: ArraySchema = serde_json::from_str(&json).unwrap();

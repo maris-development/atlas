@@ -1,9 +1,10 @@
 //! Demonstrates creating a weather data store with multiple datasets that share physical
-//! array files. Shows chunked and full writes, partial reads, attributes, and reopening.
+//! array files. Shows chunked and full writes, partial reads, attributes, reopening, and
+//! how the codec is persisted in `array_store.json` so `open` needs no codec argument.
 
 use std::sync::Arc;
 
-use array_store::{ArrayStore, Attr, DType, StatValue};
+use array_store::{ArrayStore, Attr, DType, StatValue, StoreConfig};
 use ndarray::{Array1, Array2};
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -23,8 +24,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prefix = Path::from_absolute_path(tmp.path())?;
 
     // ── Create store ──────────────────────────────────────────────────────────
+    //
+    // StoreConfig sets the codec for this store. It is written to array_store.json
+    // so that ArrayStore::open() picks it up automatically — no need to pass the
+    // codec again on reopen.
 
-    let mut s = ArrayStore::create(store.clone(), prefix.clone()).await?;
+    let mut s = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
     println!("Created store at {}", tmp.path().display());
 
     // ── Dataset 1: January 2024 ───────────────────────────────────────────────
@@ -176,6 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Reopen and read back ──────────────────────────────────────────────────
 
+    // Codec was saved in array_store.json — open() restores it without any argument.
     println!("\n─── Reopening store ───────────────────────────────────────────");
     let s2 = ArrayStore::open(store, prefix).await?;
 
@@ -194,8 +200,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for name in &array_names {
         let schema = &meta.arrays[*name];
         println!(
-            "  {name}: dtype={:?}  shape={:?}  chunk_shape={:?}  dims={:?}",
-            schema.dtype, schema.shape, schema.chunk_shape, schema.dimension_names
+            "  {name}: dtype={:?}  shape={:?}  chunk_shape={:?}  dims={:?}  codec={:?}",
+            schema.dtype, schema.shape, schema.chunk_shape, schema.dimension_names, schema.codec
         );
     }
 

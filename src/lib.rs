@@ -24,12 +24,14 @@
 //! lock. The cache map uses a `parking_lot::RwLock` that is never held across
 //! an `await` point.
 
+mod config;
 mod dataset;
 mod error;
 mod meta;
 mod schema;
 mod store;
 
+pub use config::{Codec, StoreConfig};
 pub use dataset::DatasetView;
 pub use error::{Error, Result};
 pub use meta::DatasetMeta;

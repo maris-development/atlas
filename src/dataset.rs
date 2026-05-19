@@ -1,6 +1,9 @@
 use std::{collections::HashMap, sync::Arc};
 
-use array_format::{ArrayElement, ArrayFile, ArrayStats, FileConfig, FillValue, ZstdCodec};
+use array_format::{
+    ArrayElement, ArrayFile, ArrayStats, FileConfig, FillValue, Lz4Codec, NoCompression,
+    ZstdCodec,
+};
 use ndarray::{ArcArray, ArrayView, IxDyn};
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as OsPath};
 use parking_lot::RwLock;
@@ -8,6 +11,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::{
     Error, Result,
+    config::Codec,
     meta::{DatasetMeta, StoreMeta, load_meta, save_meta},
     schema::{Attr, ArraySchema},
 };
@@ -25,6 +29,7 @@ pub struct DatasetView {
     name: String,
     arrays: HashMap<String, CachedFile>,
     meta: DatasetMeta,
+    codec: Codec,
 }
 
 impl DatasetView {
@@ -34,8 +39,9 @@ impl DatasetView {
         name: String,
         arrays: HashMap<String, CachedFile>,
         meta: DatasetMeta,
+        codec: Codec,
     ) -> Self {
-        Self { store, cache, name, arrays, meta }
+        Self { store, cache, name, arrays, meta, codec }
     }
 
     /// Returns the metadata for this dataset: array schemas and per-dataset attributes.
@@ -91,7 +97,7 @@ impl DatasetView {
             return Err(Error::ArrayAlreadyExists(array.to_string()));
         }
 
-        let arc = get_or_open_cached(&self.store, &self.cache, array).await?;
+        let arc = get_or_open_cached(&self.store, &self.cache, array, &self.codec).await?;
         arc.write()
             .await
             .define_array::<T>(&self.name, dims.clone(), shape.clone(), chunk_shape.clone(), fill_value)?;
@@ -103,6 +109,7 @@ impl DatasetView {
             shape,
             chunk_shape: actual_chunk,
             dimension_names: dims,
+            codec: self.codec.clone(),
         });
         Ok(())
     }
@@ -174,6 +181,7 @@ pub(crate) async fn open_dataset_view(
     cache: Arc<ArrayCache>,
     name: &str,
     meta: &StoreMeta,
+    codec: Codec,
 ) -> Result<DatasetView> {
     let dataset_meta = meta
         .datasets
@@ -181,12 +189,13 @@ pub(crate) async fn open_dataset_view(
         .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?;
 
     let mut arrays = HashMap::new();
-    for array_name in dataset_meta.arrays.keys() {
-        let arc = get_or_open_cached(&store, &cache, array_name).await?;
+    for (array_name, array_schema) in &dataset_meta.arrays {
+        // Use the codec recorded when this array was first defined, not the store default.
+        let arc = get_or_open_cached(&store, &cache, array_name, &array_schema.codec).await?;
         arrays.insert(array_name.clone(), arc);
     }
 
-    Ok(DatasetView::new(store, cache, name.to_string(), arrays, dataset_meta.clone()))
+    Ok(DatasetView::new(store, cache, name.to_string(), arrays, dataset_meta.clone(), codec))
 }
 
 /// Returns the cached `ArrayFile` for `array_name`, opening it first if needed.
@@ -195,6 +204,7 @@ pub(crate) async fn get_or_open_cached(
     store: &Arc<dyn ObjectStore>,
     cache: &Arc<ArrayCache>,
     array_name: &str,
+    codec: &Codec,
 ) -> Result<CachedFile> {
     // Fast path: already cached.
     {
@@ -207,9 +217,9 @@ pub(crate) async fn get_or_open_cached(
     // Slow path: open (or create) the file without holding the cache lock.
     let path = OsPath::from(format!("{}/data.af", array_name));
     let file = match store.head(&path).await {
-        Ok(_) => ArrayFile::open(store.clone(), path, default_config()).await?,
+        Ok(_) => open_array_file(store.clone(), path, codec).await?,
         Err(object_store::Error::NotFound { .. }) => {
-            ArrayFile::create(store.clone(), path, default_config()).await?
+            create_array_file(store.clone(), path, codec).await?
         }
         Err(e) => return Err(Error::ObjectStore(e)),
     };
@@ -220,9 +230,25 @@ pub(crate) async fn get_or_open_cached(
     Ok(guard.entry(array_name.to_string()).or_insert(arc).clone())
 }
 
-pub(crate) fn default_config() -> FileConfig<ZstdCodec> {
+async fn open_array_file(store: Arc<dyn ObjectStore>, path: OsPath, codec: &Codec) -> Result<ArrayFile> {
+    Ok(match codec {
+        Codec::Zstd => ArrayFile::open(store, path, file_config(ZstdCodec::default())).await?,
+        Codec::Lz4 => ArrayFile::open(store, path, file_config(Lz4Codec)).await?,
+        Codec::Uncompressed => ArrayFile::open(store, path, file_config(NoCompression)).await?,
+    })
+}
+
+async fn create_array_file(store: Arc<dyn ObjectStore>, path: OsPath, codec: &Codec) -> Result<ArrayFile> {
+    Ok(match codec {
+        Codec::Zstd => ArrayFile::create(store, path, file_config(ZstdCodec::default())).await?,
+        Codec::Lz4 => ArrayFile::create(store, path, file_config(Lz4Codec)).await?,
+        Codec::Uncompressed => ArrayFile::create(store, path, file_config(NoCompression)).await?,
+    })
+}
+
+fn file_config<C: array_format::CompressionCodec>(codec: C) -> FileConfig<C> {
     FileConfig {
-        codec: ZstdCodec::default(),
+        codec,
         block_target_size: 8 * 1024 * 1024,
         cache_capacity: 256 * 1024 * 1024,
         io_cache_capacity: 64 * 1024 * 1024,
@@ -245,6 +271,7 @@ mod tests {
             name.to_string(),
             HashMap::new(),
             DatasetMeta::default(),
+            Codec::default(),
         )
     }
 
@@ -483,6 +510,7 @@ mod tests {
             "ds_a".to_string(),
             HashMap::new(),
             DatasetMeta::default(),
+            Codec::default(),
         );
         view_a
             .define_array::<f32>("arr", vec!["x".into()], vec![2], None, None)
@@ -495,6 +523,7 @@ mod tests {
             "ds_b".to_string(),
             HashMap::new(),
             DatasetMeta::default(),
+            Codec::default(),
         );
         view_b
             .define_array::<f32>("arr", vec!["x".into()], vec![2], None, None)

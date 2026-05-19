@@ -1,6 +1,6 @@
 # array-store
 
-A directory-based store for thousands of named datasets, each holding N-dimensional typed arrays. Built on top of the [`array-format`](https://github.com/robinskil/array-format) (`.af`) binary format, with Zstd compression, chunked I/O, and an [`object_store`](https://crates.io/crates/object_store) backend that works on local disk, S3, GCS, Azure Blob, and in-memory.
+A directory-based store for thousands of named datasets, each holding N-dimensional typed arrays. Built on top of the [`array-format`](https://github.com/robinskil/array-format) (`.af`) binary format, with configurable compression (Zstd, LZ4, or none), chunked I/O, and an [`object_store`](https://crates.io/crates/object_store) backend that works on local disk, S3, GCS, Azure Blob, and in-memory.
 
 ---
 
@@ -32,7 +32,7 @@ The registry is a plain JSON file written on every `flush()`. It stores:
 - **Store version** — for future format upgrades.
 - **Dataset names** — the complete list of datasets in the store.
 - **Per-dataset attributes** — typed key-value pairs (bool, int8/16/32/64, uint8/16/32/64, float32/64, string).
-- **Array schemas** — per array: dtype, shape, chunk shape, and named dimensions.
+- **Array schemas** — per array: dtype, shape, chunk shape, named dimensions, and the codec used when the array was first written.
 
 Because `array_store.json` is human-readable and self-describing, you can inspect or audit the store contents with any JSON tool without needing the library.
 
@@ -42,7 +42,7 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 
 - **Multiple datasets in one file** — every dataset that owns this variable is stored as a named entry inside the same file.
 - **Chunked layout** — arrays are split into chunks of a user-specified shape, so partial reads and writes touch only the relevant blocks.
-- **Zstd compression** — each block is compressed with Zstd (default codec). Block target size is 8 MiB.
+- **Configurable compression** — each block is compressed with the codec set when the store was created (default: Zstd; also LZ4 and uncompressed). The codec is persisted in `array_store.json` and restored automatically on `open` — no need to pass it again. Block target size is 8 MiB.
 - **Persisted statistics** — on `flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Statistics survive store reopening.
 - **In-memory caches** — a 256 MiB decoded block cache and a 64 MiB raw I/O cache sit in front of the object store for repeated reads.
 
@@ -52,7 +52,7 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 
 ```rust
 use std::sync::Arc;
-use array_store::{ArrayStore, Attr};
+use array_store::{ArrayStore, Attr, StoreConfig};
 use ndarray::Array2;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -61,8 +61,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
     let prefix = Path::from_absolute_path("/tmp/my_store")?;
 
-    // Create a new store
-    let mut s = ArrayStore::create(store.clone(), prefix.clone()).await?;
+    // Create a new store — codec is persisted to array_store.json
+    let mut s = ArrayStore::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
 
     // Create a dataset and write arrays
     let mut ds = s.create_dataset("jan_2024").await?;
@@ -81,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ds.set_attribute("station", Attr::String("KNMI".into()));
     ds.flush().await?;
 
-    // Reopen and read back
+    // Reopen — codec is read from array_store.json, no StoreConfig needed
     let s2 = ArrayStore::open(store, prefix).await?;
     let ds2 = s2.open_dataset("jan_2024").await?;
 
@@ -112,6 +112,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | **Array file** | One `data.af` file per variable name, shared across all datasets that define that variable. |
 | **Flush** | Persists all pending writes and recomputes statistics. Must be called explicitly. |
 | **Compact** | Rewrites the `.af` file to reclaim space after deletes. |
+| **StoreConfig** | Configuration passed to `ArrayStore::create`. Currently holds the compression `Codec`. |
+| **Codec** | Compression codec for new array blocks: `Codec::Zstd` (default), `Codec::Lz4`, or `Codec::Uncompressed`. Persisted in `array_store.json`; `open` reads it automatically. |
 
 ---
 
@@ -164,7 +166,7 @@ Reading `temperature` for 1 000 datasets means opening exactly **one file**. Thi
 | Feature | NetCDF-4 | Zarr v3 | array-store |
 | --- | --- | --- | --- |
 | Layout | Dataset-first | Dataset-first | Variable-first |
-| Compression | Deflate / Zstd / … | Any codec plugin | Zstd |
+| Compression | Deflate / Zstd / … | Any codec plugin | Zstd / LZ4 / None |
 | Chunking | Yes | Yes | Yes |
 | Cloud object store | No (needs FUSE/etc) | Yes (native) | Yes (via `object_store`) |
 | Multiple datasets in one file | No | No | Yes (all datasets per variable) |
@@ -188,7 +190,7 @@ Reading `temperature` for 1 000 datasets means opening exactly **one file**. Thi
 - You need wide ecosystem support (Python, Julia, C libraries, GIS tools).
 - Your primary query pattern is "give me all variables for one dataset" (dataset-first access).
 - You need hierarchical group nesting beyond two levels.
-- You need codec flexibility beyond Zstd.
+- You need a codec ecosystem with many options (blosc, gzip, numcodecs, …).
 
 ---
 
@@ -200,7 +202,7 @@ Because all datasets share a single `.af` file per variable, scanning `temperatu
 
 - **1 file open** regardless of N.
 - Sequential reads within one file, which are friendly to OS read-ahead and object-store range requests.
-- Zstd decompression only for the blocks actually read.
+- Decompression only for the blocks actually read.
 
 In a dataset-first format, the same scan requires N file or directory opens, which is bounded by metadata latency, not throughput — especially painful on object stores where each `HEAD`/`GET` has ~10 ms overhead.
 
@@ -222,6 +224,18 @@ The decoded cache means repeated reads of the same chunk cost only a hash-map lo
 ### Persisted statistics
 
 Min, max, null count, and row count are computed and persisted on every `flush()`. Downstream systems can read these statistics from the opened `DatasetView` without touching array data at all — useful for query planning, dashboards, or data-quality checks.
+
+### Compression
+
+The codec is chosen once at store creation via `StoreConfig` and written into `array_store.json`. `ArrayStore::open` reads it from there, so callers never need to repeat the codec choice. Each array also records its own codec in `array_store.json`, so a store can theoretically hold arrays written with different codecs if the schema is migrated.
+
+| Codec | Trade-off |
+| --- | --- |
+| `Codec::Zstd` (default) | Best compression ratio; moderate CPU cost |
+| `Codec::Lz4` | Faster compression/decompression; larger files |
+| `Codec::Uncompressed` | Fastest write path; no size reduction |
+
+Choose LZ4 when decompression throughput matters more than storage size (e.g. large in-memory analytics). Choose Uncompressed for already-compressed data or when profiling shows decompression is the bottleneck.
 
 ### Write path
 
