@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use array_store::{ArraySchema, ArrayStore, Attr, DatasetMeta, DType};
+use array_store::{ArraySchema, ArrayStore, Attr, DatasetMeta, DType, StatValue};
 use ndarray::ArrayD;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -208,4 +208,82 @@ async fn meta_survives_flush_and_reopen() {
 
     assert_eq!(meta.attributes.get("year"), Some(&Attr::UInt32(2024)));
     assert_eq!(meta.attributes.get("active"), Some(&Attr::Bool(true)));
+}
+
+#[tokio::test]
+async fn array_stats_after_flush() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut array_store = ArrayStore::create(store, prefix).await.unwrap();
+
+    let mut ds = array_store.create_dataset("stats_test").await.unwrap();
+
+    // f32 array — stats track min/max as Float
+    ds.define_array::<f32>("temp", vec!["x".into()], vec![4], None, None)
+        .await
+        .unwrap();
+    let data = ndarray::arr1(&[10.0_f32, 20.0, 5.0, 15.0]).into_dyn();
+    ds.write_array("temp", vec![0], data.view()).await.unwrap();
+
+    // i64 array — stats track min/max as Int
+    ds.define_array::<i64>("time", vec!["t".into()], vec![3], None, None)
+        .await
+        .unwrap();
+    let times = ndarray::arr1(&[100_i64, 200, 300]).into_dyn();
+    ds.write_array("time", vec![0], times.view()).await.unwrap();
+
+    // Stats are None before flush
+    assert!(ds.array_stats("temp").await.unwrap().is_none());
+
+    ds.flush().await.unwrap();
+
+    // f32 stats
+    let temp_stats = ds.array_stats("temp").await.unwrap().unwrap();
+    assert_eq!(temp_stats.row_count, 4);
+    assert_eq!(temp_stats.null_count, 0);
+    assert_eq!(temp_stats.min, Some(StatValue::Float(5.0)));
+    assert_eq!(temp_stats.max, Some(StatValue::Float(20.0)));
+
+    // i64 stats
+    let time_stats = ds.array_stats("time").await.unwrap().unwrap();
+    assert_eq!(time_stats.row_count, 3);
+    assert_eq!(time_stats.min, Some(StatValue::Int(100)));
+    assert_eq!(time_stats.max, Some(StatValue::Int(300)));
+}
+
+#[tokio::test]
+async fn array_stats_survive_reopen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut array_store = ArrayStore::create(store.clone(), prefix.clone()).await.unwrap();
+
+    {
+        let mut ds = array_store.create_dataset("ds").await.unwrap();
+        ds.define_array::<f64>("values", vec!["i".into()], vec![5], None, None)
+            .await
+            .unwrap();
+        let data = ndarray::arr1(&[3.0_f64, 1.0, 4.0, 1.5, 9.0]).into_dyn();
+        ds.write_array("values", vec![0], data.view()).await.unwrap();
+        ds.flush().await.unwrap();
+    }
+
+    // Reopen and verify stats persisted
+    let store2 = ArrayStore::open(store, prefix).await.unwrap();
+    let ds2 = store2.open_dataset("ds").await.unwrap();
+    let stats = ds2.array_stats("values").await.unwrap().unwrap();
+    assert_eq!(stats.row_count, 5);
+    assert_eq!(stats.min, Some(StatValue::Float(1.0)));
+    assert_eq!(stats.max, Some(StatValue::Float(9.0)));
+}
+
+#[tokio::test]
+async fn array_stats_unknown_array_errors() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut array_store = ArrayStore::create(store, prefix).await.unwrap();
+    let ds = array_store.create_dataset("ds").await.unwrap();
+    assert!(matches!(
+        ds.array_stats("ghost").await,
+        Err(array_store::Error::ArrayNotFound(_))
+    ));
 }

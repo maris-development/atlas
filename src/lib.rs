@@ -8,7 +8,7 @@
 //!
 //! ```text
 //! my_store/
-//! ├── _meta.json          <- dataset registry + per-dataset attributes
+//! ├── array_store.json    <- dataset registry + per-dataset attributes
 //! ├── temperature/
 //! │   └── data.af         <- ArrayFile: one named array per dataset
 //! └── latitude/
@@ -17,8 +17,12 @@
 //!
 //! # Thread safety
 //!
-//! `ArrayStore` and `DatasetView` are **not `Send`** because `array-format`'s `ArrayFile`
-//! is not `Send`. Use them within a single thread or `tokio::task::LocalSet`.
+//! `ArrayStore` and `DatasetView` are `Send + Sync`. Each physical array file
+//! is guarded by a `tokio::sync::RwLock`: concurrent reads (`read_array`,
+//! `array_stats`) proceed in parallel without contention, while writes
+//! (`write_array`, `define_array`, `flush`, `compact`, …) take an exclusive
+//! lock. The cache map uses a `parking_lot::RwLock` that is never held across
+//! an `await` point.
 
 mod dataset;
 mod error;
@@ -31,7 +35,7 @@ pub use error::{Error, Result};
 pub use meta::DatasetMeta;
 pub use store::ArrayStore;
 
-pub use array_format::{ArrayElement, DType, FillValue, MergedArrayMeta};
+pub use array_format::{ArrayElement, ArrayStats, DType, FillValue, MergedArrayMeta, StatValue};
 pub use schema::{ArraySchema, Attr};
 
 pub(crate) fn validate_name(name: &str) -> Result<()> {
@@ -83,4 +87,15 @@ mod tests {
     fn single_dot_rejected() {
         assert!(matches!(validate_name("."), Err(Error::InvalidName(_))));
     }
+}
+
+#[cfg(test)]
+mod send_check {
+    use super::*;
+    fn _assert_send<T: Send>() {}
+    fn _assert_sync<T: Sync>() {}
+    #[test] fn store_send() { _assert_send::<ArrayStore>(); }
+    #[test] fn view_send() { _assert_send::<DatasetView>(); }
+    #[test] fn store_sync() { _assert_sync::<ArrayStore>(); }
+    #[test] fn view_sync() { _assert_sync::<DatasetView>(); }
 }

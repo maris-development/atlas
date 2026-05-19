@@ -21,7 +21,7 @@ pub(crate) struct StoreMeta {
     pub datasets: HashMap<String, DatasetMeta>,
 }
 
-const META_PATH: &str = "_meta.json";
+const META_PATH: &str = "array_store.json";
 
 pub(crate) async fn load_meta(store: &Arc<dyn ObjectStore>) -> Result<StoreMeta> {
     match store.get(&Path::from(META_PATH)).await {

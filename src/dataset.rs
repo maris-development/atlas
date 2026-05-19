@@ -1,10 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
-use array_format::{ArrayElement, ArrayFile, FileConfig, FillValue, ZstdCodec};
+use array_format::{ArrayElement, ArrayFile, ArrayStats, FileConfig, FillValue, ZstdCodec};
 use ndarray::{ArcArray, ArrayView, IxDyn};
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as OsPath};
 use parking_lot::RwLock;
-use tokio::sync::Mutex;
+use tokio::sync::RwLock as AsyncRwLock;
 
 use crate::{
     Error, Result,
@@ -12,11 +12,11 @@ use crate::{
     schema::{Attr, ArraySchema},
 };
 
-/// Per-file lock: `tokio::sync::Mutex` is async-aware so the guard may safely
-/// be held across await points without risk of deadlock.
-pub(crate) type CachedFile = Arc<Mutex<ArrayFile>>;
-/// Shared cache: array_name → open ArrayFile.
-/// The cache *map* lock is `parking_lot::RwLock` and is never held across an await.
+/// Per-file lock: readers (`read_array`, `array_stats`) share concurrent access;
+/// writers (`write_array`, `flush`, …) take an exclusive lock.
+pub(crate) type CachedFile = Arc<AsyncRwLock<ArrayFile>>;
+/// Shared cache map: array_name → open ArrayFile.
+/// Uses `parking_lot::RwLock` — never held across an `await` point.
 pub(crate) type ArrayCache = RwLock<HashMap<String, CachedFile>>;
 
 pub struct DatasetView {
@@ -68,6 +68,16 @@ impl DatasetView {
             .ok_or_else(|| Error::ArrayNotFound(array.to_string()))
     }
 
+    /// Returns aggregate statistics (min, max, null count, row count) for `array` in this
+    /// dataset, or `Ok(None)` if no stats exist yet (stats are computed on flush).
+    pub async fn array_stats(&self, array: &str) -> Result<Option<ArrayStats>> {
+        let arc = match self.arrays.get(array) {
+            Some(arc) => arc.clone(),
+            None => return Err(Error::ArrayNotFound(array.to_string())),
+        };
+        Ok(arc.read().await.array_stats(&self.name).cloned())
+    }
+
     pub async fn define_array<T: ArrayElement>(
         &mut self,
         array: &str,
@@ -82,7 +92,7 @@ impl DatasetView {
         }
 
         let arc = get_or_open_cached(&self.store, &self.cache, array).await?;
-        arc.lock()
+        arc.write()
             .await
             .define_array::<T>(&self.name, dims.clone(), shape.clone(), chunk_shape.clone(), fill_value)?;
         self.arrays.insert(array.to_string(), arc);
@@ -108,7 +118,7 @@ impl DatasetView {
             .get(array)
             .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?
             .clone();
-        let mut guard = arc.lock().await;
+        let mut guard = arc.write().await;
         guard.write_array::<T>(&self.name, start, data).await?;
         Ok(())
     }
@@ -125,7 +135,7 @@ impl DatasetView {
             Some(arc) => arc.clone(),
             None => return Ok(None),
         };
-        let guard = arc.lock().await;
+        let guard = arc.read().await;
         Ok(Some(guard.read_array::<T>(&self.name, start, shape).await?))
     }
 
@@ -135,7 +145,7 @@ impl DatasetView {
             .get(array)
             .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?
             .clone();
-        arc.lock().await.delete(&self.name)?;
+        arc.write().await.delete(&self.name)?;
         self.arrays.remove(array);
         self.meta.arrays.remove(array);
         Ok(())
@@ -143,7 +153,7 @@ impl DatasetView {
 
     pub async fn flush(&mut self) -> Result<()> {
         for arc in self.arrays.values() {
-            arc.lock().await.flush().await?;
+            arc.write().await.flush().await?;
         }
         let mut store_meta = load_meta(&self.store).await?;
         store_meta.datasets.insert(self.name.clone(), self.meta.clone());
@@ -153,7 +163,7 @@ impl DatasetView {
 
     pub async fn compact(&mut self) -> Result<()> {
         for arc in self.arrays.values() {
-            arc.lock().await.compact().await?;
+            arc.write().await.compact().await?;
         }
         Ok(())
     }
@@ -205,7 +215,7 @@ pub(crate) async fn get_or_open_cached(
     };
 
     // Insert — use `entry` to avoid overwriting a concurrent insert.
-    let arc = Arc::new(Mutex::new(file));
+    let arc = Arc::new(AsyncRwLock::new(file));
     let mut guard = cache.write();
     Ok(guard.entry(array_name.to_string()).or_insert(arc).clone())
 }
@@ -420,6 +430,44 @@ mod tests {
         let meta = view.array_meta("arr").unwrap();
         assert_eq!(meta.dtype, DType::Float64);
         assert_eq!(meta.shape, vec![5]);
+    }
+
+    // --- array_stats ---
+
+    #[tokio::test]
+    async fn array_stats_errors_for_unknown_array() {
+        let view = empty_view(make_store(), "ds");
+        assert!(matches!(view.array_stats("ghost").await, Err(crate::Error::ArrayNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn array_stats_none_before_flush() {
+        let mut view = empty_view(make_store(), "ds");
+        view.define_array::<f32>("arr", vec!["x".into()], vec![4], None, None)
+            .await
+            .unwrap();
+        // Stats are computed on flush; before that they are None.
+        let stats = view.array_stats("arr").await.unwrap();
+        assert!(stats.is_none());
+    }
+
+    #[tokio::test]
+    async fn array_stats_populated_after_flush() {
+        use array_format::StatValue;
+        let store = make_store();
+        let mut view = empty_view(store.clone(), "ds");
+        view.define_array::<f32>("arr", vec!["x".into()], vec![4], None, None)
+            .await
+            .unwrap();
+        let data = ndarray::arr1(&[1.0_f32, 3.0, 2.0, 4.0]).into_dyn();
+        view.write_array("arr", vec![0], data.view()).await.unwrap();
+        view.flush().await.unwrap();
+
+        let stats = view.array_stats("arr").await.unwrap().unwrap();
+        assert_eq!(stats.row_count, 4);
+        assert_eq!(stats.null_count, 0);
+        assert_eq!(stats.min, Some(StatValue::Float(1.0)));
+        assert_eq!(stats.max, Some(StatValue::Float(4.0)));
     }
 
     // --- cache sharing ---

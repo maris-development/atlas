@@ -62,7 +62,7 @@ impl ArrayStore {
 
         for array_name in dataset_meta.arrays.keys() {
             let arc = get_or_open_cached(&self.store, &self.cache, array_name).await?;
-            let mut guard = arc.lock().await;
+            let mut guard = arc.write().await;
             guard.delete(name)?;
             guard.flush().await?;
         }
