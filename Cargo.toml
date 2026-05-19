@@ -17,6 +17,7 @@ indexmap = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 parking_lot = "0.12"
 tokio = { version = "1", features = ["fs", "sync"] }
+tracing = "0.1"
 
 [dev-dependencies]
 tempfile = "3"

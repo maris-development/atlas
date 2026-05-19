@@ -8,6 +8,7 @@ use ndarray::{ArcArray, ArrayView, IxDyn};
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as OsPath};
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::RwLock as AsyncRwLock;
+use tracing::{debug, instrument, trace};
 
 use crate::{
     Error, Result,
@@ -102,6 +103,7 @@ impl DatasetView {
         Ok(arc.read().await.array_stats(&self.name).cloned())
     }
 
+    #[instrument(skip(self, fill_value), fields(dataset = %self.name, dtype = ?T::DTYPE))]
     pub async fn define_array<T: ArrayElement>(
         &mut self,
         array: &str,
@@ -122,6 +124,7 @@ impl DatasetView {
         self.arrays.insert(array.to_string(), arc);
 
         let actual_chunk = chunk_shape.unwrap_or_else(|| shape.clone());
+        debug!(?shape, chunk_shape = ?actual_chunk, "defined array");
         let schema = ArraySchema {
             dtype: T::DTYPE.clone(),
             shape,
@@ -138,6 +141,7 @@ impl DatasetView {
         Ok(())
     }
 
+    #[instrument(skip(self, data), fields(dataset = %self.name, elems = data.len()))]
     pub async fn write_array<T: ArrayElement>(
         &mut self,
         array: &str,
@@ -150,11 +154,13 @@ impl DatasetView {
             .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?
             .clone();
         let mut guard = arc.write().await;
+        trace!(?start, shape = ?data.shape(), "writing block");
         guard.write_array::<T>(&self.name, start, data).await?;
         Ok(())
     }
 
     /// Returns `Ok(None)` if this dataset has no array with that name.
+    #[instrument(skip(self), fields(dataset = %self.name))]
     pub async fn read_array<T: ArrayElement>(
         &self,
         array: &str,
@@ -163,12 +169,17 @@ impl DatasetView {
     ) -> Result<Option<ArcArray<T, IxDyn>>> {
         let arc = match self.arrays.get(array) {
             Some(arc) => arc.clone(),
-            None => return Ok(None),
+            None => {
+                debug!("array not present in dataset");
+                return Ok(None);
+            }
         };
+        trace!(?start, ?shape, "reading array");
         let guard = arc.read().await;
         Ok(Some(guard.read_array::<T>(&self.name, start, shape).await?))
     }
 
+    #[instrument(skip(self), fields(dataset = %self.name))]
     pub async fn delete_array(&mut self, array: &str) -> Result<()> {
         let arc = self
             .arrays
@@ -181,6 +192,7 @@ impl DatasetView {
         if let Some(ds_meta) = meta.datasets.get_mut(&self.name) {
             ds_meta.arrays.shift_remove(array);
         }
+        debug!("deleted array");
         Ok(())
     }
 }
@@ -219,8 +231,12 @@ pub(crate) async fn get_or_open_cached(
 
     let path = OsPath::from(format!("{}/data.af", array_name));
     let file = match store.head(&path).await {
-        Ok(_) => open_array_file(store.clone(), path, codec).await?,
+        Ok(_) => {
+            debug!(array = array_name, ?codec, "opening existing array file");
+            open_array_file(store.clone(), path, codec).await?
+        }
         Err(object_store::Error::NotFound { .. }) => {
+            debug!(array = array_name, ?codec, "creating new array file");
             create_array_file(store.clone(), path, codec).await?
         }
         Err(e) => return Err(Error::ObjectStore(e)),

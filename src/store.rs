@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use object_store::{ObjectStore, local::LocalFileSystem, path::Path, prefix::PrefixStore};
 use parking_lot::Mutex;
+use tracing::{debug, info, instrument};
 
 use crate::{
     Error, Result,
@@ -22,10 +23,16 @@ impl Atlas {
     ///
     /// Reads `atlas.json` exactly once. Subsequent mutations only touch the
     /// in-memory meta until [`Atlas::flush`] / [`Atlas::close`] is called.
+    #[instrument(skip(store), fields(prefix = %prefix))]
     pub async fn open(store: Arc<dyn ObjectStore>, prefix: Path) -> Result<Self> {
         let store = prefixed(store, prefix);
         let meta = load_meta(&store).await?;
         let codec = meta.codec.clone();
+        info!(
+            datasets = meta.datasets.len(),
+            ?codec,
+            "opened atlas store"
+        );
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
@@ -35,10 +42,12 @@ impl Atlas {
     }
 
     /// Create a new store at `prefix` within `store`.
+    #[instrument(skip(store, config), fields(prefix = %prefix, codec = ?config.codec))]
     pub async fn create(store: Arc<dyn ObjectStore>, prefix: Path, config: StoreConfig) -> Result<Self> {
         let store = prefixed(store, prefix);
         let meta = StoreMeta { version: 1, codec: config.codec.clone(), ..Default::default() };
         save_meta(&store, &meta).await?;
+        info!("created atlas store");
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
@@ -62,6 +71,7 @@ impl Atlas {
         Self::create(store, Path::from(""), config).await
     }
 
+    #[instrument(skip(self))]
     pub async fn create_dataset(&mut self, name: &str) -> Result<DatasetView> {
         crate::validate_name(name)?;
         {
@@ -71,6 +81,7 @@ impl Atlas {
             }
             meta.datasets.insert(name.to_string(), Default::default());
         }
+        debug!("created dataset");
         Ok(DatasetView::new(
             self.store.clone(),
             self.cache.clone(),
@@ -81,6 +92,7 @@ impl Atlas {
         ))
     }
 
+    #[instrument(skip(self))]
     pub async fn open_dataset(&self, name: &str) -> Result<DatasetView> {
         // Snapshot array names for this dataset under a brief lock.
         let array_specs: Vec<(String, Codec)> = {
@@ -95,6 +107,7 @@ impl Atlas {
                 .map(|(n, s)| (n.clone(), s.codec.clone()))
                 .collect()
         };
+        debug!(arrays = array_specs.len(), "opening dataset");
         open_dataset_view(
             self.store.clone(),
             self.cache.clone(),
@@ -106,6 +119,7 @@ impl Atlas {
         .await
     }
 
+    #[instrument(skip(self))]
     pub async fn delete_dataset(&mut self, name: &str) -> Result<()> {
         let dataset_meta = {
             let mut meta = self.meta.lock();
@@ -113,6 +127,7 @@ impl Atlas {
                 .shift_remove(name)
                 .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?
         };
+        debug!(arrays = dataset_meta.arrays.len(), "deleting dataset");
         for array_name in dataset_meta.arrays.keys() {
             let arc = get_or_open_cached(&self.store, &self.cache, array_name, &self.codec).await?;
             let mut guard = arc.write().await;
@@ -147,28 +162,37 @@ impl Atlas {
 
     /// Flush every cached array file's pending writes AND persist the in-memory
     /// `atlas.json`. This is the single durability boundary for the store.
+    #[instrument(skip(self))]
     pub async fn flush(&mut self) -> Result<()> {
         let snapshot: Vec<_> = {
             let guard = self.cache.read();
             guard.values().cloned().collect()
         };
+        let files = snapshot.len();
+        debug!(files, "flushing cached array files");
         for arc in snapshot {
             arc.write().await.flush().await?;
         }
         let meta_snapshot = self.meta.lock().clone();
+        let datasets = meta_snapshot.datasets.len();
         save_meta(&self.store, &meta_snapshot).await?;
+        info!(files, datasets, "flushed atlas store");
         Ok(())
     }
 
     /// Compact every cached array file in place (reclaims tombstoned space).
+    #[instrument(skip(self))]
     pub async fn compact(&mut self) -> Result<()> {
         let snapshot: Vec<_> = {
             let guard = self.cache.read();
             guard.values().cloned().collect()
         };
+        let files = snapshot.len();
+        debug!(files, "compacting cached array files");
         for arc in snapshot {
             arc.write().await.compact().await?;
         }
+        info!(files, "compacted atlas store");
         Ok(())
     }
 }
