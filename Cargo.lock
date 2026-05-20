@@ -28,8 +28,8 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "array-format"
-version = "0.7.0"
-source = "git+https://github.com/robinskil/array-format#f516d2c71b197105e9708eaf8abc9e4c49b8fd93"
+version = "0.8.0"
+source = "git+https://github.com/robinskil/array-format#97245fffdaf700a29c004dc8644e46297259d6e7"
 dependencies = [
  "bytes",
  "futures",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "atlas"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "array-format",
  "chrono",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "pyatlas"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "atlas",
  "ndarray",
