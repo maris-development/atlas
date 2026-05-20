@@ -62,6 +62,14 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn create_and_read_dataset() {
+        let atlas = Atlas::open_path("data/example").await.unwrap();
+        let view = atlas.open_dataset("GL_PR_CT_2FGX5").await.unwrap();
+        let names = view.list_arrays();
+        println!("arrays: {names:?}");
+    }
+
     #[test]
     fn valid_names_pass() {
         for name in ["temperature", "my-array", "x1", "lat.lon", "a"] {

@@ -28,3 +28,4 @@ raw_smoke_tests/
 pyatlas/python/pyatlas/_pyatlas.pyd
 pyatlas/python/pyatlas/_pyatlas.abi3.so
 playground/
+data/
