@@ -1,18 +1,10 @@
 """xarray integration for pyatlas.
 
-Requires xarray as an optional dependency:
+`xarray` and `dask` are required dependencies.
 
-    pip install xarray
-
-Public API:
-    to_atlas(ds, atlas, name)    — write an xr.Dataset into a new atlas dataset
-    from_atlas(atlas, name)      — read an atlas dataset back as an xr.Dataset
-
-These functions are also reachable via methods on `Atlas` and `DatasetView`:
-    Atlas.from_xarray(ds, path, name, codec="zstd")
-    Atlas.to_xarray(name)
-    DatasetView.write_xarray(ds)
-    DatasetView.to_xarray()
+Reads automatically return dask-backed variables when an array was stored with a
+non-trivial chunk shape (`chunk_shape != shape`); full-shape arrays come back
+eager as numpy. The dask chunks mirror the on-disk chunk grid one-to-one.
 
 Bulk ingestion — Atlas itself batches; explicit flush on the atlas persists:
     with atlas:
@@ -209,8 +201,82 @@ def _write_xarray_to_view(
     view.set_attribute(_COORDS_ATTR, json.dumps(coord_names))
 
 
+_ATLAS_TO_NUMPY = {atlas: np_dt for np_dt, atlas in _NUMPY_TO_ATLAS.items()}
+
+
+def _atlas_to_numpy_dtype(atlas_dtype: str) -> np.dtype:
+    """Numpy dtype that `view.read_array` returns for a given atlas dtype string."""
+    if atlas_dtype in _ATLAS_TO_NUMPY:
+        return _ATLAS_TO_NUMPY[atlas_dtype]
+    if atlas_dtype == "string":
+        return np.dtype("object")
+    raise NotImplementedError(
+        f"atlas dtype {atlas_dtype!r} is not supported on the dask read path"
+    )
+
+
+def _dask_chunks_for(shape: Sequence[int], chunk_shape: Sequence[int]) -> tuple:
+    """Per-dim chunk-length tuples in the form dask expects."""
+    chunks: list[tuple[int, ...]] = []
+    for dim_size, dim_chunk in zip(shape, chunk_shape):
+        if dim_chunk <= 0 or dim_size == 0:
+            chunks.append((dim_size,))
+            continue
+        full = dim_size // dim_chunk
+        rem = dim_size - full * dim_chunk
+        c = (dim_chunk,) * full + ((rem,) if rem else ())
+        chunks.append(c if c else (0,))
+    return tuple(chunks)
+
+
+def _view_to_dask_array(view: "DatasetView", name: str) -> Any:
+    """Build a `dask.array.Array` that lazily reads `name` chunk-by-chunk.
+
+    Each on-disk chunk becomes one dask task; values are fetched via
+    `view.read_array(name, start, block_shape)` on demand. Used by
+    `_view_to_xarray` when an array's `chunk_shape != shape`.
+    """
+    import dask
+    import dask.array as da
+
+    meta = view.array_meta(name)
+    shape: list[int] = list(meta["shape"])
+    chunk_shape: list[int] = list(meta["chunk_shape"])
+    np_dtype = _atlas_to_numpy_dtype(meta["dtype"])
+
+    per_dim_chunks = _dask_chunks_for(shape, chunk_shape)
+    offsets = [
+        [0, *itertools.accumulate(dim_chunks)][:-1] for dim_chunks in per_dim_chunks
+    ]
+
+    def _read_block(start: list[int], block_shape: list[int]) -> np.ndarray:
+        return view.read_array(name, start=start, shape=block_shape)
+
+    def _nested_blocks(axis: int, prefix_start: list[int], prefix_shape: list[int]):
+        if axis == len(shape):
+            block_shape = list(prefix_shape)
+            block_start = list(prefix_start)
+            delayed = dask.delayed(_read_block)(block_start, block_shape)
+            return da.from_delayed(delayed, shape=tuple(block_shape), dtype=np_dtype)
+        return [
+            _nested_blocks(
+                axis + 1,
+                prefix_start + [offsets[axis][i]],
+                prefix_shape + [per_dim_chunks[axis][i]],
+            )
+            for i in range(len(per_dim_chunks[axis]))
+        ]
+
+    nested = _nested_blocks(0, [], [])
+    return da.block(nested)
+
+
 def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":
-    """Convert an atlas `DatasetView` into an xarray Dataset (eager read)."""
+    """Convert an atlas `DatasetView` into an xarray Dataset.
+
+    Variables stored with `chunk_shape != shape` come back dask-backed (one task
+    per on-disk chunk); full-shape arrays come back eager as numpy.
+    """
     import xarray as xr
 
     array_names = list(view.list_arrays())
@@ -234,14 +300,20 @@ def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":
             ):
                 coord_names.add(name)
 
-    # Pull array data
+    # Pull array data. Chunked arrays (chunk_shape != shape) come back as a
+    # lazy dask.array; full-shape and 0-D arrays come back eager.
     data_vars: dict[str, tuple] = {}
     coords: dict[str, tuple] = {}
     for name in array_names:
         meta = view.array_meta(name)
-        arr = view.read_array(name)
-        if arr is None:
-            continue
+        shape = list(meta["shape"])
+        chunk_shape = list(meta["chunk_shape"])
+        if not shape or chunk_shape == shape:
+            arr = view.read_array(name)
+            if arr is None:
+                continue
+        else:
+            arr = _view_to_dask_array(view, name)
         dims = list(meta["dimension_names"])
         entry = (dims, arr, {})  # placeholder for per-var attrs; filled below
         if name in coord_names:

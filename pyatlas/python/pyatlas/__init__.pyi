@@ -70,7 +70,12 @@ class Atlas:
         ...
 
     def to_xarray(self, name: str) -> "xr.Dataset":
-        """Open dataset `name` and return it as an `xarray.Dataset` (eager read)."""
+        """Open dataset `name` and return it as an `xarray.Dataset`.
+
+        Variables stored with `chunk_shape != shape` come back dask-backed (one
+        dask task per on-disk chunk); full-shape and 0-D variables come back
+        eager as numpy arrays.
+        """
         ...
 
     def flush(self) -> None:

@@ -74,7 +74,7 @@ This means N consecutive `add_xr_dataset` / `create_dataset` calls amortise to a
 | `list_arrays() -> list[str]` | Distinct array names across datasets. |
 | `dataset_exists(name) -> bool` | Existence check. |
 | `add_xr_dataset(ds, name, chunks=None)` | Append an `xarray.Dataset` (does **not** flush). |
-| `to_xarray(name) -> xr.Dataset` | Read a dataset back as an `xarray.Dataset` (eager). |
+| `to_xarray(name) -> xr.Dataset` | Read a dataset back; chunked variables come back dask-backed (see below), full-shape variables eager. |
 | `flush()` | The single durability boundary — persist atlas.json + every cached array file. |
 | `close()` | Alias for `flush()`; also runs as the `with`-block exit. |
 | `compact()` | Reclaim tombstoned space across every cached array file. |
@@ -167,6 +167,22 @@ with pyatlas.Atlas.create("/tmp/store") as atlas:
 
 Peak memory ≈ one dask chunk per variable (plus dask's task graph). Pass `chunks={var: [...]}` to `add_xr_dataset` (or `ds.atlas.write`) to override the on-disk chunk shape independently of dask's chunking.
 
+### Lazy dask-backed reads
+
+`atlas.to_xarray(name)` returns each variable dask-backed whenever it was stored with a non-trivial chunking (`chunk_shape != shape`); the dask `chunks` tuple mirrors the on-disk chunk grid one-to-one and each on-disk chunk becomes a single dask task. Full-shape arrays (and 0-D scalars) still come back eager as numpy. Call `.compute()` to materialise, or slice/`map_blocks` to operate lazily.
+
+```python
+ds = xr.open_dataset("big.nc", chunks={"time": 100, "lat": -1, "lon": -1})
+with pyatlas.Atlas.create("/tmp/store") as atlas:
+    atlas.add_xr_dataset(ds, "big")
+
+ds_back = pyatlas.Atlas.open("/tmp/store").to_xarray("big")
+ds_back["temperature"].data            # -> dask.array.Array
+ds_back["temperature"][0:100].compute()  # reads exactly one chunk
+```
+
+The graph captures the `DatasetView` directly, so dask's default threaded scheduler works out of the box. Distributed/multiprocessing schedulers aren't supported in this release — call `.compute()` before crossing a process boundary.
+
 ### Supported xarray variable dtypes
 
 | numpy dtype | atlas dtype |
@@ -179,8 +195,8 @@ Peak memory ≈ one dask chunk per variable (plus dask's task graph). Pass `chun
 
 ### Limitations
 
-- Eager **reads** — `atlas.to_xarray(name)` always pulls the full dataset into memory.
 - Each call to `add_xr_dataset` / `ds.atlas.write` creates a *new* atlas dataset; there is no append-into-existing mode.
+- Lazy reads run under dask's threaded scheduler only — the `DatasetView` captured in the dask graph is not picklable, so `.compute()` before handing off to distributed/multiprocessing schedulers.
 - `bool`, `binary`, `list[...]`, `fixed_size_list[...,N]` are not yet exposed as array element types.
 
 ## Examples

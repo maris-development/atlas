@@ -43,12 +43,14 @@ def main() -> None:
             print(f"\nAtlas chunk_shape for 'temperature': {meta['chunk_shape']}")
         # `with` block calls atlas.close() (== flush) on exit.
 
-        # Reopen and read back as a fully-materialised xr.Dataset
+        # Reopen — chunked variables come back dask-backed (one task per on-disk chunk)
         atlas = pyatlas.Atlas.open(store_dir)
         ds_back = atlas.to_xarray("ds")
-        print(f"Read-back shape: {ds_back['temperature'].shape}")
-        xr.testing.assert_identical(ds.compute(), ds_back)
-        print("Roundtrip is identical to ds.compute().")
+        print(f"Read-back shape:   {ds_back['temperature'].shape}")
+        print(f"Read-back chunks:  {ds_back['temperature'].data.chunks}")
+        print(f"Read-back .data:   {type(ds_back['temperature'].data).__module__}.{type(ds_back['temperature'].data).__name__}")
+        xr.testing.assert_identical(ds, ds_back)  # both dask, same chunks
+        print("Roundtrip preserves lazy dask structure.")
 
 
 if __name__ == "__main__":

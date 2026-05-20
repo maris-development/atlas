@@ -225,7 +225,8 @@ def test_accessor_and_method_equivalent():
 
 
 def test_dask_chunked_roundtrip():
-    """A dask-chunked variable's chunks are preserved as the atlas chunk_shape."""
+    """A dask-chunked variable's chunks are preserved as the atlas chunk_shape
+    and the read-back variable is dask-backed with matching chunks."""
     data = dask_array.arange(8 * 16, dtype=np.float32, chunks=8 * 16).reshape(8, 16)  # type: ignore[arg-type]
     da = xr.DataArray(data, dims=["y", "x"]).chunk({"y": 4, "x": 8})
     ds = xr.Dataset(data_vars={"temp": da})
@@ -242,7 +243,10 @@ def test_dask_chunked_roundtrip():
         atlas2 = pyatlas.Atlas.open(d)
         ds_back = atlas2.to_xarray("ds")
 
-    xr.testing.assert_identical(ds.compute(), ds_back)
+        assert isinstance(ds_back["temp"].data, dask_array.Array)
+        assert ds_back["temp"].data.chunks == ((4, 4), (8, 8))
+        # `assert_identical` computes both sides for dask-backed comparison.
+        xr.testing.assert_identical(ds, ds_back)
 
 
 def test_streaming_write_call_count(monkeypatch):
@@ -271,3 +275,89 @@ def test_streaming_write_call_count(monkeypatch):
     assert len(v_calls) == 4
     assert [c[1] for c in v_calls] == [[0], [4], [8], [12]]
     assert all(c[2] == (4,) for c in v_calls)
+
+
+# ----- dask-backed (lazy) reads -------------------------------------------------------
+
+
+def test_lazy_read_does_not_compute_until_requested(monkeypatch):
+    """Building the dask graph is free; only `.compute()` (or slicing) reads chunks."""
+    from pyatlas._pyatlas import DatasetView
+
+    arr = dask_array.arange(16, dtype=np.int32, chunks=4)  # type: ignore[arg-type]
+    da = xr.DataArray(arr, dims=["x"])
+    ds = xr.Dataset(data_vars={"v": da})
+
+    with tempfile.TemporaryDirectory() as d:
+        with pyatlas.Atlas.create(d) as atlas:
+            atlas.add_xr_dataset(ds, "ds")
+
+        atlas2 = pyatlas.Atlas.open(d)
+
+        read_calls: list[tuple[str, list[int], list[int]]] = []
+        real_read_array = DatasetView.read_array
+
+        def counting_read_array(self, name, start=None, shape=None):  # type: ignore[no-redef]
+            read_calls.append((name, list(start or []), list(shape or [])))
+            return real_read_array(self, name, start, shape)
+
+        monkeypatch.setattr(DatasetView, "read_array", counting_read_array)
+
+        ds_back = atlas2.to_xarray("ds")
+        assert isinstance(ds_back["v"].data, dask_array.Array)
+        # Building the graph reads zero chunks.
+        assert [c for c in read_calls if c[0] == "v"] == []
+
+        # Slicing one chunk's worth of data triggers exactly one read.
+        _ = ds_back["v"].data[0:4].compute()
+        v_reads = [c for c in read_calls if c[0] == "v"]
+        assert len(v_reads) == 1
+        assert v_reads[0] == ("v", [0], [4])
+
+        # Full compute reads all four chunks.
+        read_calls.clear()
+        result = ds_back["v"].compute()
+        v_reads = [c for c in read_calls if c[0] == "v"]
+        assert len(v_reads) == 4
+        np.testing.assert_array_equal(result.data, np.arange(16, dtype=np.int32))
+
+
+def test_mixed_eager_and_dask_in_one_dataset():
+    """Within one dataset, full-shape arrays are eager and chunked arrays are dask."""
+    full = dask_array.arange(8, dtype=np.float32, chunks=8)  # type: ignore[arg-type]
+    chunked = dask_array.arange(8, dtype=np.float32, chunks=8).reshape(8)  # type: ignore[arg-type]
+    ds = xr.Dataset(
+        data_vars={
+            "eager_var": xr.DataArray(full, dims=["x"]),
+            "lazy_var": xr.DataArray(chunked, dims=["x"]).chunk({"x": 4}),
+        }
+    )
+
+    with tempfile.TemporaryDirectory() as d:
+        with pyatlas.Atlas.create(d) as atlas:
+            atlas.add_xr_dataset(ds, "ds")
+
+        atlas2 = pyatlas.Atlas.open(d)
+        ds_back = atlas2.to_xarray("ds")
+
+    assert isinstance(ds_back["eager_var"].data, np.ndarray)
+    assert isinstance(ds_back["lazy_var"].data, dask_array.Array)
+    assert ds_back["lazy_var"].data.chunks == ((4, 4),)
+
+
+def test_uneven_trailing_chunk():
+    """Non-divisible shape produces an uneven trailing chunk; values round-trip."""
+    with tempfile.TemporaryDirectory() as d:
+        with pyatlas.Atlas.create(d) as atlas:
+            view = atlas.create_dataset("ds")
+            view.define_array("v", dtype="int32", dims=["x"], shape=[10], chunk_shape=[4])
+            view.write_array("v", start=[0], data=np.arange(10, dtype=np.int32))
+
+        atlas2 = pyatlas.Atlas.open(d)
+        ds_back = atlas2.to_xarray("ds")
+
+        assert isinstance(ds_back["v"].data, dask_array.Array)
+        assert ds_back["v"].data.chunks == ((4, 4, 2),)
+        np.testing.assert_array_equal(
+            ds_back["v"].compute().data, np.arange(10, dtype=np.int32)
+        )
