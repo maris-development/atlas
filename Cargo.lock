@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "atlas"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "array-format",
  "chrono",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "pyatlas"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "atlas",
  "ndarray",

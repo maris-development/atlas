@@ -90,27 +90,31 @@ impl PyDatasetView {
         self.inner.get_attribute(key).map(|attr| attr_to_py(py, &attr)).transpose()
     }
 
-    /// Returns `{"dtype", "shape", "chunk_shape", "dimension_names"}` for `array`.
-    fn array_meta<'py>(&self, py: Python<'py>, array: &str) -> PyResult<Bound<'py, PyDict>> {
-        let schema = self.inner.array_meta(array).map_err(to_py_err)?;
+    /// Returns `{"dtype", "shape", "chunk_shape", "dimension_names"}` for
+    /// `array`, or `None` if the array doesn't exist in this dataset.
+    fn array_meta<'py>(
+        &self,
+        py: Python<'py>,
+        array: &str,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(schema) = self.inner.array_meta(array) else { return Ok(None) };
         let dict = PyDict::new(py);
         dict.set_item("dtype", dtype_to_string(&schema.dtype))?;
         dict.set_item("shape", schema.shape)?;
         dict.set_item("chunk_shape", schema.chunk_shape)?;
         dict.set_item("dimension_names", schema.dimension_names)?;
-        Ok(dict)
+        Ok(Some(dict))
     }
 
-    /// Returns `{"row_count", "null_count", "min", "max"}` or `None` if stats
-    /// have not been computed yet (call `flush()` first).
+    /// Returns `{"row_count", "null_count", "min", "max"}`, or `None` if the
+    /// array doesn't exist in this dataset or stats haven't been computed yet
+    /// (call `flush()` first).
     fn array_stats<'py>(
         &self,
         py: Python<'py>,
         array: &str,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let stats = py
-            .detach(|| runtime().block_on(self.inner.array_stats(array)))
-            .map_err(to_py_err)?;
+        let stats = py.detach(|| runtime().block_on(self.inner.array_stats(array)));
         let Some(stats) = stats else { return Ok(None) };
         let dict = PyDict::new(py);
         dict.set_item("row_count", stats.row_count)?;
@@ -186,7 +190,11 @@ impl PyDatasetView {
         start: Vec<usize>,
         data: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        let stored = self.inner.array_meta(name).map_err(to_py_err)?.dtype;
+        let stored = self
+            .inner
+            .array_meta(name)
+            .ok_or_else(|| to_py_err(atlas::Error::ArrayNotFound(name.to_string())))?
+            .dtype;
 
         if matches!(&stored, DType::String) {
             // Normalize |S<n>, |U<n>, and object inputs to object dtype so they
@@ -300,7 +308,8 @@ impl PyDatasetView {
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let start = start.unwrap_or_default();
         let shape = shape.unwrap_or_default();
-        let stored = self.inner.array_meta(name).map_err(to_py_err)?.dtype;
+        let Some(meta) = self.inner.array_meta(name) else { return Ok(None) };
+        let stored = meta.dtype;
 
         if matches!(&stored, DType::String) {
             let result = py

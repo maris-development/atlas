@@ -24,6 +24,31 @@ pub(crate) fn try_init_from_env() {
     }
 }
 
+/// Python-callable debug-event emitter so the xarray write loop in
+/// `pyatlas/python/pyatlas/xarray.py` can route per-chunk timing through the
+/// same `tracing` subscriber as the Rust side. No-op unless the
+/// `pyatlas.xarray` target is enabled at debug level
+/// (e.g. `ATLAS_LOG=pyatlas=debug`).
+#[pyfunction]
+#[pyo3(signature = (event, var, elapsed_us, chunks=None, bytes=None))]
+pub(crate) fn log_chunk_event(
+    event: &str,
+    var: &str,
+    elapsed_us: u64,
+    chunks: Option<u64>,
+    bytes: Option<u64>,
+) {
+    tracing::debug!(
+        target: "pyatlas::xarray",
+        event,
+        var,
+        elapsed_us,
+        chunks,
+        bytes,
+        "chunk event"
+    );
+}
+
 /// Python-callable variant: `pyatlas.init_tracing("debug")` forces a filter
 /// directive regardless of env vars. Passing `None` re-reads env vars.
 #[pyfunction]

@@ -88,10 +88,10 @@ This means N consecutive `add_xr_dataset` / `create_dataset` calls amortise to a
 | `list_arrays() -> list[str]` | Array names in this dataset. |
 | `define_array(name, dtype, dims, shape, chunk_shape=None)` | Declare a new array (in-memory). |
 | `write_array(name, start, data)` | Write a numpy ndarray (matching stored dtype). |
-| `read_array(name, start=None, shape=None) -> np.ndarray \| None` | Read full or partial. |
+| `read_array(name, start=None, shape=None) -> np.ndarray \| None` | Read full or partial. Returns `None` if the array isn't in this dataset. |
 | `delete_array(name)` | Tombstone the array within this dataset. |
-| `array_meta(name) -> dict` | `{"dtype", "shape", "chunk_shape", "dimension_names"}`. |
-| `array_stats(name) -> dict \| None` | `{"row_count", "null_count", "min", "max"}` (populated after `atlas.flush()`). |
+| `array_meta(name) -> dict \| None` | `{"dtype", "shape", "chunk_shape", "dimension_names"}`, or `None` if the array isn't in this dataset. |
+| `array_stats(name) -> dict \| None` | `{"row_count", "null_count", "min", "max"}`, or `None` if the array isn't in this dataset or stats haven't been computed yet (populated after `atlas.flush()`). |
 | `set_attribute(key, value, dtype=None)` | Type inferred from Python type; pass `dtype` to override (e.g. `"int8"`, `"float32"`, `"timestamp_nanoseconds"`). All integer hints are coerced to `int64`, all float hints to `float64` — the on-disk attribute types are bool, int64, float64, string, and timestamp_nanoseconds. |
 | `get_attribute(key)` / `attributes()` | Single attribute or dict of all. |
 

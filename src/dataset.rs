@@ -94,24 +94,22 @@ impl DatasetView {
             .and_then(|d| d.attributes.get(key).cloned())
     }
 
-    /// Returns the cached schema for `array`.
-    pub fn array_meta(&self, array: &str) -> Result<ArraySchema> {
+    /// Returns the cached schema for `array`, or `None` if no array with that
+    /// name exists in this dataset.
+    pub fn array_meta(&self, array: &str) -> Option<ArraySchema> {
         self.atlas_meta
             .lock()
             .datasets
             .get(&self.name)
             .and_then(|d| d.arrays.get(array).cloned())
-            .ok_or_else(|| Error::ArrayNotFound(array.to_string()))
     }
 
-    /// Returns aggregate statistics for `array` in this dataset, or `Ok(None)`
-    /// if no stats exist yet (stats are computed on flush).
-    pub async fn array_stats(&self, array: &str) -> Result<Option<ArrayStats>> {
-        let arc = match self.arrays.get(array) {
-            Some(arc) => arc.clone(),
-            None => return Err(Error::ArrayNotFound(array.to_string())),
-        };
-        Ok(arc.read().await.array_stats(&self.name).cloned())
+    /// Returns aggregate statistics for `array` in this dataset, or `None`
+    /// if no such array exists or stats haven't been computed yet (stats are
+    /// computed on flush).
+    pub async fn array_stats(&self, array: &str) -> Option<ArrayStats> {
+        let arc = self.arrays.get(array)?.clone();
+        arc.read().await.array_stats(&self.name).cloned()
     }
 
     #[instrument(skip(self, fill_value), fields(dataset = %self.name, dtype = ?T::DTYPE))]
@@ -165,8 +163,19 @@ impl DatasetView {
             .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?
             .clone();
         let mut guard = arc.write().await;
-        trace!(?start, shape = ?data.shape(), "writing block");
+        let shape: Vec<usize> = data.shape().to_vec();
+        let bytes = data.len() * std::mem::size_of::<T>();
+        let start_log = start.clone();
+        let t0 = std::time::Instant::now();
         guard.write_array::<T>(&self.name, start, data).await?;
+        debug!(
+            array,
+            start = ?start_log,
+            ?shape,
+            bytes,
+            elapsed_us = t0.elapsed().as_micros() as u64,
+            "wrote chunk"
+        );
         Ok(())
     }
 
@@ -213,11 +222,20 @@ pub(crate) async fn open_dataset_view(
     cache: Arc<ArrayCache>,
     atlas_meta: Arc<Mutex<StoreMeta>>,
     name: &str,
-    array_specs: Vec<(String, Codec)>,
     codec: Codec,
 ) -> Result<DatasetView> {
+    // Snapshot per-dataset array names + codecs under a brief lock; the
+    // resulting `arrays` map is exclusively this dataset's entries.
+    let specs: Vec<(String, Codec)> = {
+        let meta = atlas_meta.lock();
+        let ds = meta
+            .datasets
+            .get(name)
+            .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?;
+        ds.arrays.iter().map(|(n, s)| (n.clone(), s.codec.clone())).collect()
+    };
     let mut arrays = HashMap::new();
-    for (array_name, array_codec) in array_specs {
+    for (array_name, array_codec) in specs {
         let arc = get_or_open_cached(&store, &cache, &array_name, &array_codec).await?;
         arrays.insert(array_name, arc);
     }
@@ -372,9 +390,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn array_meta_errors_for_unknown_array() {
+    async fn array_meta_returns_none_for_unknown_array() {
         let view = empty_view(make_store(), "ds");
-        assert!(matches!(view.array_meta("missing"), Err(crate::Error::ArrayNotFound(_))));
+        assert!(view.array_meta("missing").is_none());
     }
 
     // --- define_array behaviour ---
@@ -515,9 +533,9 @@ mod tests {
     // --- array_stats ---
 
     #[tokio::test]
-    async fn array_stats_errors_for_unknown_array() {
+    async fn array_stats_returns_none_for_unknown_array() {
         let view = empty_view(make_store(), "ds");
-        assert!(matches!(view.array_stats("ghost").await, Err(crate::Error::ArrayNotFound(_))));
+        assert!(view.array_stats("ghost").await.is_none());
     }
 
     #[tokio::test]
@@ -526,8 +544,7 @@ mod tests {
         view.define_array::<f32>("arr", vec!["x".into()], vec![4], None, None)
             .await
             .unwrap();
-        let stats = view.array_stats("arr").await.unwrap();
-        assert!(stats.is_none());
+        assert!(view.array_stats("arr").await.is_none());
     }
 
     #[tokio::test]
@@ -545,7 +562,7 @@ mod tests {
             arc.write().await.flush().await.unwrap();
         }
 
-        let stats = view.array_stats("arr").await.unwrap().unwrap();
+        let stats = view.array_stats("arr").await.unwrap();
         assert_eq!(stats.row_count, 4);
         assert_eq!(stats.null_count, 0);
         assert_eq!(stats.min, Some(StatValue::Float(1.0)));

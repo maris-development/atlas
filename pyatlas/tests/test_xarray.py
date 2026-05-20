@@ -184,6 +184,28 @@ def test_atlas_xr_no_implicit_flush():
         assert atlas_peek.list_datasets() == []
 
 
+def test_surrogate_attr_value_is_sanitized():
+    """NetCDF backends sometimes hand back attr strs containing lone surrogates
+    (bytes-mis-decoded-as-Latin-1 via surrogateescape). The write path recovers
+    the original UTF-8 instead of crashing on the pyo3 boundary."""
+    # '\udcc2\udcb5mol kg-1' is what xarray produces for the UTF-8 bytes
+    # b'\xc2\xb5mol kg-1' = 'µmol kg-1' when the backend mis-decodes them.
+    surr = "\udcc2\udcb5mol kg-1"
+    da = xr.DataArray(
+        np.zeros((2,), dtype=np.float32), dims=["x"], attrs={"units": surr}
+    )
+    ds = xr.Dataset(data_vars={"v": da})
+
+    with tempfile.TemporaryDirectory() as d:
+        with pyatlas.Atlas.create(d) as atlas:
+            atlas.add_xr_dataset(ds, "ds")
+
+        atlas2 = pyatlas.Atlas.open(d)
+        ds_back = atlas2.to_xarray("ds")
+
+        assert ds_back["v"].attrs["units"] == "µmol kg-1"  # µmol kg-1
+
+
 def test_unsupported_dtype_raises():
     da = xr.DataArray(np.array([True, False, True], dtype=np.bool_), dims=["x"])
     ds = xr.Dataset(data_vars={"flag": da})
@@ -247,6 +269,28 @@ def test_dask_chunked_roundtrip():
         assert ds_back["temp"].data.chunks == ((4, 4), (8, 8))
         # `assert_identical` computes both sides for dask-backed comparison.
         xr.testing.assert_identical(ds, ds_back)
+
+
+def test_batched_iter_preserves_order_and_values():
+    """7 chunks of length 4 (chunk count not divisible by the default batch
+    size of 8) — exercises the cross-batch-boundary path of the prefetched
+    iterator. Values and chunk grid must round-trip byte-identical."""
+    expected = np.arange(7 * 4, dtype=np.int32)
+    da = xr.DataArray(
+        dask_array.from_array(expected, chunks=4),  # type: ignore[arg-type]
+        dims=["x"],
+    )
+    ds = xr.Dataset(data_vars={"v": da})
+
+    with tempfile.TemporaryDirectory() as d:
+        with pyatlas.Atlas.create(d) as atlas:
+            atlas.add_xr_dataset(ds, "ds")
+
+        atlas2 = pyatlas.Atlas.open(d)
+        ds_back = atlas2.to_xarray("ds")
+        # Stored chunk grid preserved
+        assert ds_back["v"].data.chunks == ((4, 4, 4, 4, 4, 4, 4),)
+        np.testing.assert_array_equal(ds_back["v"].compute().data, expected)
 
 
 def test_streaming_write_call_count(monkeypatch):

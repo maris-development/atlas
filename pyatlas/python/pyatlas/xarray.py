@@ -17,9 +17,13 @@ from __future__ import annotations
 
 import itertools
 import json
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 
 import numpy as np
+
+from ._pyatlas import log_chunk_event as _log_chunk_event
 
 if TYPE_CHECKING:
     import xarray as xr
@@ -59,6 +63,28 @@ def _np_to_atlas_dtype(np_dtype: np.dtype) -> str:
     )
 
 
+def _sanitize_str(s: str) -> str:
+    """Strip lone Unicode surrogates from a Python str.
+
+    NetCDF backends often surface byte attrs as Python strs that were decoded
+    with ``errors='surrogateescape'``; the resulting strs hold pseudo-codepoints
+    in U+DC80..U+DCFF which Rust's UTF-8 strs can't represent. We try to recover
+    the original bytes via surrogateescape and re-decode as UTF-8 (the common
+    case: bytes that *were* valid UTF-8 all along but were treated as Latin-1
+    upstream); if that fails we fall back to lossy replacement.
+    """
+    try:
+        s.encode("utf-8")
+        return s
+    except UnicodeEncodeError:
+        pass
+    raw = s.encode("utf-8", errors="surrogateescape")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("utf-8", errors="replace")
+
+
 def _encode_attr_value(value: Any) -> Any:
     """Coerce an xarray attr value to something atlas can store.
 
@@ -71,7 +97,9 @@ def _encode_attr_value(value: Any) -> Any:
     if isinstance(value, np.generic):
         value = value.item()
 
-    if isinstance(value, (bool, int, float, str)):
+    if isinstance(value, str):
+        return _sanitize_str(value)
+    if isinstance(value, (bool, int, float)):
         return value
 
     # Convert numpy arrays to nested lists
@@ -108,34 +136,78 @@ def _dask_chunk_shape(arr: Any) -> list[int]:
     return [c[0] for c in arr.chunks]
 
 
-def _iter_blocks(arr: Any) -> Iterator[tuple[list[int], np.ndarray]]:
+def _contiguous(a: np.ndarray) -> np.ndarray:
+    # np.ascontiguousarray promotes 0-D arrays to 1-D (ndmin=1 default),
+    # which breaks scalar-array writes. Force-copy non-contiguous arrays
+    # via np.asarray + .copy(order='C') instead, which preserves rank.
+    if a.flags["C_CONTIGUOUS"]:
+        return a
+    return a.copy(order="C")
+
+
+# Tuned for the "many small NetCDF chunks" case. batch_size controls how many
+# dask blocks ride one scheduler invocation (lower dask plumbing overhead);
+# prefetch_depth bounds peak memory at batch_size * prefetch_depth chunks.
+_DEFAULT_BATCH_SIZE = 8
+_DEFAULT_PREFETCH_DEPTH = 2
+
+
+def _iter_blocks(
+    arr: Any,
+    var_name: str = "",
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+    prefetch_depth: int = _DEFAULT_PREFETCH_DEPTH,
+) -> Iterator[tuple[list[int], np.ndarray]]:
     """Yield ``(start_index, block_np)`` for each chunk in `arr`.
 
-    For numpy-backed inputs the whole array is yielded as a single block (no
-    behaviour change vs the old eager path). For dask-backed inputs blocks
-    are computed one at a time via ``arr.blocks[idx].compute()``, so peak
-    memory is bounded by a single chunk per variable rather than the full
-    array.
-    """
-    def _contiguous(a: np.ndarray) -> np.ndarray:
-        # np.ascontiguousarray promotes 0-D arrays to 1-D (ndmin=1 default),
-        # which breaks scalar-array writes. Force-copy non-contiguous arrays
-        # via np.asarray + .copy(order='C') instead, which preserves rank.
-        if a.flags["C_CONTIGUOUS"]:
-            return a
-        return a.copy(order="C")
+    Numpy-backed inputs are yielded as one full-shape block. Dask-backed inputs
+    are prefetched in batches: a single background thread runs
+    ``dask.compute(*K)`` on the next ``batch_size`` blocks while the main thread
+    consumes already-materialised blocks, capping in-flight work at
+    ``prefetch_depth`` batches. This collapses N per-chunk dask scheduler
+    invocations into N/batch_size, and overlaps NetCDF I/O with atlas writes.
 
-    if _is_dask_array(arr):
-        chunks = arr.chunks
-        # Per-dim cumulative starts: e.g. ((4,4,4,4),) -> [[0,4,8,12]]
-        offsets = [[0, *itertools.accumulate(c)][:-1] for c in chunks]
-        for block_idx in itertools.product(*[range(len(c)) for c in chunks]):
-            start = [offsets[d][i] for d, i in enumerate(block_idx)]
-            block = _contiguous(arr.blocks[block_idx].compute())
-            yield start, block
-    else:
+    Emits one ``event=dask_compute`` debug event per fulfilled batch via the
+    Rust tracing subscriber (see ``log_chunk_event``).
+    """
+    if not _is_dask_array(arr):
         a = np.asarray(arr)
         yield [0] * a.ndim, _contiguous(a)
+        return
+
+    import dask
+
+    chunks = arr.chunks
+    offsets = [[0, *itertools.accumulate(c)][:-1] for c in chunks]
+    pairs: list[tuple[list[int], Any]] = []
+    for block_idx in itertools.product(*[range(len(c)) for c in chunks]):
+        start = [offsets[d][i] for d, i in enumerate(block_idx)]
+        pairs.append((start, arr.blocks[block_idx]))
+
+    def _fetch(batch: list[tuple[list[int], Any]]) -> list[tuple[list[int], np.ndarray]]:
+        starts = [s for s, _ in batch]
+        delayed = [b for _, b in batch]
+        t0 = time.perf_counter_ns()
+        materialised = dask.compute(*delayed)
+        elapsed_us = (time.perf_counter_ns() - t0) // 1000
+        _log_chunk_event("dask_compute", var_name, elapsed_us, chunks=len(batch))
+        return [(s, _contiguous(b)) for s, b in zip(starts, materialised)]
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        in_flight: list[Future] = []
+        cursor = 0
+        while cursor < len(pairs) and len(in_flight) < prefetch_depth:
+            in_flight.append(executor.submit(_fetch, pairs[cursor : cursor + batch_size]))
+            cursor += batch_size
+        while in_flight:
+            future = in_flight.pop(0)
+            for start, block in future.result():
+                yield start, block
+            if cursor < len(pairs):
+                in_flight.append(
+                    executor.submit(_fetch, pairs[cursor : cursor + batch_size])
+                )
+                cursor += batch_size
 
 
 def _write_xarray_to_view(
@@ -178,24 +250,31 @@ def _write_xarray_to_view(
             chunk_shape=chunk_shape,
         )
 
-        # Stream blocks: one chunk at a time for dask-backed data, a single
+        # Stream blocks: prefetched batches for dask-backed data, a single
         # full-shape block for numpy-backed data.
-        for start, block in _iter_blocks(var.data):
+        for start, block in _iter_blocks(var.data, var_name=var_name):
             # TimestampNs columns: the bindings accept np.int64 only; cast the
             # numpy datetime64 view to int64 without copying.
             if block.dtype.kind == "M":
                 block = block.view(np.int64)
+            t0 = time.perf_counter_ns()
             view.write_array(var_name, start=start, data=block)
+            _log_chunk_event(
+                "write",
+                var_name,
+                (time.perf_counter_ns() - t0) // 1000,
+                bytes=int(block.nbytes),
+            )
 
         # Per-variable attrs → flattened as `{var}.{attr}`
         for attr_key, attr_val in var.attrs.items():
             encoded = _encode_attr_value(attr_val)
-            view.set_attribute(f"{var_name}.{attr_key}", encoded)
+            view.set_attribute(_sanitize_str(f"{var_name}.{attr_key}"), encoded)
 
     # Dataset-level attrs
     for attr_key, attr_val in ds.attrs.items():
         encoded = _encode_attr_value(attr_val)
-        view.set_attribute(str(attr_key), encoded)
+        view.set_attribute(_sanitize_str(str(attr_key)), encoded)
 
     # Marker so we can faithfully restore coord/var distinction on read.
     view.set_attribute(_COORDS_ATTR, json.dumps(coord_names))
@@ -240,6 +319,7 @@ def _view_to_dask_array(view: "DatasetView", name: str) -> Any:
     import dask.array as da
 
     meta = view.array_meta(name)
+    assert meta is not None, f"array {name!r} not found in view {view.name!r}"
     shape: list[int] = list(meta["shape"])
     chunk_shape: list[int] = list(meta["chunk_shape"])
     np_dtype = _atlas_to_numpy_dtype(meta["dtype"])
@@ -294,6 +374,8 @@ def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":
         coord_names = set()
         for name in array_names:
             meta = view.array_meta(name)
+            if meta is None:
+                continue
             if (
                 len(meta["dimension_names"]) == 1
                 and meta["dimension_names"][0] == name
@@ -306,6 +388,8 @@ def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":
     coords: dict[str, tuple] = {}
     for name in array_names:
         meta = view.array_meta(name)
+        if meta is None:
+            continue
         shape = list(meta["shape"])
         chunk_shape = list(meta["chunk_shape"])
         if not shape or chunk_shape == shape:

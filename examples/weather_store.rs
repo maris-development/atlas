@@ -309,7 +309,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     for array_name in &array_names {
-        if let Some(stats) = ds_jan.array_stats(array_name).await? {
+        if let Some(stats) = ds_jan.array_stats(array_name).await {
             println!(
                 "jan_2024 / {array_name}: rows={} nulls={}  min={}  max={}",
                 stats.row_count,
@@ -321,7 +321,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // feb shares the 'temperature' file but has its own stats entry
-    let feb_stats = ds_feb.array_stats("temperature").await?.unwrap();
+    let feb_stats = ds_feb.array_stats("temperature").await.unwrap();
     println!(
         "feb_2024 / temperature: rows={}  min={}  max={}",
         feb_stats.row_count,
@@ -330,7 +330,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // station_obs: wind_speed stats
-    let wind_stats = ds_obs.array_stats("wind_speed").await?.unwrap();
+    let wind_stats = ds_obs.array_stats("wind_speed").await.unwrap();
     println!(
         "station_obs / wind_speed: rows={}  min={}  max={}",
         wind_stats.row_count,

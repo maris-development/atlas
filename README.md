@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let chunk = ds2.read_array::<f32>("temperature", vec![0, 0], vec![4, 8]).await?.unwrap();
 
     // Query persisted statistics
-    let stats = ds2.array_stats("temperature").await?.unwrap();
+    let stats = ds2.array_stats("temperature").await.unwrap();
     println!("rows={} min={:?} max={:?}", stats.row_count, stats.min, stats.max);
 
     Ok(())

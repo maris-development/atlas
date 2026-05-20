@@ -17,6 +17,7 @@ fn _pyatlas(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<store::PyAtlas>()?;
     m.add_class::<dataset::PyDatasetView>()?;
     m.add_function(wrap_pyfunction!(logging::init_tracing, m)?)?;
+    m.add_function(wrap_pyfunction!(logging::log_chunk_event, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

@@ -360,7 +360,7 @@ async fn array_stats_after_flush() {
     ds.write_array("time", vec![0], times.view()).await.unwrap();
 
     // Stats are None before flush
-    assert!(ds.array_stats("temp").await.unwrap().is_none());
+    assert!(ds.array_stats("temp").await.is_none());
 
     // Drop the borrow so we can call atlas.flush.
     drop(ds);
@@ -368,13 +368,13 @@ async fn array_stats_after_flush() {
 
     // Reopen to verify stats persisted.
     let ds_reopened = atlas.open_dataset("stats_test").await.unwrap();
-    let temp_stats = ds_reopened.array_stats("temp").await.unwrap().unwrap();
+    let temp_stats = ds_reopened.array_stats("temp").await.unwrap();
     assert_eq!(temp_stats.row_count, 4);
     assert_eq!(temp_stats.null_count, 0);
     assert_eq!(temp_stats.min, Some(StatValue::Float(5.0)));
     assert_eq!(temp_stats.max, Some(StatValue::Float(20.0)));
 
-    let time_stats = ds_reopened.array_stats("time").await.unwrap().unwrap();
+    let time_stats = ds_reopened.array_stats("time").await.unwrap();
     assert_eq!(time_stats.row_count, 3);
     assert_eq!(time_stats.min, Some(StatValue::Int(100)));
     assert_eq!(time_stats.max, Some(StatValue::Int(300)));
@@ -398,20 +398,17 @@ async fn array_stats_survive_reopen() {
 
     let atlas2 = Atlas::open(store, prefix).await.unwrap();
     let ds2 = atlas2.open_dataset("ds").await.unwrap();
-    let stats = ds2.array_stats("values").await.unwrap().unwrap();
+    let stats = ds2.array_stats("values").await.unwrap();
     assert_eq!(stats.row_count, 5);
     assert_eq!(stats.min, Some(StatValue::Float(1.0)));
     assert_eq!(stats.max, Some(StatValue::Float(9.0)));
 }
 
 #[tokio::test]
-async fn array_stats_unknown_array_errors() {
+async fn array_stats_unknown_array_returns_none() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
     let mut atlas = Atlas::create(store, prefix, StoreConfig::default()).await.unwrap();
     let ds = atlas.create_dataset("ds").await.unwrap();
-    assert!(matches!(
-        ds.array_stats("ghost").await,
-        Err(atlas::Error::ArrayNotFound(_))
-    ));
+    assert!(ds.array_stats("ghost").await.is_none());
 }

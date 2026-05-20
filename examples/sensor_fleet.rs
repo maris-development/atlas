@@ -106,7 +106,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for name in &dataset_names {
         let ds = s2.open_dataset(name).await?;
-        let stats = ds.array_stats("readings").await?.unwrap();
+        let stats = ds.array_stats("readings").await.unwrap();
 
         let (lo, hi) = match (&stats.min, &stats.max) {
             (Some(StatValue::Float(lo)), Some(StatValue::Float(hi))) => (*lo, *hi),

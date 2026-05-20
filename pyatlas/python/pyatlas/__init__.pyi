@@ -161,8 +161,9 @@ class DatasetView:
         """Remove the array from this dataset (tombstone)."""
         ...
 
-    def array_meta(self, name: str) -> dict[str, Any]:
-        """Schema for `name`: `{"dtype", "shape", "chunk_shape", "dimension_names"}`."""
+    def array_meta(self, name: str) -> Optional[dict[str, Any]]:
+        """Schema for `name` (`{"dtype", "shape", "chunk_shape", "dimension_names"}`),
+        or `None` if no array with that name exists in this dataset."""
         ...
 
     def array_stats(self, name: str) -> Optional[dict[str, Any]]:

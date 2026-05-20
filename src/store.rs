@@ -95,26 +95,11 @@ impl Atlas {
 
     #[instrument(skip(self))]
     pub async fn open_dataset(&self, name: &str) -> Result<DatasetView> {
-        // Snapshot array names for this dataset under a brief lock.
-        let array_specs: Vec<(String, Codec)> = {
-            let meta = self.meta.lock();
-            let ds_meta = meta
-                .datasets
-                .get(name)
-                .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?;
-            ds_meta
-                .arrays
-                .iter()
-                .map(|(n, s)| (n.clone(), s.codec.clone()))
-                .collect()
-        };
-        debug!(arrays = array_specs.len(), "opening dataset");
         open_dataset_view(
             self.store.clone(),
             self.cache.clone(),
             self.meta.clone(),
             name,
-            array_specs,
             self.codec.clone(),
         )
         .await
