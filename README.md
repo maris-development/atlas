@@ -53,7 +53,8 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 - **Multiple datasets in one file** — every dataset that owns this variable is stored as a named entry inside the same file.
 - **Chunked layout** — arrays are split into chunks of a user-specified shape, so partial reads and writes touch only the relevant blocks.
 - **Configurable compression** — each block is compressed with the codec set when the store was created (default: Zstd; also LZ4 and uncompressed). The codec is persisted in `atlas.json` and restored automatically on `open` — no need to pass it again. Block target size is 8 MiB.
-- **Persisted statistics** — on `Atlas::flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Statistics survive store reopening.
+- **Per-array fill value** — `define_array` accepts an optional `FillValue` (one of `Bool`/`Int`/`UInt`/`Float`/`String`). Unwritten cells read back as the fill value, and any *written* cell equal to it is counted as a null in the persisted stats (see below). Fill values are stored in the per-array footer; `atlas.json` is not extended.
+- **Persisted statistics** — on `Atlas::flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Cells equal to the array's fill value are tallied in `null_count` and excluded from `min`/`max` (NaN fills match NaN cells by bit pattern). Statistics survive store reopening.
 - **In-memory caches** — a 256 MiB decoded block cache and a 64 MiB raw I/O cache sit in front of the object store for repeated reads.
 
 ---
@@ -61,7 +62,7 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 ## Quick start
 
 ```rust
-use atlas::{Atlas, Attr, StoreConfig};
+use atlas::{Atlas, Attr, FillValue, StoreConfig};
 use ndarray::Array2;
 
 #[tokio::main]
@@ -76,8 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "temperature",
             vec!["lat".into(), "lon".into()],
             vec![8, 16],
-            Some(vec![4, 8]),  // chunk shape
-            None,
+            Some(vec![4, 8]),         // chunk shape
+            Some(FillValue::Float(f64::NAN)),  // returned for unwritten cells; counted as nulls in stats
         ).await?;
 
         let data = Array2::<f32>::from_elem([8, 16], 20.0).into_dyn();

@@ -120,6 +120,7 @@ class DatasetView:
         dims: Sequence[str],
         shape: Sequence[int],
         chunk_shape: Optional[Sequence[int]] = None,
+        fill_value: Optional[Any] = None,
     ) -> None:
         """Declare a new N-dimensional array.
 
@@ -129,6 +130,11 @@ class DatasetView:
             dims: Named dimensions, one per axis.
             shape: Logical shape, one entry per axis.
             chunk_shape: Optional chunk shape; defaults to `shape` (a single chunk).
+            fill_value: Optional scalar returned for unwritten cells. Must match
+                the array dtype: a Python `int` for int/uint/timestamp arrays
+                (range-checked), a `float` (or `int`) for float arrays, a `bool`
+                for bool arrays, a `str` for string arrays. Raises `TypeError`
+                on a mismatch and `OverflowError` if the value is out of range.
         """
         ...
 

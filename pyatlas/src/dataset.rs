@@ -1,8 +1,8 @@
-use atlas::{DType, DatasetView, TimestampNs};
+use atlas::{DType, DatasetView, FillValue, TimestampNs};
 use numpy::{IntoPyArray, PyArray, PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
-use pyo3::exceptions::{PyNotImplementedError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyNotImplementedError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString};
 
 use crate::attr::{attr_to_py, py_to_attr};
 use crate::dtype::{dtype_to_string, parse_dtype};
@@ -124,7 +124,7 @@ impl PyDatasetView {
         Ok(Some(dict))
     }
 
-    #[pyo3(signature = (name, dtype, dims, shape, chunk_shape=None))]
+    #[pyo3(signature = (name, dtype, dims, shape, chunk_shape=None, fill_value=None))]
     fn define_array(
         &mut self,
         py: Python<'_>,
@@ -133,8 +133,10 @@ impl PyDatasetView {
         dims: Vec<String>,
         shape: Vec<usize>,
         chunk_shape: Option<Vec<usize>>,
+        fill_value: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let dtype = parse_dtype(dtype)?;
+        let fill = fill_value.map(|v| py_to_fill_value(v, &dtype)).transpose()?;
 
         if matches!(&dtype, DType::TimestampNs) {
             py.detach(|| {
@@ -143,7 +145,7 @@ impl PyDatasetView {
                     dims.clone(),
                     shape.clone(),
                     chunk_shape.clone(),
-                    None,
+                    fill.clone(),
                 ))
             })
             .map_err(to_py_err)?;
@@ -157,7 +159,7 @@ impl PyDatasetView {
                     dims.clone(),
                     shape.clone(),
                     chunk_shape.clone(),
-                    None,
+                    fill.clone(),
                 ))
             })
             .map_err(to_py_err)?;
@@ -172,7 +174,7 @@ impl PyDatasetView {
                         dims.clone(),
                         shape.clone(),
                         chunk_shape.clone(),
-                        None,
+                        fill.clone(),
                     ))
                 })
                 .map_err(to_py_err)?
@@ -403,6 +405,115 @@ impl PyDatasetView {
             self.inner.name(),
             self.inner.list_arrays().len()
         )
+    }
+}
+
+/// Build a `FillValue` from a Python scalar, type-checked against the target dtype.
+///
+/// Rejects mismatches with a clear `TypeError` (or `OverflowError` for out-of-range
+/// integers) rather than silently casting:
+///   - int dtypes refuse floats, bools, strings, and out-of-range ints
+///   - uint dtypes additionally refuse negative values
+///   - float dtypes accept ints (coerced) but refuse bools and strings
+///   - bool dtype requires an actual `bool` (rejects `0`/`1`)
+///   - string dtype requires a `str`
+fn py_to_fill_value(value: &Bound<'_, PyAny>, dtype: &DType) -> PyResult<FillValue> {
+    // PyBool must be checked before PyInt — `isinstance(True, int)` is True in Python.
+    let is_bool = value.downcast::<PyBool>().is_ok();
+    let is_int = !is_bool && value.downcast::<PyInt>().is_ok();
+    let is_float = value.downcast::<PyFloat>().is_ok();
+    let is_str = value.downcast::<PyString>().is_ok();
+
+    let type_err = |expected: &str| -> PyErr {
+        PyTypeError::new_err(format!(
+            "fill_value for {} array must be {}, got {}",
+            dtype_to_string(dtype),
+            expected,
+            value
+                .get_type()
+                .name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|_| "?".into()),
+        ))
+    };
+
+    match dtype {
+        DType::Bool => {
+            if !is_bool {
+                return Err(type_err("a bool"));
+            }
+            Ok(FillValue::Bool(value.extract::<bool>()?))
+        }
+        DType::Int8 | DType::Int16 | DType::Int32 | DType::Int64 | DType::TimestampNs => {
+            if !is_int {
+                return Err(type_err("an int"));
+            }
+            let v: i64 = value.extract()?;
+            let (lo, hi) = match dtype {
+                DType::Int8 => (i8::MIN as i64, i8::MAX as i64),
+                DType::Int16 => (i16::MIN as i64, i16::MAX as i64),
+                DType::Int32 => (i32::MIN as i64, i32::MAX as i64),
+                DType::Int64 | DType::TimestampNs => (i64::MIN, i64::MAX),
+                _ => unreachable!(),
+            };
+            if v < lo || v > hi {
+                return Err(PyOverflowError::new_err(format!(
+                    "fill_value {} is out of range for {}",
+                    v,
+                    dtype_to_string(dtype),
+                )));
+            }
+            Ok(FillValue::Int(v))
+        }
+        DType::UInt8 | DType::UInt16 | DType::UInt32 | DType::UInt64 => {
+            if !is_int {
+                return Err(type_err("a non-negative int"));
+            }
+            let v: i128 = value.extract()?;
+            if v < 0 {
+                return Err(PyOverflowError::new_err(format!(
+                    "fill_value {} is negative; {} is unsigned",
+                    v,
+                    dtype_to_string(dtype),
+                )));
+            }
+            let hi: u128 = match dtype {
+                DType::UInt8 => u8::MAX as u128,
+                DType::UInt16 => u16::MAX as u128,
+                DType::UInt32 => u32::MAX as u128,
+                DType::UInt64 => u64::MAX as u128,
+                _ => unreachable!(),
+            };
+            if (v as u128) > hi {
+                return Err(PyOverflowError::new_err(format!(
+                    "fill_value {} is out of range for {}",
+                    v,
+                    dtype_to_string(dtype),
+                )));
+            }
+            Ok(FillValue::UInt(v as u64))
+        }
+        DType::Float32 | DType::Float64 => {
+            if is_bool || is_str {
+                return Err(type_err("a float or int"));
+            }
+            if !is_float && !is_int {
+                return Err(type_err("a float or int"));
+            }
+            Ok(FillValue::Float(value.extract::<f64>()?))
+        }
+        DType::String => {
+            if !is_str {
+                return Err(type_err("a str"));
+            }
+            Ok(FillValue::String(value.extract::<String>()?))
+        }
+        DType::Binary => Err(PyNotImplementedError::new_err(
+            "fill_value for binary arrays is not yet supported",
+        )),
+        DType::List { .. } | DType::FixedSizeList { .. } => Err(PyNotImplementedError::new_err(
+            "fill_value for list / fixed_size_list arrays is not supported",
+        )),
     }
 }
 

@@ -122,6 +122,27 @@ def _decode_attr_value(value: Any) -> Any:
     return value
 
 
+def _normalize_fill_value(value: Any, np_dtype: np.dtype) -> Any:
+    """Coerce an xarray `_FillValue` attribute into a Python scalar matching the array dtype.
+
+    The binding's `define_array(fill_value=...)` expects a plain Python scalar
+    that is type-consistent with the array dtype. xarray often stores `_FillValue`
+    as a 0-D numpy array or numpy scalar; this unwraps that and (for datetime64
+    arrays) reinterprets the value as nanoseconds since the epoch.
+    """
+    if value is None:
+        return None
+    if isinstance(value, np.ndarray) and value.ndim == 0:
+        value = value.item() if np_dtype.kind != "M" else value.view(np.int64).item()
+        return value
+    if isinstance(value, np.generic):
+        # datetime64 scalar → int64 ns since epoch
+        if isinstance(value, np.datetime64):
+            return value.astype("datetime64[ns]").view(np.int64).item()
+        return value.item()
+    return value
+
+
 def _is_dask_array(arr: Any) -> bool:
     """Return True if `arr` is a `dask.array.Array`. False if dask isn't installed."""
     try:
@@ -242,12 +263,19 @@ def _write_xarray_to_view(
         else:
             chunk_shape = None
 
+        # Extract the CF/netCDF `_FillValue` attribute (if any) so it's passed
+        # to define_array as a typed fill value, not stored as a flattened atlas
+        # attribute. Copy attrs first to avoid mutating the user's Dataset.
+        var_attrs = dict(var.attrs)
+        fill_value = _normalize_fill_value(var_attrs.pop("_FillValue", None), var.dtype)
+
         view.define_array(
             var_name,
             dtype=atlas_dtype,
             dims=dims,
             shape=shape,
             chunk_shape=chunk_shape,
+            fill_value=fill_value,
         )
 
         # Stream blocks: prefetched batches for dask-backed data, a single
@@ -266,8 +294,8 @@ def _write_xarray_to_view(
                 bytes=int(block.nbytes),
             )
 
-        # Per-variable attrs → flattened as `{var}.{attr}`
-        for attr_key, attr_val in var.attrs.items():
+        # Per-variable attrs → flattened as `{var}.{attr}` (sans `_FillValue`).
+        for attr_key, attr_val in var_attrs.items():
             encoded = _encode_attr_value(attr_val)
             view.set_attribute(_sanitize_str(f"{var_name}.{attr_key}"), encoded)
 

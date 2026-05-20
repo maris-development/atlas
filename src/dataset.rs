@@ -569,6 +569,86 @@ mod tests {
         assert_eq!(stats.max, Some(StatValue::Float(4.0)));
     }
 
+    #[tokio::test]
+    async fn array_stats_count_fill_value_as_null() {
+        use array_format::{FillValue, StatValue};
+        let store = make_store();
+        let mut view = empty_view(store.clone(), "ds");
+        view.define_array::<i32>(
+            "arr",
+            vec!["x".into()],
+            vec![6],
+            None,
+            Some(FillValue::Int(-1)),
+        )
+        .await
+        .unwrap();
+        // Two cells equal the fill (-1); four are real data.
+        let data = ndarray::arr1(&[5_i32, -1, 7, -1, 2, 9]).into_dyn();
+        view.write_array("arr", vec![0], data.view()).await.unwrap();
+        for arc in view.arrays.values() {
+            arc.write().await.flush().await.unwrap();
+        }
+
+        let stats = view.array_stats("arr").await.unwrap();
+        assert_eq!(stats.row_count, 6);
+        assert_eq!(stats.null_count, 2, "two fill-equal cells must count as null");
+        // min/max exclude fill-valued cells.
+        assert_eq!(stats.min, Some(StatValue::Int(2)));
+        assert_eq!(stats.max, Some(StatValue::Int(9)));
+    }
+
+    #[tokio::test]
+    async fn array_stats_without_fill_value_treats_sentinel_as_data() {
+        use array_format::StatValue;
+        // Baseline: same `-1` values but no fill_value declared — they must
+        // not count as null, and must be included in min/max.
+        let store = make_store();
+        let mut view = empty_view(store.clone(), "ds");
+        view.define_array::<i32>("arr", vec!["x".into()], vec![4], None, None)
+            .await
+            .unwrap();
+        let data = ndarray::arr1(&[5_i32, -1, 7, 9]).into_dyn();
+        view.write_array("arr", vec![0], data.view()).await.unwrap();
+        for arc in view.arrays.values() {
+            arc.write().await.flush().await.unwrap();
+        }
+
+        let stats = view.array_stats("arr").await.unwrap();
+        assert_eq!(stats.row_count, 4);
+        assert_eq!(stats.null_count, 0);
+        assert_eq!(stats.min, Some(StatValue::Int(-1)));
+        assert_eq!(stats.max, Some(StatValue::Int(9)));
+    }
+
+    #[tokio::test]
+    async fn array_stats_nan_fill_value_for_float() {
+        use array_format::{FillValue, StatValue};
+        let store = make_store();
+        let mut view = empty_view(store.clone(), "ds");
+        view.define_array::<f64>(
+            "arr",
+            vec!["x".into()],
+            vec![4],
+            None,
+            Some(FillValue::Float(f64::NAN)),
+        )
+        .await
+        .unwrap();
+        // NaN cells are matched to the NaN fill (bit-pattern compare in array_format).
+        let data = ndarray::arr1(&[1.0_f64, f64::NAN, 3.0, f64::NAN]).into_dyn();
+        view.write_array("arr", vec![0], data.view()).await.unwrap();
+        for arc in view.arrays.values() {
+            arc.write().await.flush().await.unwrap();
+        }
+
+        let stats = view.array_stats("arr").await.unwrap();
+        assert_eq!(stats.row_count, 4);
+        assert_eq!(stats.null_count, 2);
+        assert_eq!(stats.min, Some(StatValue::Float(1.0)));
+        assert_eq!(stats.max, Some(StatValue::Float(3.0)));
+    }
+
     // --- cache sharing ---
 
     #[tokio::test]

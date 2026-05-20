@@ -8,6 +8,8 @@ or
 import tempfile
 
 import numpy as np
+import pytest
+
 import pyatlas
 
 
@@ -321,6 +323,101 @@ def test_array_meta():
         assert meta["shape"] == [10, 20]
         assert meta["chunk_shape"] == [5, 10]
         assert meta["dimension_names"] == ["t", "x"]
+
+
+def test_fill_value_unwritten_cells_int32():
+    """Cells we never write to come back as the declared fill value."""
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("ds")
+        ds.define_array("arr", dtype="int32", dims=["x"], shape=[4], fill_value=-1)
+        # Only write the first half — the trailing two cells stay unwritten.
+        ds.write_array("arr", start=[0], data=np.array([10, 20], dtype=np.int32))
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(d)
+        arr = s2.open_dataset("ds").read_array("arr")
+        assert arr is not None
+        assert arr.dtype == np.int32
+        assert arr.tolist() == [10, 20, -1, -1]
+
+
+def test_fill_value_float64_nan():
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("ds")
+        ds.define_array("arr", dtype="float64", dims=["x"], shape=[4], fill_value=float("nan"))
+        ds.write_array("arr", start=[0], data=np.array([1.0, 2.0], dtype=np.float64))
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(d)
+        arr = s2.open_dataset("ds").read_array("arr")
+        assert arr is not None
+        assert arr[:2].tolist() == [1.0, 2.0]
+        assert np.isnan(arr[2:]).all()
+
+
+def test_fill_value_float_accepts_int():
+    """Floats accept Python ints (coerced); no error."""
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("ds")
+        ds.define_array("arr", dtype="float32", dims=["x"], shape=[2], fill_value=7)
+        s.flush()  # define succeeded; no exception
+
+
+def test_fill_value_uint_accepts_large():
+    """uint64 accepts values larger than i64::MAX."""
+    big = 2**63 + 5  # > i64::MAX, well within u64
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("ds")
+        ds.define_array("arr", dtype="uint64", dims=["x"], shape=[4], fill_value=big)
+        ds.write_array("arr", start=[0], data=np.array([1, 2], dtype=np.uint64))
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(d)
+        arr = s2.open_dataset("ds").read_array("arr")
+        assert arr is not None
+        assert arr.tolist() == [1, 2, big, big]
+
+
+def test_fill_value_string_accepted():
+    """String fill_value is stored without error (the underlying crate still
+    returns "" for unwritten cells, but the binding shouldn't reject it)."""
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("ds")
+        ds.define_array("arr", dtype="string", dims=["i"], shape=[2], fill_value="N/A")
+        ds.write_array("arr", start=[0], data=np.array(["x", "y"], dtype=object))
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(d)
+        arr = s2.open_dataset("ds").read_array("arr")
+        assert arr is not None
+        assert list(arr) == ["x", "y"]
+
+
+@pytest.mark.parametrize(
+    "dtype, fill, exc",
+    [
+        ("int32", 1.5, TypeError),       # float for int
+        ("uint32", -1, OverflowError),    # negative for uint
+        ("uint8", 256, OverflowError),    # out-of-range uint
+        ("int8", 200, OverflowError),     # out-of-range int
+        ("float32", "x", TypeError),     # str for float
+        ("float32", True, TypeError),    # bool for float
+        ("int32", "x", TypeError),       # str for int
+        ("string", 1, TypeError),        # int for string
+        ("bool", 1, TypeError),          # int (not bool) for bool
+    ],
+)
+def test_fill_value_type_mismatch_raises(dtype, fill, exc):
+    with tempfile.TemporaryDirectory() as d:
+        s = pyatlas.Atlas.create(d)
+        ds = s.create_dataset("ds")
+        with pytest.raises(exc):
+            ds.define_array("arr", dtype=dtype, dims=["x"], shape=[2], fill_value=fill)
 
 
 if __name__ == "__main__":

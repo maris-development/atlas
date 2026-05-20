@@ -405,3 +405,46 @@ def test_uneven_trailing_chunk():
         np.testing.assert_array_equal(
             ds_back["v"].compute().data, np.arange(10, dtype=np.int32)
         )
+
+
+def test_fill_value_attribute_picked_up():
+    """`_FillValue` on a variable is consumed by define_array, not flattened.
+
+    The fill value's effect on unwritten cells is exercised in
+    `test_smoke.test_fill_value_unwritten_cells_int32`; this test just
+    confirms that the xarray accessor strips `_FillValue` from the flattened
+    attribute set so it isn't stored twice. Other per-var attrs survive.
+    """
+    arr = xr.DataArray(
+        np.array([10, 20, 30, 40], dtype=np.int32),
+        dims=["x"],
+        attrs={"_FillValue": np.int32(-1), "units": "K"},
+    )
+    ds = xr.Dataset({"v": arr})
+
+    with tempfile.TemporaryDirectory() as d:
+        with pyatlas.Atlas.create(d) as atlas:
+            atlas.add_xr_dataset(ds, "ds")
+
+        atlas2 = pyatlas.Atlas.open(d)
+        view = atlas2.open_dataset("ds")
+        attrs = view.attributes()
+        assert "v._FillValue" not in attrs, attrs
+        assert attrs.get("v.units") == "K"
+
+        # The user's source Dataset must not be mutated by the write.
+        assert ds["v"].attrs["_FillValue"] == np.int32(-1)
+
+
+def test_fill_value_attribute_dtype_mismatch_raises():
+    """A `_FillValue` whose Python type can't represent the dtype is rejected."""
+    arr = xr.DataArray(
+        np.zeros(4, dtype=np.int32),
+        dims=["x"],
+        attrs={"_FillValue": 1.5},  # float for int32 → TypeError
+    )
+    ds = xr.Dataset({"v": arr})
+    with tempfile.TemporaryDirectory() as d:
+        with pytest.raises(TypeError):
+            with pyatlas.Atlas.create(d) as atlas:
+                atlas.add_xr_dataset(ds, "ds")

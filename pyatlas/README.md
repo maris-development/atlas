@@ -36,6 +36,7 @@ with pyatlas.Atlas.create("/tmp/my_store", codec="zstd") as s:   # "zstd" | "lz4
         dims=["lat", "lon"],
         shape=[8, 16],
         chunk_shape=[4, 8],
+        fill_value=float("nan"),   # unwritten cells read back as NaN; NaN cells count as nulls in stats
     )
     ds.write_array(
         "temperature",
@@ -86,7 +87,7 @@ This means N consecutive `add_xr_dataset` / `create_dataset` calls amortise to a
 | --- | --- |
 | `name` (property) | Dataset name. |
 | `list_arrays() -> list[str]` | Array names in this dataset. |
-| `define_array(name, dtype, dims, shape, chunk_shape=None)` | Declare a new array (in-memory). |
+| `define_array(name, dtype, dims, shape, chunk_shape=None, fill_value=None)` | Declare a new array (in-memory). `fill_value` is a Python scalar matching the array dtype; unwritten cells read back as this value, and any *written* cell equal to it is counted as a null in `array_stats`. The dtype is enforced (`TypeError` on mismatch, `OverflowError` for out-of-range ints). |
 | `write_array(name, start, data)` | Write a numpy ndarray (matching stored dtype). |
 | `read_array(name, start=None, shape=None) -> np.ndarray \| None` | Read full or partial. Returns `None` if the array isn't in this dataset. |
 | `delete_array(name)` | Tombstone the array within this dataset. |
@@ -150,6 +151,7 @@ with pyatlas.Atlas.create("/tmp/store") as atlas:
 | Each coord / data variable | A separate atlas array, with `dims` mapped 1:1. |
 | Dataset attrs | Atlas dataset attrs, plain keys. |
 | Per-variable attrs | Flattened as `{var}.{attr}` at the dataset attr level. |
+| Per-variable `_FillValue` | Consumed by `define_array` as a typed fill value (not flattened as a regular attr). The source `Dataset.attrs` is not mutated. |
 | Coord vs data_var distinction | JSON list in the internal `_pyatlas_coords` attr. |
 | Non-scalar attr values (list, ndarray) | JSON-encoded string with a `json:` prefix marker. |
 
