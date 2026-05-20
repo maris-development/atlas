@@ -28,8 +28,8 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "array-format"
-version = "0.5.0"
-source = "git+https://github.com/robinskil/array-format#ca7d02bafbd14062b2a5bd9df4ca9804d670a4bb"
+version = "0.6.1"
+source = "git+https://github.com/robinskil/array-format#f0e15e1afcfe1852aa17034187960d08d0e466b6"
 dependencies = [
  "bytes",
  "futures",
@@ -70,7 +70,7 @@ dependencies = [
 
 [[package]]
 name = "atlas"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "array-format",
  "chrono",
