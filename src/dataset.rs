@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use array_format::{
-    ArrayElement, ArrayFile, ArrayStats, FileConfig, FillValue, Lz4Codec, NoCompression,
+    ArrayElement, ArrayFile, ArrayStats, DeltaCache, FileConfig, FillValue, Lz4Codec, NoCompression,
     ZstdCodec,
 };
 use ndarray::{ArcArray, ArrayView, IxDyn};
@@ -20,9 +20,20 @@ use crate::{
 /// Per-file lock: readers (`read_array`, `array_stats`) share concurrent access;
 /// writers (`write_array`, …) take an exclusive lock.
 pub(crate) type CachedFile = Arc<AsyncRwLock<ArrayFile>>;
-/// Shared cache map: array_name → open ArrayFile.
-/// Uses `parking_lot::RwLock` — never held across an `await` point.
-pub(crate) type ArrayCache = RwLock<HashMap<String, CachedFile>>;
+
+/// Shared cache map plus the unified `DeltaCache` that every `ArrayFile` in this
+/// Atlas plugs into. The map lock (`parking_lot::RwLock`) is never held across an
+/// `await` point; the `DeltaCache` enforces one block/I/O budget across all files.
+pub(crate) struct ArrayCache {
+    pub(crate) files: RwLock<HashMap<String, CachedFile>>,
+    pub(crate) delta: Arc<DeltaCache>,
+}
+
+impl ArrayCache {
+    pub(crate) fn new(delta: Arc<DeltaCache>) -> Self {
+        Self { files: RwLock::new(HashMap::new()), delta }
+    }
+}
 
 pub struct DatasetView {
     store: Arc<dyn ObjectStore>,
@@ -223,7 +234,7 @@ pub(crate) async fn get_or_open_cached(
     codec: &Codec,
 ) -> Result<CachedFile> {
     {
-        let guard = cache.read();
+        let guard = cache.files.read();
         if let Some(arc) = guard.get(array_name) {
             return Ok(arc.clone());
         }
@@ -233,42 +244,53 @@ pub(crate) async fn get_or_open_cached(
     let file = match store.head(&path).await {
         Ok(_) => {
             debug!(array = array_name, ?codec, "opening existing array file");
-            open_array_file(store.clone(), path, codec).await?
+            open_array_file(store.clone(), path, codec, &cache.delta).await?
         }
         Err(object_store::Error::NotFound { .. }) => {
             debug!(array = array_name, ?codec, "creating new array file");
-            create_array_file(store.clone(), path, codec).await?
+            create_array_file(store.clone(), path, codec, &cache.delta).await?
         }
         Err(e) => return Err(Error::ObjectStore(e)),
     };
 
     let arc = Arc::new(AsyncRwLock::new(file));
-    let mut guard = cache.write();
+    let mut guard = cache.files.write();
     Ok(guard.entry(array_name.to_string()).or_insert(arc).clone())
 }
 
-async fn open_array_file(store: Arc<dyn ObjectStore>, path: OsPath, codec: &Codec) -> Result<ArrayFile> {
+async fn open_array_file(
+    store: Arc<dyn ObjectStore>,
+    path: OsPath,
+    codec: &Codec,
+    delta: &Arc<DeltaCache>,
+) -> Result<ArrayFile> {
     Ok(match codec {
-        Codec::Zstd => ArrayFile::open(store, path, file_config(ZstdCodec::default())).await?,
-        Codec::Lz4 => ArrayFile::open(store, path, file_config(Lz4Codec)).await?,
-        Codec::Uncompressed => ArrayFile::open(store, path, file_config(NoCompression)).await?,
+        Codec::Zstd => ArrayFile::open(store, path, file_config(ZstdCodec::default(), delta)).await?,
+        Codec::Lz4 => ArrayFile::open(store, path, file_config(Lz4Codec, delta)).await?,
+        Codec::Uncompressed => ArrayFile::open(store, path, file_config(NoCompression, delta)).await?,
     })
 }
 
-async fn create_array_file(store: Arc<dyn ObjectStore>, path: OsPath, codec: &Codec) -> Result<ArrayFile> {
+async fn create_array_file(
+    store: Arc<dyn ObjectStore>,
+    path: OsPath,
+    codec: &Codec,
+    delta: &Arc<DeltaCache>,
+) -> Result<ArrayFile> {
     Ok(match codec {
-        Codec::Zstd => ArrayFile::create(store, path, file_config(ZstdCodec::default())).await?,
-        Codec::Lz4 => ArrayFile::create(store, path, file_config(Lz4Codec)).await?,
-        Codec::Uncompressed => ArrayFile::create(store, path, file_config(NoCompression)).await?,
+        Codec::Zstd => ArrayFile::create(store, path, file_config(ZstdCodec::default(), delta)).await?,
+        Codec::Lz4 => ArrayFile::create(store, path, file_config(Lz4Codec, delta)).await?,
+        Codec::Uncompressed => ArrayFile::create(store, path, file_config(NoCompression, delta)).await?,
     })
 }
 
-fn file_config<C: array_format::CompressionCodec>(codec: C) -> FileConfig<C> {
+fn file_config<C: array_format::CompressionCodec>(codec: C, delta: &Arc<DeltaCache>) -> FileConfig<C> {
     FileConfig {
         codec,
         block_target_size: 8 * 1024 * 1024,
         cache_capacity: 256 * 1024 * 1024,
         io_cache_capacity: 64 * 1024 * 1024,
+        cache: Some(Arc::clone(delta)),
     }
 }
 
@@ -287,10 +309,17 @@ mod tests {
         Arc::new(Mutex::new(meta))
     }
 
+    fn test_cache() -> Arc<ArrayCache> {
+        Arc::new(ArrayCache::new(Arc::new(DeltaCache::new(
+            256 * 1024 * 1024,
+            64 * 1024 * 1024,
+        ))))
+    }
+
     fn empty_view(store: Arc<dyn ObjectStore>, name: &str) -> DatasetView {
         DatasetView::new(
             store,
-            Arc::new(ArrayCache::new(HashMap::new())),
+            test_cache(),
             name.to_string(),
             HashMap::new(),
             shared_meta_with(name),
@@ -528,7 +557,7 @@ mod tests {
     #[tokio::test]
     async fn two_views_share_cached_array_file() {
         let store = make_store();
-        let cache = Arc::new(ArrayCache::new(HashMap::new()));
+        let cache = test_cache();
         let shared = Arc::new(Mutex::new({
             let mut m = StoreMeta::default();
             m.datasets.insert("ds_a".into(), DatasetMeta::default());

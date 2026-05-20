@@ -28,8 +28,8 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "array-format"
-version = "0.6.1"
-source = "git+https://github.com/robinskil/array-format#f0e15e1afcfe1852aa17034187960d08d0e466b6"
+version = "0.7.0"
+source = "git+https://github.com/robinskil/array-format#f516d2c71b197105e9708eaf8abc9e4c49b8fd93"
 dependencies = [
  "bytes",
  "futures",

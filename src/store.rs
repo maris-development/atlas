@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use array_format::DeltaCache;
 use object_store::{ObjectStore, local::LocalFileSystem, path::Path, prefix::PrefixStore};
 use parking_lot::Mutex;
 use tracing::{debug, info, instrument};
@@ -165,7 +166,7 @@ impl Atlas {
     #[instrument(skip(self))]
     pub async fn flush(&mut self) -> Result<()> {
         let snapshot: Vec<_> = {
-            let guard = self.cache.read();
+            let guard = self.cache.files.read();
             guard.values().cloned().collect()
         };
         let files = snapshot.len();
@@ -184,7 +185,7 @@ impl Atlas {
     #[instrument(skip(self))]
     pub async fn compact(&mut self) -> Result<()> {
         let snapshot: Vec<_> = {
-            let guard = self.cache.read();
+            let guard = self.cache.files.read();
             guard.values().cloned().collect()
         };
         let files = snapshot.len();
@@ -206,7 +207,11 @@ fn prefixed(store: Arc<dyn ObjectStore>, prefix: Path) -> Arc<dyn ObjectStore> {
 }
 
 fn default_cache() -> Arc<ArrayCache> {
-    Arc::new(ArrayCache::new(HashMap::new()))
+    let delta = Arc::new(DeltaCache::new(
+        256 * 1024 * 1024,
+        64 * 1024 * 1024,
+    ));
+    Arc::new(ArrayCache::new(delta))
 }
 
 #[cfg(test)]

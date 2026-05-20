@@ -46,7 +46,7 @@ pub use meta::DatasetMeta;
 pub use store::Atlas;
 
 pub use array_format::{
-    ArrayElement, ArrayStats, DType, FillValue, MergedArrayMeta, StatValue, TimestampNs,
+    ArrayElement, ArrayStats, DType, DeltaCache, FillValue, MergedArrayMeta, StatValue, TimestampNs,
 };
 pub use schema::{ArraySchema, Attr};
 
