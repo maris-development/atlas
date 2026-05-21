@@ -4,7 +4,11 @@ use indexmap::IndexMap;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Result, config::Codec, schema::{ArraySchema, Attr}};
+use crate::{
+    Error, Result,
+    config::Codec,
+    schema::{ArraySchema, Attr},
+};
 
 /// Metadata for a single dataset: array schemas and per-dataset attributes.
 /// Both maps preserve insertion order (via [`IndexMap`]) so on-disk layouts
@@ -44,15 +48,18 @@ pub(crate) async fn load_meta(store: &Arc<dyn ObjectStore>) -> Result<StoreMeta>
 
 pub(crate) async fn save_meta(store: &Arc<dyn ObjectStore>, meta: &StoreMeta) -> Result<()> {
     let bytes = serde_json::to_vec_pretty(meta)?;
-    store.put(&Path::from(META_PATH), bytes.into()).await.map_err(Error::ObjectStore)?;
+    store
+        .put(&Path::from(META_PATH), bytes.into())
+        .await
+        .map_err(Error::ObjectStore)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use array_format::DType;
     use crate::config::Codec;
+    use array_format::DType;
     use object_store::memory::InMemory;
 
     fn make_store() -> Arc<dyn ObjectStore> {
@@ -71,7 +78,10 @@ mod tests {
     async fn save_and_load_roundtrip() {
         use crate::schema::ArraySchema;
         let store = make_store();
-        let mut meta = StoreMeta { version: 1, ..Default::default() };
+        let mut meta = StoreMeta {
+            version: 1,
+            ..Default::default()
+        };
         meta.datasets.insert(
             "ds1".into(),
             DatasetMeta {
@@ -107,11 +117,19 @@ mod tests {
     #[tokio::test]
     async fn save_overwrites_previous_meta() {
         let store = make_store();
-        let meta1 = StoreMeta { version: 1, ..Default::default() };
+        let meta1 = StoreMeta {
+            version: 1,
+            ..Default::default()
+        };
         save_meta(&store, &meta1).await.unwrap();
 
-        let mut meta2 = StoreMeta { version: 2, ..Default::default() };
-        meta2.datasets.insert("new_ds".into(), DatasetMeta::default());
+        let mut meta2 = StoreMeta {
+            version: 2,
+            ..Default::default()
+        };
+        meta2
+            .datasets
+            .insert("new_ds".into(), DatasetMeta::default());
         save_meta(&store, &meta2).await.unwrap();
 
         let loaded = load_meta(&store).await.unwrap();
@@ -140,7 +158,10 @@ mod tests {
         assert_eq!(serde_json::to_string(&Attr::Bool(true)).unwrap(), "true");
         assert_eq!(serde_json::to_string(&Attr::Int64(42)).unwrap(), "42");
         assert_eq!(serde_json::to_string(&Attr::Float64(1.5)).unwrap(), "1.5");
-        assert_eq!(serde_json::to_string(&Attr::String("x".into())).unwrap(), "\"x\"");
+        assert_eq!(
+            serde_json::to_string(&Attr::String("x".into())).unwrap(),
+            "\"x\""
+        );
         assert_eq!(
             serde_json::to_string(&Attr::TimestampNanoseconds(1_700_000_000_000_000_000)).unwrap(),
             "\"2023-11-14T22:13:20Z\"",

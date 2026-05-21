@@ -35,16 +35,18 @@ macro_rules! numeric_dispatch {
             DType::UInt64 => $body!(u64),
             DType::Float32 => $body!(f32),
             DType::Float64 => $body!(f64),
-            DType::TimestampNs => unreachable!(
-                "TimestampNs is handled before numeric_dispatch!",
-            ),
-            DType::Bool => return Err(PyNotImplementedError::new_err(
-                "Bool arrays are not supported by the underlying array-format crate",
-            )),
+            DType::TimestampNs => unreachable!("TimestampNs is handled before numeric_dispatch!",),
+            DType::Bool => {
+                return Err(PyNotImplementedError::new_err(
+                    "Bool arrays are not supported by the underlying array-format crate",
+                ))
+            }
             DType::String => unreachable!("String is handled before numeric_dispatch!"),
-            DType::Binary => return Err(PyNotImplementedError::new_err(
-                "Binary arrays are not yet exposed in the Python bindings",
-            )),
+            DType::Binary => {
+                return Err(PyNotImplementedError::new_err(
+                    "Binary arrays are not yet exposed in the Python bindings",
+                ))
+            }
             DType::List { .. } | DType::FixedSizeList { .. } => {
                 return Err(PyNotImplementedError::new_err(
                     "List / FixedSizeList arrays are not yet exposed in the Python bindings",
@@ -62,7 +64,11 @@ impl PyDatasetView {
     }
 
     fn list_arrays(&self) -> Vec<String> {
-        self.inner.list_arrays().into_iter().map(String::from).collect()
+        self.inner
+            .list_arrays()
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     /// Returns a dict of attribute name -> Python value.
@@ -87,7 +93,10 @@ impl PyDatasetView {
     }
 
     fn get_attribute(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyAny>>> {
-        self.inner.get_attribute(key).map(|attr| attr_to_py(py, &attr)).transpose()
+        self.inner
+            .get_attribute(key)
+            .map(|attr| attr_to_py(py, &attr))
+            .transpose()
     }
 
     /// Returns `{"dtype", "shape", "chunk_shape", "dimension_names"}` for
@@ -97,7 +106,9 @@ impl PyDatasetView {
         py: Python<'py>,
         array: &str,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let Some(schema) = self.inner.array_meta(array) else { return Ok(None) };
+        let Some(schema) = self.inner.array_meta(array) else {
+            return Ok(None);
+        };
         let dict = PyDict::new(py);
         dict.set_item("dtype", dtype_to_string(&schema.dtype))?;
         dict.set_item("shape", schema.shape)?;
@@ -124,6 +135,15 @@ impl PyDatasetView {
         Ok(Some(dict))
     }
 
+    /// Returns the fill value for `array`, or `None` if the array doesn't
+    /// exist in this dataset or was defined without one.
+    fn array_fill_value(&self, py: Python<'_>, array: &str) -> PyResult<Py<PyAny>> {
+        let fv = py
+            .detach(|| runtime().block_on(self.inner.array_fill_value(array)))
+            .map_err(to_py_err)?;
+        fill_value_to_py(py, fv.as_ref())
+    }
+
     #[pyo3(signature = (name, dtype, dims, shape, chunk_shape=None, fill_value=None))]
     fn define_array(
         &mut self,
@@ -136,7 +156,9 @@ impl PyDatasetView {
         fill_value: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let dtype = parse_dtype(dtype)?;
-        let fill = fill_value.map(|v| py_to_fill_value(v, &dtype)).transpose()?;
+        let fill = fill_value
+            .map(|v| py_to_fill_value(v, &dtype))
+            .transpose()?;
 
         if matches!(&dtype, DType::TimestampNs) {
             py.detach(|| {
@@ -288,10 +310,8 @@ impl PyDatasetView {
                     ));
                 }
                 let view = unsafe { arr.as_array() };
-                py.detach(|| {
-                    runtime().block_on(self.inner.write_array::<$t>(name, start, view))
-                })
-                .map_err(to_py_err)?
+                py.detach(|| runtime().block_on(self.inner.write_array::<$t>(name, start, view)))
+                    .map_err(to_py_err)?
             }};
         }
         numeric_dispatch!(&stored, write_typed);
@@ -310,7 +330,9 @@ impl PyDatasetView {
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let start = start.unwrap_or_default();
         let shape = shape.unwrap_or_default();
-        let Some(meta) = self.inner.array_meta(name) else { return Ok(None) };
+        let Some(meta) = self.inner.array_meta(name) else {
+            return Ok(None);
+        };
         let stored = meta.dtype;
 
         if matches!(&stored, DType::String) {
@@ -360,10 +382,9 @@ impl PyDatasetView {
                     // ArrayD<TimestampNs> and ArrayD<i64> share an identical
                     // in-memory layout.
                     let as_i64: ndarray::ArrayD<i64> = unsafe {
-                        std::mem::transmute::<
-                            ndarray::ArrayD<TimestampNs>,
-                            ndarray::ArrayD<i64>,
-                        >(owned)
+                        std::mem::transmute::<ndarray::ArrayD<TimestampNs>, ndarray::ArrayD<i64>>(
+                            owned,
+                        )
                     };
                     let py_arr = as_i64.into_pyarray(py);
                     let np = py.import("numpy")?;
@@ -514,6 +535,20 @@ fn py_to_fill_value(value: &Bound<'_, PyAny>, dtype: &DType) -> PyResult<FillVal
         DType::List { .. } | DType::FixedSizeList { .. } => Err(PyNotImplementedError::new_err(
             "fill_value for list / fixed_size_list arrays is not supported",
         )),
+    }
+}
+
+/// Convert an atlas `FillValue` back to a Python scalar for `array_meta()`.
+fn fill_value_to_py(py: Python<'_>, val: Option<&FillValue>) -> PyResult<Py<PyAny>> {
+    use pyo3::IntoPyObjectExt;
+    let Some(val) = val else { return Ok(py.None()) };
+    match val {
+        FillValue::Bool(b) => b.into_py_any(py),
+        FillValue::Int(i) => i.into_py_any(py),
+        FillValue::UInt(u) => u.into_py_any(py),
+        FillValue::Float(f) => f.into_py_any(py),
+        FillValue::String(s) => s.into_py_any(py),
+        FillValue::TimestampNs(t) => t.into_py_any(py),
     }
 }
 

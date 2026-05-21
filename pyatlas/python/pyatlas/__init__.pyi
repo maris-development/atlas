@@ -179,6 +179,11 @@ class DatasetView:
         """
         ...
 
+    def array_fill_value(self, name: str) -> Optional[Any]:
+        """The fill value passed to `define_array`, or `None` if the array
+        doesn't exist in this dataset or was defined without one."""
+        ...
+
     def attributes(self) -> dict[str, Any]:
         """All attributes as a dict."""
         ...

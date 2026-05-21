@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
 use array_format::{
-    ArrayElement, ArrayFile, ArrayStats, DeltaCache, FileConfig, FillValue, Lz4Codec, NoCompression,
-    ZstdCodec,
+    ArrayElement, ArrayFile, ArrayStats, DeltaCache, FileConfig, FillValue, Lz4Codec,
+    NoCompression, ZstdCodec,
 };
 use ndarray::{ArcArray, ArrayView, IxDyn};
 use object_store::{ObjectStore, ObjectStoreExt, path::Path as OsPath};
@@ -14,7 +14,7 @@ use crate::{
     Error, Result,
     config::Codec,
     meta::{DatasetMeta, StoreMeta},
-    schema::{Attr, ArraySchema},
+    schema::{ArraySchema, Attr},
 };
 
 /// Per-file lock: readers (`read_array`, `array_stats`) share concurrent access;
@@ -31,7 +31,10 @@ pub(crate) struct ArrayCache {
 
 impl ArrayCache {
     pub(crate) fn new(delta: Arc<DeltaCache>) -> Self {
-        Self { files: RwLock::new(HashMap::new()), delta }
+        Self {
+            files: RwLock::new(HashMap::new()),
+            delta,
+        }
     }
 }
 
@@ -56,7 +59,14 @@ impl DatasetView {
         atlas_meta: Arc<Mutex<StoreMeta>>,
         codec: Codec,
     ) -> Self {
-        Self { store, cache, name, arrays, atlas_meta, codec }
+        Self {
+            store,
+            cache,
+            name,
+            arrays,
+            atlas_meta,
+            codec,
+        }
     }
 
     /// Returns a clone of the metadata for this dataset.
@@ -127,9 +137,13 @@ impl DatasetView {
         }
 
         let arc = get_or_open_cached(&self.store, &self.cache, array, &self.codec).await?;
-        arc.write()
-            .await
-            .define_array::<T>(&self.name, dims.clone(), shape.clone(), chunk_shape.clone(), fill_value)?;
+        arc.write().await.define_array::<T>(
+            &self.name,
+            dims.clone(),
+            shape.clone(),
+            chunk_shape.clone(),
+            fill_value,
+        )?;
         self.arrays.insert(array.to_string(), arc);
 
         let actual_chunk = chunk_shape.unwrap_or_else(|| shape.clone());
@@ -199,6 +213,17 @@ impl DatasetView {
         Ok(Some(guard.read_array::<T>(&self.name, start, shape).await?))
     }
 
+    /// Returns the fill value passed to `define_array` for `array`, or `None`
+    /// if the array isn't present in this dataset or was defined without one.
+    pub async fn array_fill_value(&self, array: &str) -> Result<Option<FillValue>> {
+        let arc = match self.arrays.get(array) {
+            Some(arc) => arc.clone(),
+            None => return Ok(None),
+        };
+        let guard = arc.read().await;
+        Ok(guard.get_array(&self.name)?.fill_value.clone())
+    }
+
     #[instrument(skip(self), fields(dataset = %self.name))]
     pub async fn delete_array(&mut self, array: &str) -> Result<()> {
         let arc = self
@@ -232,7 +257,10 @@ pub(crate) async fn open_dataset_view(
             .datasets
             .get(name)
             .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?;
-        ds.arrays.iter().map(|(n, s)| (n.clone(), s.codec.clone())).collect()
+        ds.arrays
+            .iter()
+            .map(|(n, s)| (n.clone(), s.codec.clone()))
+            .collect()
     };
     let mut arrays = HashMap::new();
     for (array_name, array_codec) in specs {
@@ -240,7 +268,14 @@ pub(crate) async fn open_dataset_view(
         arrays.insert(array_name, arc);
     }
 
-    Ok(DatasetView::new(store, cache, name.to_string(), arrays, atlas_meta, codec))
+    Ok(DatasetView::new(
+        store,
+        cache,
+        name.to_string(),
+        arrays,
+        atlas_meta,
+        codec,
+    ))
 }
 
 /// Returns the cached `ArrayFile` for `array_name`, opening it first if needed.
@@ -283,9 +318,13 @@ async fn open_array_file(
     delta: &Arc<DeltaCache>,
 ) -> Result<ArrayFile> {
     Ok(match codec {
-        Codec::Zstd => ArrayFile::open(store, path, file_config(ZstdCodec::default(), delta)).await?,
+        Codec::Zstd => {
+            ArrayFile::open(store, path, file_config(ZstdCodec::default(), delta)).await?
+        }
         Codec::Lz4 => ArrayFile::open(store, path, file_config(Lz4Codec, delta)).await?,
-        Codec::Uncompressed => ArrayFile::open(store, path, file_config(NoCompression, delta)).await?,
+        Codec::Uncompressed => {
+            ArrayFile::open(store, path, file_config(NoCompression, delta)).await?
+        }
     })
 }
 
@@ -296,13 +335,20 @@ async fn create_array_file(
     delta: &Arc<DeltaCache>,
 ) -> Result<ArrayFile> {
     Ok(match codec {
-        Codec::Zstd => ArrayFile::create(store, path, file_config(ZstdCodec::default(), delta)).await?,
+        Codec::Zstd => {
+            ArrayFile::create(store, path, file_config(ZstdCodec::default(), delta)).await?
+        }
         Codec::Lz4 => ArrayFile::create(store, path, file_config(Lz4Codec, delta)).await?,
-        Codec::Uncompressed => ArrayFile::create(store, path, file_config(NoCompression, delta)).await?,
+        Codec::Uncompressed => {
+            ArrayFile::create(store, path, file_config(NoCompression, delta)).await?
+        }
     })
 }
 
-fn file_config<C: array_format::CompressionCodec>(codec: C, delta: &Arc<DeltaCache>) -> FileConfig<C> {
+fn file_config<C: array_format::CompressionCodec>(
+    codec: C,
+    delta: &Arc<DeltaCache>,
+) -> FileConfig<C> {
     FileConfig {
         codec,
         block_target_size: 8 * 1024 * 1024,
@@ -323,7 +369,8 @@ mod tests {
 
     fn shared_meta_with(name: &str) -> Arc<Mutex<StoreMeta>> {
         let mut meta = StoreMeta::default();
-        meta.datasets.insert(name.to_string(), DatasetMeta::default());
+        meta.datasets
+            .insert(name.to_string(), DatasetMeta::default());
         Arc::new(Mutex::new(meta))
     }
 
@@ -385,7 +432,10 @@ mod tests {
     #[tokio::test]
     async fn read_array_returns_none_for_unknown_array() {
         let view = empty_view(make_store(), "ds");
-        let result = view.read_array::<f32>("missing", vec![], vec![]).await.unwrap();
+        let result = view
+            .read_array::<f32>("missing", vec![], vec![])
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -440,7 +490,11 @@ mod tests {
             .unwrap();
         let data = ArrayD::<f32>::from_elem(vec![4], 7.0_f32);
         view.write_array("arr", vec![0], data.view()).await.unwrap();
-        let result = view.read_array::<f32>("arr", vec![], vec![]).await.unwrap().unwrap();
+        let result = view
+            .read_array::<f32>("arr", vec![], vec![])
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(result, data.into_shared());
     }
 
@@ -469,9 +523,15 @@ mod tests {
     async fn define_array_records_meta() {
         use array_format::DType;
         let mut view = empty_view(make_store(), "ds");
-        view.define_array::<f32>("arr", vec!["x".into(), "y".into()], vec![4, 8], Some(vec![2, 2]), None)
-            .await
-            .unwrap();
+        view.define_array::<f32>(
+            "arr",
+            vec!["x".into(), "y".into()],
+            vec![4, 8],
+            Some(vec![2, 2]),
+            None,
+        )
+        .await
+        .unwrap();
 
         let meta = view.meta();
         let arr_schema = meta.arrays.get("arr").expect("meta entry missing");
@@ -504,7 +564,10 @@ mod tests {
 
         let meta = view.meta();
         assert_eq!(meta.attributes.get("count"), Some(&Attr::Int64(5)));
-        assert_eq!(meta.attributes.get("label"), Some(&Attr::String("x".into())));
+        assert_eq!(
+            meta.attributes.get("label"),
+            Some(&Attr::String("x".into()))
+        );
     }
 
     #[tokio::test]
@@ -592,7 +655,10 @@ mod tests {
 
         let stats = view.array_stats("arr").await.unwrap();
         assert_eq!(stats.row_count, 6);
-        assert_eq!(stats.null_count, 2, "two fill-equal cells must count as null");
+        assert_eq!(
+            stats.null_count, 2,
+            "two fill-equal cells must count as null"
+        );
         // min/max exclude fill-valued cells.
         assert_eq!(stats.min, Some(StatValue::Int(2)));
         assert_eq!(stats.max, Some(StatValue::Int(9)));
@@ -690,6 +756,9 @@ mod tests {
 
         let ptr_a = Arc::as_ptr(view_a.arrays.get("arr").unwrap());
         let ptr_b = Arc::as_ptr(view_b.arrays.get("arr").unwrap());
-        assert_eq!(ptr_a, ptr_b, "expected both views to share the same CachedFile");
+        assert_eq!(
+            ptr_a, ptr_b,
+            "expected both views to share the same CachedFile"
+        );
     }
 }

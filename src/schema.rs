@@ -1,4 +1,4 @@
-use array_format::DType;
+use array_format::{DType, FillValue};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Codec;
@@ -41,9 +41,7 @@ mod timestamp_ns_serde {
             .map_err(serde::de::Error::custom)?
             .with_timezone(&Utc);
         dt.timestamp_nanos_opt().ok_or_else(|| {
-            serde::de::Error::custom(
-                "timestamp out of nanosecond range (1677-09-21 .. 2262-04-11)",
-            )
+            serde::de::Error::custom("timestamp out of nanosecond range (1677-09-21 .. 2262-04-11)")
         })
     }
 }

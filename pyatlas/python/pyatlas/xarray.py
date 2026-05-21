@@ -128,18 +128,20 @@ def _normalize_fill_value(value: Any, np_dtype: np.dtype) -> Any:
     The binding's `define_array(fill_value=...)` expects a plain Python scalar
     that is type-consistent with the array dtype. xarray often stores `_FillValue`
     as a 0-D numpy array or numpy scalar; this unwraps that and (for datetime64
-    arrays) reinterprets the value as nanoseconds since the epoch.
+    arrays) reinterprets the value as nanoseconds since the epoch. For
+    string-kind arrays (object/bytes/unicode), `bytes` are decoded to `str`
+    since NetCDF stores fixed-width string fill values as bytes.
     """
     if value is None:
         return None
     if isinstance(value, np.ndarray) and value.ndim == 0:
         value = value.item() if np_dtype.kind != "M" else value.view(np.int64).item()
-        return value
-    if isinstance(value, np.generic):
-        # datetime64 scalar → int64 ns since epoch
+    elif isinstance(value, np.generic):
         if isinstance(value, np.datetime64):
             return value.astype("datetime64[ns]").view(np.int64).item()
-        return value.item()
+        value = value.item()
+    if np_dtype.kind in ("O", "S", "U") and isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
     return value
 
 
@@ -446,6 +448,14 @@ def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":
                 per_var_attrs[var][rest] = _decode_attr_value(value)
                 continue
         dataset_attrs[key] = _decode_attr_value(value)
+
+    # Restore _FillValue for any array that was defined with one.
+    for name in array_names:
+        fv = view.array_fill_value(name)
+        if fv is None:
+            continue
+        per_var_attrs.setdefault(name, {})
+        per_var_attrs[name]["_FillValue"] = fv
 
     # Inject per-var attrs into the (dims, data, attrs) triples
     def _with_attrs(name: str, triple: tuple) -> tuple:
