@@ -13,6 +13,13 @@ dependencies = [
     "dask>=2023.1",
 ]
 
+[project.optional-dependencies]
+bench = [
+    "zarr>=3",
+    "numcodecs",
+    "netCDF4",
+]
+
 [tool.maturin]
 features = ["pyo3/extension-module"]
 module-name = "pyatlas._pyatlas"
