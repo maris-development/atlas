@@ -62,7 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ds.write_array("temperature", start, chunk.view()).await?;
             }
         }
-        println!("jan_2024: wrote temperature in {} chunks", (NLAT / CHUNK_LAT) * (NLON / CHUNK_LON));
+        println!(
+            "jan_2024: wrote temperature in {} chunks",
+            (NLAT / CHUNK_LAT) * (NLON / CHUNK_LON)
+        );
 
         // --- pressure: no chunk shape → chunk equals full shape ---
         ds.define_array::<f64>(
@@ -76,18 +79,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Write entire array in one call
         let pressure = Array2::<f64>::from_elem([NLAT, NLON], 1013.25).into_dyn();
-        ds.write_array("pressure", vec![0, 0], pressure.view()).await?;
+        ds.write_array("pressure", vec![0, 0], pressure.view())
+            .await?;
         println!("jan_2024: wrote pressure as single full-array write");
 
         // --- time: 1-D hourly Unix timestamps ---
-        ds.define_array::<i64>(
-            "time",
-            vec!["hour".into()],
-            vec![NTIME],
-            None,
-            None,
-        )
-        .await?;
+        ds.define_array::<i64>("time", vec!["hour".into()], vec![NTIME], None, None)
+            .await?;
 
         let base_ts: i64 = 1_704_067_200; // 2024-01-01 00:00 UTC
         let time = Array1::from_iter((0..NTIME as i64).map(|h| base_ts + h * 3600)).into_dyn();
@@ -98,7 +96,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ds.set_attribute("year", Attr::Int64(2024));
         ds.set_attribute("station", Attr::String("KNMI".into()));
         ds.set_attribute("has_qc", Attr::Bool(true));
-
     }
     s.flush().await?;
     println!("jan_2024: flushed");
@@ -124,7 +121,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Write the full grid in one call (still within the chunked array)
         let feb_temp = Array2::<f32>::from_elem([NLAT, NLON], 5.0_f32).into_dyn();
-        ds.write_array("temperature", vec![0, 0], feb_temp.view()).await?;
+        ds.write_array("temperature", vec![0, 0], feb_temp.view())
+            .await?;
         println!("feb_2024: wrote temperature (shared file with jan_2024)");
 
         // humidity: unique to feb, unchunked
@@ -138,11 +136,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
         let humidity = Array2::<f32>::from_elem([NLAT, NLON], 78.5_f32).into_dyn();
-        ds.write_array("humidity", vec![0, 0], humidity.view()).await?;
+        ds.write_array("humidity", vec![0, 0], humidity.view())
+            .await?;
 
         ds.set_attribute("month", Attr::Int64(2));
         ds.set_attribute("year", Attr::Int64(2024));
-
     }
     s.flush().await?;
     println!("feb_2024: flushed");
@@ -152,14 +150,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut ds = s.create_dataset("station_obs").await?;
 
-        ds.define_array::<f64>(
-            "wind_speed",
-            vec!["time".into()],
-            vec![NTIME],
-            None,
-            None,
-        )
-        .await?;
+        ds.define_array::<f64>("wind_speed", vec!["time".into()], vec![NTIME], None, None)
+            .await?;
 
         let wind = Array1::from_iter((0..NTIME).map(|i| 3.0 + (i as f64) * 0.1)).into_dyn();
         ds.write_array("wind_speed", vec![0], wind.view()).await?;
@@ -167,7 +159,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ds.set_attribute("lat", Attr::Float64(52.1));
         ds.set_attribute("lon", Attr::Float64(5.18));
         ds.set_attribute("name", Attr::String("De Bilt".into()));
-
     }
     s.flush().await?;
     println!("station_obs: flushed");
@@ -226,7 +217,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .read_array::<f64>("pressure", vec![], vec![])
         .await?
         .unwrap();
-    println!("\njan_2024 pressure (full, unchunked — first value = {:.2})", pressure[[0, 0]]);
+    println!(
+        "\njan_2024 pressure (full, unchunked — first value = {:.2})",
+        pressure[[0, 0]]
+    );
 
     // Time — first 4 and last timestamp
     let time = ds_jan
@@ -245,7 +239,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .read_array::<f32>("temperature", vec![], vec![])
         .await?
         .unwrap();
-    println!("\nfeb_2024 temperature (first value = {:.1})", feb_temp[[0, 0]]);
+    println!(
+        "\nfeb_2024 temperature (first value = {:.1})",
+        feb_temp[[0, 0]]
+    );
 
     let feb_hum = ds_feb
         .read_array::<f32>("humidity", vec![], vec![])
@@ -275,7 +272,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .unwrap();
     assert_ne!(
-        jan_val[[0, 0]], feb_val[[0, 0]],
+        jan_val[[0, 0]],
+        feb_val[[0, 0]],
         "jan and feb share the file but hold independent data"
     );
     println!(

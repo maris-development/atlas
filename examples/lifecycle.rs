@@ -34,8 +34,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
         let data = Array2::<f32>::from_elem([4, 4], 1.0_f32).into_dyn();
         ds.write_array("grid", vec![0, 0], data.view()).await?;
-        ds.define_array::<f64>("elevation", vec!["x".into(), "y".into()], vec![4, 4], None, None)
-            .await?;
+        ds.define_array::<f64>(
+            "elevation",
+            vec!["x".into(), "y".into()],
+            vec![4, 4],
+            None,
+            None,
+        )
+        .await?;
         let elev = Array2::<f64>::from_elem([4, 4], 100.0_f64).into_dyn();
         ds.write_array("elevation", vec![0, 0], elev.view()).await?;
         ds.set_attribute("region", Attr::String("north".into()));
@@ -54,7 +60,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     {
         let mut ds = s.create_dataset("scratch").await?;
-        ds.define_array::<i32>("ids", vec!["n".into()], vec![8], None, None).await?;
+        ds.define_array::<i32>("ids", vec!["n".into()], vec![8], None, None)
+            .await?;
         let ids = Array1::from_iter(0..8_i32).into_dyn();
         ds.write_array("ids", vec![0], ids.view()).await?;
     }
@@ -93,8 +100,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Verify the physical file still exists (it holds data for other arrays too,
     // though in this case elevation was unique — the file stays, just tombstoned).
     let north2 = s.open_dataset("north").await?;
-    assert!(north2.read_array::<f32>("grid", vec![], vec![]).await?.is_some());
-    assert!(north2.read_array::<f64>("elevation", vec![], vec![]).await?.is_none());
+    assert!(
+        north2
+            .read_array::<f32>("grid", vec![], vec![])
+            .await?
+            .is_some()
+    );
+    assert!(
+        north2
+            .read_array::<f64>("elevation", vec![], vec![])
+            .await?
+            .is_none()
+    );
     println!("'grid' still readable, 'elevation' gone from north ✓");
 
     // ── Phase 3: delete a whole dataset ──────────────────────────────────────
@@ -119,9 +136,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // north can still read its grid — south's entry was tombstoned, not north's
     let north3 = s.open_dataset("north").await?;
-    let grid = north3.read_array::<f32>("grid", vec![], vec![]).await?.unwrap();
-    assert_eq!(grid[[0, 0]], 1.0_f32, "north grid unaffected by south deletion");
-    println!("north grid[0,0] = {:.1} (still 1.0, unaffected) ✓", grid[[0, 0]]);
+    let grid = north3
+        .read_array::<f32>("grid", vec![], vec![])
+        .await?
+        .unwrap();
+    assert_eq!(
+        grid[[0, 0]],
+        1.0_f32,
+        "north grid unaffected by south deletion"
+    );
+    println!(
+        "north grid[0,0] = {:.1} (still 1.0, unaffected) ✓",
+        grid[[0, 0]]
+    );
 
     let mut names = s.list_datasets();
     names.sort();
@@ -134,7 +161,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let north4 = s.open_dataset("north").await?;
 
     // Read the grid once more before compacting to confirm it still works
-    let before = north4.read_array::<f32>("grid", vec![], vec![]).await?.unwrap();
+    let before = north4
+        .read_array::<f32>("grid", vec![], vec![])
+        .await?
+        .unwrap();
     println!("grid[0,0] before compact = {:.1}", before[[0, 0]]);
     drop(north4);
 
@@ -143,9 +173,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Data must be intact after compaction
     let north4 = s.open_dataset("north").await?;
-    let after = north4.read_array::<f32>("grid", vec![], vec![]).await?.unwrap();
+    let after = north4
+        .read_array::<f32>("grid", vec![], vec![])
+        .await?
+        .unwrap();
     assert_eq!(before, after, "data unchanged after compact");
-    println!("grid[0,0] after  compact = {:.1} (unchanged ✓)", after[[0, 0]]);
+    println!(
+        "grid[0,0] after  compact = {:.1} (unchanged ✓)",
+        after[[0, 0]]
+    );
 
     // ── Phase 6: reopen and verify final state ────────────────────────────────
 
@@ -159,9 +195,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert!(!s2.dataset_exists("scratch"));
 
     let north5 = s2.open_dataset("north").await?;
-    assert_eq!(north5.get_attribute("region"), Some(Attr::String("north".into())));
+    assert_eq!(
+        north5.get_attribute("region"),
+        Some(Attr::String("north".into()))
+    );
 
-    let final_grid = north5.read_array::<f32>("grid", vec![], vec![]).await?.unwrap();
+    let final_grid = north5
+        .read_array::<f32>("grid", vec![], vec![])
+        .await?
+        .unwrap();
     assert_eq!(final_grid[[0, 0]], 1.0_f32);
 
     println!("Only 'north' survives, grid and attributes intact ✓");

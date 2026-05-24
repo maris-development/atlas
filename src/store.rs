@@ -459,6 +459,13 @@ mod tests {
         assert!(nested.join("atlas.json").exists());
     }
 
+    #[tokio::test]
+    async fn create_path_succeeds_when_directory_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _atlas = Atlas::create_path(tmp.path(), StoreConfig::default()).await.unwrap();
+        assert!(tmp.path().join("atlas.json").exists());
+    }
+
     /// Reading array `x` from many datasets must not open files for arrays
     /// `y` and `z` that those datasets also reference. This is the load-bearing
     /// regression test for lazy initialization.

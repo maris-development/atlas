@@ -6,6 +6,7 @@ or
     python pyatlas/tests/test_smoke.py
 """
 import tempfile
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -418,6 +419,32 @@ def test_fill_value_type_mismatch_raises(dtype, fill, exc):
         ds = s.create_dataset("ds")
         with pytest.raises(exc):
             ds.define_array("arr", dtype=dtype, dims=["x"], shape=[2], fill_value=fill)
+
+
+@pytest.mark.parametrize(
+    "meta_format,expected_file,other_file",
+    [
+        ("json", "atlas.json", "atlas.msgpack"),
+        ("msgpack", "atlas.msgpack", "atlas.json"),
+    ],
+)
+def test_create_creates_missing_directory(meta_format, expected_file, other_file):
+    with tempfile.TemporaryDirectory() as d:
+        nested = Path(d) / "missing" / "nested"
+        assert not nested.exists()
+
+        s = pyatlas.Atlas.create(str(nested), meta_format=meta_format)
+
+        assert nested.is_dir()
+        assert (nested / expected_file).exists()
+        assert not (nested / other_file).exists()
+
+        # Store is usable end-to-end.
+        s.create_dataset("ds")
+        s.flush()
+
+        s2 = pyatlas.Atlas.open(str(nested))
+        assert "ds" in s2.list_datasets()
 
 
 if __name__ == "__main__":
