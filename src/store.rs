@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use array_format::DeltaCache;
 use object_store::{ObjectStore, local::LocalFileSystem, path::Path, prefix::PrefixStore};
@@ -7,8 +7,8 @@ use tracing::{debug, info, instrument};
 
 use crate::{
     Error, Result,
-    config::{Codec, StoreConfig},
-    dataset::{ArrayCache, DatasetView, get_or_open_cached, open_dataset_view},
+    config::{Codec, MetaFormat, StoreConfig},
+    dataset::{ArrayCache, DatasetView, open_dataset_view},
     meta::{StoreMeta, load_meta, save_meta},
 };
 
@@ -17,6 +17,7 @@ pub struct Atlas {
     meta: Arc<Mutex<StoreMeta>>,
     cache: Arc<ArrayCache>,
     codec: Codec,
+    meta_format: MetaFormat,
 }
 
 impl Atlas {
@@ -27,11 +28,12 @@ impl Atlas {
     #[instrument(skip(store), fields(prefix = %prefix))]
     pub async fn open(store: Arc<dyn ObjectStore>, prefix: Path) -> Result<Self> {
         let store = prefixed(store, prefix);
-        let meta = load_meta(&store).await?;
+        let (meta, meta_format) = load_meta(&store).await?;
         let codec = meta.codec.clone();
         info!(
             datasets = meta.datasets.len(),
             ?codec,
+            ?meta_format,
             "opened atlas store"
         );
         Ok(Self {
@@ -39,21 +41,23 @@ impl Atlas {
             meta: Arc::new(Mutex::new(meta)),
             cache: default_cache(),
             codec,
+            meta_format,
         })
     }
 
     /// Create a new store at `prefix` within `store`.
-    #[instrument(skip(store, config), fields(prefix = %prefix, codec = ?config.codec))]
+    #[instrument(skip(store, config), fields(prefix = %prefix, codec = ?config.codec, meta_format = ?config.meta_format))]
     pub async fn create(store: Arc<dyn ObjectStore>, prefix: Path, config: StoreConfig) -> Result<Self> {
         let store = prefixed(store, prefix);
         let meta = StoreMeta { version: 1, codec: config.codec.clone(), ..Default::default() };
-        save_meta(&store, &meta).await?;
+        save_meta(&store, &meta, config.meta_format).await?;
         info!("created atlas store");
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
             cache: default_cache(),
             codec: config.codec,
+            meta_format: config.meta_format,
         })
     }
 
@@ -87,7 +91,6 @@ impl Atlas {
             self.store.clone(),
             self.cache.clone(),
             name.to_string(),
-            HashMap::new(),
             self.meta.clone(),
             self.codec.clone(),
         ))
@@ -114,8 +117,11 @@ impl Atlas {
                 .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?
         };
         debug!(arrays = dataset_meta.arrays.len(), "deleting dataset");
-        for array_name in dataset_meta.arrays.keys() {
-            let arc = get_or_open_cached(&self.store, &self.cache, array_name, &self.codec).await?;
+        for (array_name, schema) in &dataset_meta.arrays {
+            let handle = self
+                .cache
+                .get_or_insert(&self.store, array_name, &schema.codec);
+            let arc = handle.get().await?;
             let mut guard = arc.write().await;
             guard.delete(name)?;
             // No flush here; persistence happens on Atlas::flush().
@@ -146,40 +152,66 @@ impl Atlas {
         arrays
     }
 
-    /// Flush every cached array file's pending writes AND persist the in-memory
+    /// Flush every known array file's pending writes AND persist the in-memory
     /// `atlas.json`. This is the single durability boundary for the store.
+    ///
+    /// Force-initializes every array referenced in meta, even ones never
+    /// touched by a `DatasetView` (lazy-init wins are on the read path, not
+    /// on flush).
     #[instrument(skip(self))]
     pub async fn flush(&mut self) -> Result<()> {
-        let snapshot: Vec<_> = {
-            let guard = self.cache.files.read();
-            guard.values().cloned().collect()
-        };
+        let snapshot = self.force_init_all_known_arrays().await?;
         let files = snapshot.len();
-        debug!(files, "flushing cached array files");
+        debug!(files, "flushing array files");
         for arc in snapshot {
             arc.write().await.flush().await?;
         }
         let meta_snapshot = self.meta.lock().clone();
         let datasets = meta_snapshot.datasets.len();
-        save_meta(&self.store, &meta_snapshot).await?;
+        save_meta(&self.store, &meta_snapshot, self.meta_format).await?;
         info!(files, datasets, "flushed atlas store");
         Ok(())
     }
 
-    /// Compact every cached array file in place (reclaims tombstoned space).
+    /// Compact every known array file in place (reclaims tombstoned space).
+    /// Force-initializes every array referenced in meta.
     #[instrument(skip(self))]
     pub async fn compact(&mut self) -> Result<()> {
-        let snapshot: Vec<_> = {
-            let guard = self.cache.files.read();
-            guard.values().cloned().collect()
-        };
+        let snapshot = self.force_init_all_known_arrays().await?;
         let files = snapshot.len();
-        debug!(files, "compacting cached array files");
+        debug!(files, "compacting array files");
         for arc in snapshot {
             arc.write().await.compact().await?;
         }
         info!(files, "compacted atlas store");
         Ok(())
+    }
+
+    /// Ensures every array referenced by any dataset in meta has an
+    /// initialized `ArrayFile` in the cache, and returns the inner locks
+    /// (deduped by array name).
+    async fn force_init_all_known_arrays(
+        &self,
+    ) -> Result<Vec<Arc<tokio::sync::RwLock<array_format::ArrayFile>>>> {
+        let specs: Vec<(String, Codec)> = {
+            let meta = self.meta.lock();
+            let mut seen = std::collections::HashSet::new();
+            let mut out = Vec::new();
+            for ds in meta.datasets.values() {
+                for (name, schema) in &ds.arrays {
+                    if seen.insert(name.clone()) {
+                        out.push((name.clone(), schema.codec.clone()));
+                    }
+                }
+            }
+            out
+        };
+        let mut result = Vec::with_capacity(specs.len());
+        for (name, codec) in specs {
+            let handle = self.cache.get_or_insert(&self.store, &name, &codec);
+            result.push(handle.get().await?);
+        }
+        Ok(result)
     }
 }
 
@@ -321,7 +353,7 @@ mod tests {
     #[tokio::test]
     async fn lz4_codec_roundtrip() {
         let (store, prefix) = make_store();
-        let config = StoreConfig { codec: Codec::Lz4 };
+        let config = StoreConfig { codec: Codec::Lz4, ..Default::default() };
         let mut s = Atlas::create(store.clone(), prefix.clone(), config).await.unwrap();
 
         {
@@ -344,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn uncompressed_codec_roundtrip() {
         let (store, prefix) = make_store();
-        let config = StoreConfig { codec: Codec::Uncompressed };
+        let config = StoreConfig { codec: Codec::Uncompressed, ..Default::default() };
         let mut s = Atlas::create(store.clone(), prefix.clone(), config).await.unwrap();
 
         {
@@ -386,6 +418,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn msgpack_meta_format_roundtrip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = ndarray::arr1(&[1.0_f32, 2.0, 3.0]).into_dyn();
+
+        {
+            let config = StoreConfig {
+                meta_format: MetaFormat::MsgPack,
+                ..Default::default()
+            };
+            let mut s = Atlas::create_path(tmp.path(), config).await.unwrap();
+            {
+                let mut ds = s.create_dataset("ds").await.unwrap();
+                ds.define_array::<f32>("arr", vec!["x".into()], vec![3], None, None).await.unwrap();
+                ds.write_array("arr", vec![0], data.view()).await.unwrap();
+            }
+            s.flush().await.unwrap();
+        }
+
+        // On-disk file is atlas.msgpack, not atlas.json.
+        assert!(tmp.path().join("atlas.msgpack").exists());
+        assert!(!tmp.path().join("atlas.json").exists());
+
+        // Open auto-detects format and reads data back.
+        let s2 = Atlas::open_path(tmp.path()).await.unwrap();
+        let ds2 = s2.open_dataset("ds").await.unwrap();
+        let result = ds2.read_array::<f32>("arr", vec![], vec![]).await.unwrap().unwrap();
+        assert_eq!(result, data.into_shared());
+    }
+
+    #[tokio::test]
     async fn create_path_creates_missing_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let nested = tmp.path().join("missing").join("nested");
@@ -395,5 +457,57 @@ mod tests {
 
         assert!(nested.exists() && nested.is_dir());
         assert!(nested.join("atlas.json").exists());
+    }
+
+    /// Reading array `x` from many datasets must not open files for arrays
+    /// `y` and `z` that those datasets also reference. This is the load-bearing
+    /// regression test for lazy initialization.
+    #[tokio::test]
+    async fn reading_one_array_leaves_others_uninitialized() {
+        let (store, prefix) = make_store();
+
+        // Seed: two datasets, each defining arrays x, y, z.
+        let mut s = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+            .await
+            .unwrap();
+        for ds_name in ["ds_a", "ds_b"] {
+            let mut ds = s.create_dataset(ds_name).await.unwrap();
+            for arr in ["x", "y", "z"] {
+                ds.define_array::<f32>(arr, vec!["i".into()], vec![2], None, None)
+                    .await
+                    .unwrap();
+                let data = ndarray::arr1(&[1.0_f32, 2.0]).into_dyn();
+                ds.write_array(arr, vec![0], data.view()).await.unwrap();
+            }
+        }
+        s.flush().await.unwrap();
+        drop(s);
+
+        // Reopen — fresh cache, nothing initialized.
+        let s = Atlas::open(store, prefix).await.unwrap();
+        assert!(
+            s.cache.files.read().is_empty(),
+            "cache should start empty after open"
+        );
+
+        // Read only `x` from both datasets.
+        let ds_a = s.open_dataset("ds_a").await.unwrap();
+        let ds_b = s.open_dataset("ds_b").await.unwrap();
+        let _ = ds_a.read_array::<f32>("x", vec![], vec![]).await.unwrap();
+        let _ = ds_b.read_array::<f32>("x", vec![], vec![]).await.unwrap();
+
+        let files = s.cache.files.read();
+        assert!(
+            files.get("x").is_some_and(|a| a.try_get().is_some()),
+            "array `x` must be initialized after read"
+        );
+        assert!(
+            files.get("y").map_or(true, |a| a.try_get().is_none()),
+            "array `y` must NOT be initialized — was never read"
+        );
+        assert!(
+            files.get("z").map_or(true, |a| a.try_get().is_none()),
+            "array `z` must NOT be initialized — was never read"
+        );
     }
 }

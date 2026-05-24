@@ -20,6 +20,10 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("metadata error: {0}")]
     Meta(#[from] serde_json::Error),
+    #[error("metadata encode error: {0}")]
+    MetaEncode(#[from] rmp_serde::encode::Error),
+    #[error("metadata decode error: {0}")]
+    MetaDecode(#[from] rmp_serde::decode::Error),
     #[error("object store error: {0}")]
     ObjectStore(#[from] object_store::Error),
 }

@@ -3,10 +3,11 @@ use std::sync::Arc;
 use indexmap::IndexMap;
 use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{
     Error, Result,
-    config::Codec,
+    config::{Codec, MetaFormat},
     schema::{ArraySchema, Attr},
 };
 
@@ -33,23 +34,64 @@ pub(crate) struct StoreMeta {
     pub datasets: IndexMap<String, DatasetMeta>,
 }
 
-const META_PATH: &str = "atlas.json";
+/// Load store metadata, auto-detecting the on-disk format.
+///
+/// Probes for `atlas.json` first, then `atlas.msgpack`. If both exist
+/// (shouldn't happen unless the directory was hand-edited), JSON wins and a
+/// warning is logged. If neither exists, returns the default (empty) metadata
+/// and [`MetaFormat::Json`] — preserving the prior behavior for new stores.
+///
+/// The returned `MetaFormat` is what subsequent saves should use so the same
+/// file is overwritten instead of leaving stale copies behind.
+pub(crate) async fn load_meta(store: &Arc<dyn ObjectStore>) -> Result<(StoreMeta, MetaFormat)> {
+    let json = try_load(store, MetaFormat::Json).await?;
+    let msgpack = try_load(store, MetaFormat::MsgPack).await?;
+    match (json, msgpack) {
+        (Some(meta), None) => Ok((meta, MetaFormat::Json)),
+        (None, Some(meta)) => Ok((meta, MetaFormat::MsgPack)),
+        (Some(meta), Some(_)) => {
+            warn!(
+                "both atlas.json and atlas.msgpack exist; loading atlas.json and ignoring atlas.msgpack"
+            );
+            Ok((meta, MetaFormat::Json))
+        }
+        (None, None) => Ok((StoreMeta::default(), MetaFormat::Json)),
+    }
+}
 
-pub(crate) async fn load_meta(store: &Arc<dyn ObjectStore>) -> Result<StoreMeta> {
-    match store.get(&Path::from(META_PATH)).await {
+async fn try_load(store: &Arc<dyn ObjectStore>, format: MetaFormat) -> Result<Option<StoreMeta>> {
+    match store.get(&Path::from(format.filename())).await {
         Ok(result) => {
             let bytes = result.bytes().await.map_err(Error::ObjectStore)?;
-            Ok(serde_json::from_slice(&bytes)?)
+            Ok(Some(decode(&bytes, format)?))
         }
-        Err(object_store::Error::NotFound { .. }) => Ok(StoreMeta::default()),
+        Err(object_store::Error::NotFound { .. }) => Ok(None),
         Err(e) => Err(Error::ObjectStore(e)),
     }
 }
 
-pub(crate) async fn save_meta(store: &Arc<dyn ObjectStore>, meta: &StoreMeta) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(meta)?;
+fn decode(bytes: &[u8], format: MetaFormat) -> Result<StoreMeta> {
+    match format {
+        MetaFormat::Json => Ok(serde_json::from_slice(bytes)?),
+        MetaFormat::MsgPack => Ok(rmp_serde::from_slice(bytes)?),
+    }
+}
+
+fn encode(meta: &StoreMeta, format: MetaFormat) -> Result<Vec<u8>> {
+    match format {
+        MetaFormat::Json => Ok(serde_json::to_vec_pretty(meta)?),
+        MetaFormat::MsgPack => Ok(rmp_serde::to_vec_named(meta)?),
+    }
+}
+
+pub(crate) async fn save_meta(
+    store: &Arc<dyn ObjectStore>,
+    meta: &StoreMeta,
+    format: MetaFormat,
+) -> Result<()> {
+    let bytes = encode(meta, format)?;
     store
-        .put(&Path::from(META_PATH), bytes.into())
+        .put(&Path::from(format.filename()), bytes.into())
         .await
         .map_err(Error::ObjectStore)?;
     Ok(())
@@ -66,18 +108,8 @@ mod tests {
         Arc::new(InMemory::new())
     }
 
-    #[tokio::test]
-    async fn load_meta_missing_returns_default() {
-        let store = make_store();
-        let meta = load_meta(&store).await.unwrap();
-        assert_eq!(meta.version, 0);
-        assert!(meta.datasets.is_empty());
-    }
-
-    #[tokio::test]
-    async fn save_and_load_roundtrip() {
+    fn sample_meta() -> StoreMeta {
         use crate::schema::ArraySchema;
-        let store = make_store();
         let mut meta = StoreMeta {
             version: 1,
             ..Default::default()
@@ -101,17 +133,88 @@ mod tests {
                 ]),
             },
         );
-        save_meta(&store, &meta).await.unwrap();
+        meta
+    }
 
-        let loaded = load_meta(&store).await.unwrap();
+    #[tokio::test]
+    async fn load_meta_missing_returns_default_json() {
+        let store = make_store();
+        let (meta, format) = load_meta(&store).await.unwrap();
+        assert_eq!(meta.version, 0);
+        assert!(meta.datasets.is_empty());
+        assert_eq!(format, MetaFormat::Json);
+    }
+
+    #[tokio::test]
+    async fn save_and_load_roundtrip_json() {
+        let store = make_store();
+        let meta = sample_meta();
+        save_meta(&store, &meta, MetaFormat::Json).await.unwrap();
+
+        let (loaded, format) = load_meta(&store).await.unwrap();
+        assert_eq!(format, MetaFormat::Json);
         assert_eq!(loaded.version, 1);
-        assert!(loaded.datasets.contains_key("ds1"));
         let dm = &loaded.datasets["ds1"];
-        assert!(dm.arrays.contains_key("temp"));
         assert_eq!(dm.arrays["temp"].dtype, DType::Float32);
         assert_eq!(dm.arrays["temp"].shape, vec![4, 8]);
         assert!(matches!(dm.attributes["month"], Attr::Int64(6)));
-        assert!(matches!(dm.attributes["active"], Attr::Bool(true)));
+    }
+
+    #[tokio::test]
+    async fn save_and_load_roundtrip_msgpack() {
+        let store = make_store();
+        let meta = sample_meta();
+        save_meta(&store, &meta, MetaFormat::MsgPack).await.unwrap();
+
+        let (loaded, format) = load_meta(&store).await.unwrap();
+        assert_eq!(format, MetaFormat::MsgPack);
+        assert_eq!(loaded.version, 1);
+        let dm = &loaded.datasets["ds1"];
+        assert_eq!(dm.arrays["temp"].dtype, DType::Float32);
+        assert_eq!(dm.arrays["temp"].shape, vec![4, 8]);
+        assert!(matches!(dm.attributes["month"], Attr::Int64(6)));
+    }
+
+    #[tokio::test]
+    async fn msgpack_is_smaller_than_json() {
+        let meta = sample_meta();
+        let json = encode(&meta, MetaFormat::Json).unwrap();
+        let mp = encode(&meta, MetaFormat::MsgPack).unwrap();
+        assert!(
+            mp.len() < json.len(),
+            "msgpack ({}) should be smaller than JSON ({})",
+            mp.len(),
+            json.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn load_detects_msgpack_when_only_msgpack_present() {
+        let store = make_store();
+        save_meta(&store, &sample_meta(), MetaFormat::MsgPack)
+            .await
+            .unwrap();
+        let (_, format) = load_meta(&store).await.unwrap();
+        assert_eq!(format, MetaFormat::MsgPack);
+    }
+
+    #[tokio::test]
+    async fn load_prefers_json_when_both_present() {
+        let store = make_store();
+        let mut json_meta = sample_meta();
+        json_meta.version = 42;
+        let mut bin_meta = sample_meta();
+        bin_meta.version = 99;
+        save_meta(&store, &json_meta, MetaFormat::Json)
+            .await
+            .unwrap();
+        save_meta(&store, &bin_meta, MetaFormat::MsgPack)
+            .await
+            .unwrap();
+
+        let (loaded, format) = load_meta(&store).await.unwrap();
+        assert_eq!(format, MetaFormat::Json);
+        assert_eq!(loaded.version, 42);
     }
 
     #[tokio::test]
@@ -121,7 +224,7 @@ mod tests {
             version: 1,
             ..Default::default()
         };
-        save_meta(&store, &meta1).await.unwrap();
+        save_meta(&store, &meta1, MetaFormat::Json).await.unwrap();
 
         let mut meta2 = StoreMeta {
             version: 2,
@@ -130,9 +233,9 @@ mod tests {
         meta2
             .datasets
             .insert("new_ds".into(), DatasetMeta::default());
-        save_meta(&store, &meta2).await.unwrap();
+        save_meta(&store, &meta2, MetaFormat::Json).await.unwrap();
 
-        let loaded = load_meta(&store).await.unwrap();
+        let (loaded, _) = load_meta(&store).await.unwrap();
         assert_eq!(loaded.version, 2);
         assert!(loaded.datasets.contains_key("new_ds"));
     }

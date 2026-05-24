@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use atlas::{Atlas, Codec, StoreConfig};
+use atlas::{Atlas, Codec, MetaFormat, StoreConfig};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -21,6 +21,18 @@ fn parse_codec(s: &str) -> PyResult<Codec> {
     })
 }
 
+fn parse_meta_format(s: &str) -> PyResult<MetaFormat> {
+    Ok(match s.to_ascii_lowercase().as_str() {
+        "json" => MetaFormat::Json,
+        "msgpack" | "mp" => MetaFormat::MsgPack,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown meta_format: {other:?} (expected 'json' or 'msgpack')"
+            )))
+        }
+    })
+}
+
 #[pyclass(name = "Atlas", module = "pyatlas._pyatlas")]
 pub struct PyAtlas {
     pub(crate) inner: Atlas,
@@ -30,10 +42,11 @@ pub struct PyAtlas {
 impl PyAtlas {
     /// Create a new store at the given local filesystem path.
     #[staticmethod]
-    #[pyo3(signature = (path, codec="zstd"))]
-    fn create(py: Python<'_>, path: PathBuf, codec: &str) -> PyResult<Self> {
+    #[pyo3(signature = (path, codec="zstd", meta_format="json"))]
+    fn create(py: Python<'_>, path: PathBuf, codec: &str, meta_format: &str) -> PyResult<Self> {
         let codec = parse_codec(codec)?;
-        let config = StoreConfig { codec };
+        let meta_format = parse_meta_format(meta_format)?;
+        let config = StoreConfig { codec, meta_format };
         let inner = py
             .detach(|| runtime().block_on(Atlas::create_path(path, config)))
             .map_err(to_py_err)?;

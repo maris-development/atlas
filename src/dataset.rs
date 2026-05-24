@@ -1,31 +1,26 @@
 use std::{collections::HashMap, sync::Arc};
 
-use array_format::{
-    ArrayElement, ArrayFile, ArrayStats, DeltaCache, FileConfig, FillValue, Lz4Codec,
-    NoCompression, ZstdCodec,
-};
+use array_format::{ArrayElement, ArrayStats, DeltaCache, FillValue};
 use ndarray::{ArcArray, ArrayView, IxDyn};
-use object_store::{ObjectStore, ObjectStoreExt, path::Path as OsPath};
+use object_store::ObjectStore;
 use parking_lot::{Mutex, RwLock};
-use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{debug, instrument, trace};
 
 use crate::{
     Error, Result,
+    array::AtlasArray,
     config::Codec,
     meta::{DatasetMeta, StoreMeta},
     schema::{ArraySchema, Attr},
 };
 
-/// Per-file lock: readers (`read_array`, `array_stats`) share concurrent access;
-/// writers (`write_array`, …) take an exclusive lock.
-pub(crate) type CachedFile = Arc<AsyncRwLock<ArrayFile>>;
-
-/// Shared cache map plus the unified `DeltaCache` that every `ArrayFile` in this
-/// Atlas plugs into. The map lock (`parking_lot::RwLock`) is never held across an
-/// `await` point; the `DeltaCache` enforces one block/I/O budget across all files.
+/// Shared lazy-handle map: array name → `Arc<AtlasArray>`. Cloned by reference
+/// from `Atlas` into every `DatasetView`, so all views observe the same
+/// initialization state. The map lock (`parking_lot::RwLock`) is never held
+/// across an `await` point; `AtlasArray` defers its actual I/O via
+/// `tokio::sync::OnceCell` so each underlying file opens at most once.
 pub(crate) struct ArrayCache {
-    pub(crate) files: RwLock<HashMap<String, CachedFile>>,
+    pub(crate) files: RwLock<HashMap<String, Arc<AtlasArray>>>,
     pub(crate) delta: Arc<DeltaCache>,
 }
 
@@ -36,13 +31,38 @@ impl ArrayCache {
             delta,
         }
     }
+
+    /// Returns the lazy handle for `array_name`, registering a new one if
+    /// absent. Does **not** open or create the underlying file — that happens
+    /// on the first `AtlasArray::get().await`.
+    pub(crate) fn get_or_insert(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        array_name: &str,
+        codec: &Codec,
+    ) -> Arc<AtlasArray> {
+        if let Some(arc) = self.files.read().get(array_name) {
+            return arc.clone();
+        }
+        let mut guard = self.files.write();
+        guard
+            .entry(array_name.to_string())
+            .or_insert_with(|| {
+                Arc::new(AtlasArray::new(
+                    store.clone(),
+                    codec.clone(),
+                    array_name.to_string(),
+                    self.delta.clone(),
+                ))
+            })
+            .clone()
+    }
 }
 
 pub struct DatasetView {
     store: Arc<dyn ObjectStore>,
-    cache: Arc<ArrayCache>,
+    pub(crate) cache: Arc<ArrayCache>,
     name: String,
-    arrays: HashMap<String, CachedFile>,
     /// Shared handle to the parent `Atlas`'s in-memory `StoreMeta`. All
     /// mutations on this view go through here; persistence happens on
     /// `Atlas::flush()`.
@@ -55,7 +75,6 @@ impl DatasetView {
         store: Arc<dyn ObjectStore>,
         cache: Arc<ArrayCache>,
         name: String,
-        arrays: HashMap<String, CachedFile>,
         atlas_meta: Arc<Mutex<StoreMeta>>,
         codec: Codec,
     ) -> Self {
@@ -63,7 +82,6 @@ impl DatasetView {
             store,
             cache,
             name,
-            arrays,
             atlas_meta,
             codec,
         }
@@ -84,7 +102,12 @@ impl DatasetView {
     }
 
     pub fn list_arrays(&self) -> Vec<String> {
-        self.arrays.keys().cloned().collect()
+        self.atlas_meta
+            .lock()
+            .datasets
+            .get(&self.name)
+            .map(|d| d.arrays.keys().cloned().collect())
+            .unwrap_or_default()
     }
 
     pub fn set_attribute(&mut self, key: &str, value: Attr) {
@@ -118,8 +141,11 @@ impl DatasetView {
     /// if no such array exists or stats haven't been computed yet (stats are
     /// computed on flush).
     pub async fn array_stats(&self, array: &str) -> Option<ArrayStats> {
-        let arc = self.arrays.get(array)?.clone();
-        arc.read().await.array_stats(&self.name).cloned()
+        let codec = self.array_codec(array)?;
+        let handle = self.cache.get_or_insert(&self.store, array, &codec);
+        let arc = handle.get().await.ok()?;
+        let guard = arc.read().await;
+        guard.array_stats(&self.name).cloned()
     }
 
     #[instrument(skip(self, fill_value), fields(dataset = %self.name, dtype = ?T::DTYPE))]
@@ -132,11 +158,17 @@ impl DatasetView {
         fill_value: Option<FillValue>,
     ) -> Result<()> {
         crate::validate_name(array)?;
-        if self.arrays.contains_key(array) {
-            return Err(Error::ArrayAlreadyExists(array.to_string()));
+        {
+            let meta = self.atlas_meta.lock();
+            if let Some(ds) = meta.datasets.get(&self.name) {
+                if ds.arrays.contains_key(array) {
+                    return Err(Error::ArrayAlreadyExists(array.to_string()));
+                }
+            }
         }
 
-        let arc = get_or_open_cached(&self.store, &self.cache, array, &self.codec).await?;
+        let handle = self.cache.get_or_insert(&self.store, array, &self.codec);
+        let arc = handle.get().await?;
         arc.write().await.define_array::<T>(
             &self.name,
             dims.clone(),
@@ -144,7 +176,6 @@ impl DatasetView {
             chunk_shape.clone(),
             fill_value,
         )?;
-        self.arrays.insert(array.to_string(), arc);
 
         let actual_chunk = chunk_shape.unwrap_or_else(|| shape.clone());
         debug!(?shape, chunk_shape = ?actual_chunk, "defined array");
@@ -171,11 +202,11 @@ impl DatasetView {
         start: Vec<usize>,
         data: ArrayView<'_, T, IxDyn>,
     ) -> Result<()> {
-        let arc = self
-            .arrays
-            .get(array)
-            .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?
-            .clone();
+        let codec = self
+            .array_codec(array)
+            .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?;
+        let handle = self.cache.get_or_insert(&self.store, array, &codec);
+        let arc = handle.get().await?;
         let mut guard = arc.write().await;
         let shape: Vec<usize> = data.shape().to_vec();
         let bytes = data.len() * std::mem::size_of::<T>();
@@ -201,14 +232,16 @@ impl DatasetView {
         start: Vec<usize>,
         shape: Vec<usize>,
     ) -> Result<Option<ArcArray<T, IxDyn>>> {
-        let arc = match self.arrays.get(array) {
-            Some(arc) => arc.clone(),
+        let codec = match self.array_codec(array) {
+            Some(c) => c,
             None => {
                 debug!("array not present in dataset");
                 return Ok(None);
             }
         };
         trace!(?start, ?shape, "reading array");
+        let handle = self.cache.get_or_insert(&self.store, array, &codec);
+        let arc = handle.get().await?;
         let guard = arc.read().await;
         Ok(Some(guard.read_array::<T>(&self.name, start, shape).await?))
     }
@@ -216,29 +249,40 @@ impl DatasetView {
     /// Returns the fill value passed to `define_array` for `array`, or `None`
     /// if the array isn't present in this dataset or was defined without one.
     pub async fn array_fill_value(&self, array: &str) -> Result<Option<FillValue>> {
-        let arc = match self.arrays.get(array) {
-            Some(arc) => arc.clone(),
+        let codec = match self.array_codec(array) {
+            Some(c) => c,
             None => return Ok(None),
         };
+        let handle = self.cache.get_or_insert(&self.store, array, &codec);
+        let arc = handle.get().await?;
         let guard = arc.read().await;
         Ok(guard.get_array(&self.name)?.fill_value.clone())
     }
 
     #[instrument(skip(self), fields(dataset = %self.name))]
     pub async fn delete_array(&mut self, array: &str) -> Result<()> {
-        let arc = self
-            .arrays
-            .get(array)
-            .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?
-            .clone();
+        let codec = self
+            .array_codec(array)
+            .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?;
+        let handle = self.cache.get_or_insert(&self.store, array, &codec);
+        let arc = handle.get().await?;
         arc.write().await.delete(&self.name)?;
-        self.arrays.remove(array);
         let mut meta = self.atlas_meta.lock();
         if let Some(ds_meta) = meta.datasets.get_mut(&self.name) {
             ds_meta.arrays.shift_remove(array);
         }
         debug!("deleted array");
         Ok(())
+    }
+
+    /// Looks up the per-array codec from `atlas_meta`. Returns `None` if the
+    /// array isn't defined in this dataset.
+    fn array_codec(&self, array: &str) -> Option<Codec> {
+        self.atlas_meta
+            .lock()
+            .datasets
+            .get(&self.name)
+            .and_then(|d| d.arrays.get(array).map(|s| s.codec.clone()))
     }
 }
 
@@ -249,113 +293,19 @@ pub(crate) async fn open_dataset_view(
     name: &str,
     codec: Codec,
 ) -> Result<DatasetView> {
-    // Snapshot per-dataset array names + codecs under a brief lock; the
-    // resulting `arrays` map is exclusively this dataset's entries.
-    let specs: Vec<(String, Codec)> = {
+    {
         let meta = atlas_meta.lock();
-        let ds = meta
-            .datasets
-            .get(name)
-            .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?;
-        ds.arrays
-            .iter()
-            .map(|(n, s)| (n.clone(), s.codec.clone()))
-            .collect()
-    };
-    let mut arrays = HashMap::new();
-    for (array_name, array_codec) in specs {
-        let arc = get_or_open_cached(&store, &cache, &array_name, &array_codec).await?;
-        arrays.insert(array_name, arc);
+        if !meta.datasets.contains_key(name) {
+            return Err(Error::DatasetNotFound(name.to_string()));
+        }
     }
-
     Ok(DatasetView::new(
         store,
         cache,
         name.to_string(),
-        arrays,
         atlas_meta,
         codec,
     ))
-}
-
-/// Returns the cached `ArrayFile` for `array_name`, opening it first if needed.
-/// The cache map lock (`parking_lot::RwLock`) is never held across an `await` point.
-pub(crate) async fn get_or_open_cached(
-    store: &Arc<dyn ObjectStore>,
-    cache: &Arc<ArrayCache>,
-    array_name: &str,
-    codec: &Codec,
-) -> Result<CachedFile> {
-    {
-        let guard = cache.files.read();
-        if let Some(arc) = guard.get(array_name) {
-            return Ok(arc.clone());
-        }
-    }
-
-    let path = OsPath::from(format!("{}/data.af", array_name));
-    let file = match store.head(&path).await {
-        Ok(_) => {
-            debug!(array = array_name, ?codec, "opening existing array file");
-            open_array_file(store.clone(), path, codec, &cache.delta).await?
-        }
-        Err(object_store::Error::NotFound { .. }) => {
-            debug!(array = array_name, ?codec, "creating new array file");
-            create_array_file(store.clone(), path, codec, &cache.delta).await?
-        }
-        Err(e) => return Err(Error::ObjectStore(e)),
-    };
-
-    let arc = Arc::new(AsyncRwLock::new(file));
-    let mut guard = cache.files.write();
-    Ok(guard.entry(array_name.to_string()).or_insert(arc).clone())
-}
-
-async fn open_array_file(
-    store: Arc<dyn ObjectStore>,
-    path: OsPath,
-    codec: &Codec,
-    delta: &Arc<DeltaCache>,
-) -> Result<ArrayFile> {
-    Ok(match codec {
-        Codec::Zstd => {
-            ArrayFile::open(store, path, file_config(ZstdCodec::default(), delta)).await?
-        }
-        Codec::Lz4 => ArrayFile::open(store, path, file_config(Lz4Codec, delta)).await?,
-        Codec::Uncompressed => {
-            ArrayFile::open(store, path, file_config(NoCompression, delta)).await?
-        }
-    })
-}
-
-async fn create_array_file(
-    store: Arc<dyn ObjectStore>,
-    path: OsPath,
-    codec: &Codec,
-    delta: &Arc<DeltaCache>,
-) -> Result<ArrayFile> {
-    Ok(match codec {
-        Codec::Zstd => {
-            ArrayFile::create(store, path, file_config(ZstdCodec::default(), delta)).await?
-        }
-        Codec::Lz4 => ArrayFile::create(store, path, file_config(Lz4Codec, delta)).await?,
-        Codec::Uncompressed => {
-            ArrayFile::create(store, path, file_config(NoCompression, delta)).await?
-        }
-    })
-}
-
-fn file_config<C: array_format::CompressionCodec>(
-    codec: C,
-    delta: &Arc<DeltaCache>,
-) -> FileConfig<C> {
-    FileConfig {
-        codec,
-        block_target_size: 8 * 1024 * 1024,
-        cache_capacity: 256 * 1024 * 1024,
-        io_cache_capacity: 64 * 1024 * 1024,
-        cache: Some(Arc::clone(delta)),
-    }
 }
 
 #[cfg(test)]
@@ -386,7 +336,6 @@ mod tests {
             store,
             test_cache(),
             name.to_string(),
-            HashMap::new(),
             shared_meta_with(name),
             Codec::default(),
         )
@@ -610,6 +559,21 @@ mod tests {
         assert!(view.array_stats("arr").await.is_none());
     }
 
+    /// Flush every initialized array file in the shared cache. Used by tests
+    /// that need to persist stats without going through `Atlas::flush`.
+    async fn flush_initialized(cache: &Arc<ArrayCache>) {
+        let snapshot: Vec<_> = {
+            let guard = cache.files.read();
+            guard
+                .values()
+                .filter_map(|a| a.try_get().map(|arc| (a.clone(), arc)))
+                .collect()
+        };
+        for (_handle, arc) in snapshot {
+            arc.write().await.flush().await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn array_stats_populated_after_flush() {
         use array_format::StatValue;
@@ -620,10 +584,7 @@ mod tests {
             .unwrap();
         let data = ndarray::arr1(&[1.0_f32, 3.0, 2.0, 4.0]).into_dyn();
         view.write_array("arr", vec![0], data.view()).await.unwrap();
-        // Flush via direct ArrayFile flush (view no longer exposes flush).
-        for arc in view.arrays.values() {
-            arc.write().await.flush().await.unwrap();
-        }
+        flush_initialized(&view.cache).await;
 
         let stats = view.array_stats("arr").await.unwrap();
         assert_eq!(stats.row_count, 4);
@@ -649,9 +610,7 @@ mod tests {
         // Two cells equal the fill (-1); four are real data.
         let data = ndarray::arr1(&[5_i32, -1, 7, -1, 2, 9]).into_dyn();
         view.write_array("arr", vec![0], data.view()).await.unwrap();
-        for arc in view.arrays.values() {
-            arc.write().await.flush().await.unwrap();
-        }
+        flush_initialized(&view.cache).await;
 
         let stats = view.array_stats("arr").await.unwrap();
         assert_eq!(stats.row_count, 6);
@@ -676,9 +635,7 @@ mod tests {
             .unwrap();
         let data = ndarray::arr1(&[5_i32, -1, 7, 9]).into_dyn();
         view.write_array("arr", vec![0], data.view()).await.unwrap();
-        for arc in view.arrays.values() {
-            arc.write().await.flush().await.unwrap();
-        }
+        flush_initialized(&view.cache).await;
 
         let stats = view.array_stats("arr").await.unwrap();
         assert_eq!(stats.row_count, 4);
@@ -704,9 +661,7 @@ mod tests {
         // NaN cells are matched to the NaN fill (bit-pattern compare in array_format).
         let data = ndarray::arr1(&[1.0_f64, f64::NAN, 3.0, f64::NAN]).into_dyn();
         view.write_array("arr", vec![0], data.view()).await.unwrap();
-        for arc in view.arrays.values() {
-            arc.write().await.flush().await.unwrap();
-        }
+        flush_initialized(&view.cache).await;
 
         let stats = view.array_stats("arr").await.unwrap();
         assert_eq!(stats.row_count, 4);
@@ -732,7 +687,6 @@ mod tests {
             store.clone(),
             cache.clone(),
             "ds_a".to_string(),
-            HashMap::new(),
             shared.clone(),
             Codec::default(),
         );
@@ -745,7 +699,6 @@ mod tests {
             store.clone(),
             cache.clone(),
             "ds_b".to_string(),
-            HashMap::new(),
             shared.clone(),
             Codec::default(),
         );
@@ -754,11 +707,12 @@ mod tests {
             .await
             .unwrap();
 
-        let ptr_a = Arc::as_ptr(view_a.arrays.get("arr").unwrap());
-        let ptr_b = Arc::as_ptr(view_b.arrays.get("arr").unwrap());
-        assert_eq!(
-            ptr_a, ptr_b,
-            "expected both views to share the same CachedFile"
+        // Both views share the same lazy handle from the global cache.
+        let handle_a = view_a.cache.files.read().get("arr").unwrap().clone();
+        let handle_b = view_b.cache.files.read().get("arr").unwrap().clone();
+        assert!(
+            Arc::ptr_eq(&handle_a, &handle_b),
+            "expected both views to share the same AtlasArray handle"
         );
     }
 }

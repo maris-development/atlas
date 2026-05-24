@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut s = Atlas::create(
         store.clone(),
         prefix.clone(),
-        StoreConfig { codec: Codec::Lz4 },
+        StoreConfig { codec: Codec::Lz4, ..Default::default() },
     )
     .await?;
 

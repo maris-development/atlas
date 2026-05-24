@@ -32,6 +32,7 @@
 //! until [`Atlas::flush`] or [`Atlas::close`] is called. Dropping an `Atlas`
 //! without flushing abandons every pending in-memory write.
 
+mod array;
 mod config;
 mod dataset;
 mod error;
@@ -39,7 +40,7 @@ mod meta;
 mod schema;
 mod store;
 
-pub use config::{Codec, StoreConfig};
+pub use config::{Codec, MetaFormat, StoreConfig};
 pub use dataset::DatasetView;
 pub use error::{Error, Result};
 pub use meta::DatasetMeta;
