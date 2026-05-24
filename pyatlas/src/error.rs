@@ -26,6 +26,7 @@ pub fn to_py_err(err: atlas::Error) -> PyErr {
         | atlas::Error::ArrayFormat(_)
         | atlas::Error::Meta(_)
         | atlas::Error::MetaEncode(_)
-        | atlas::Error::MetaDecode(_)) => PyRuntimeError::new_err(e.to_string()),
+        | atlas::Error::MetaDecode(_)
+        | atlas::Error::MetaLz4Decompress(_)) => PyRuntimeError::new_err(e.to_string()),
     }
 }

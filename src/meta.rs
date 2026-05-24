@@ -7,7 +7,7 @@ use tracing::warn;
 
 use crate::{
     Error, Result,
-    config::{Codec, MetaFormat},
+    config::{Codec, META_VARIANTS, MetaFormat},
     schema::{ArraySchema, Attr},
 };
 
@@ -34,40 +34,71 @@ pub(crate) struct StoreMeta {
     pub datasets: IndexMap<String, DatasetMeta>,
 }
 
-/// Load store metadata, auto-detecting the on-disk format.
+/// Load store metadata, auto-detecting both the encoding format and the
+/// compression from the on-disk filename.
 ///
-/// Probes for `atlas.json` first, then `atlas.msgpack`. If both exist
-/// (shouldn't happen unless the directory was hand-edited), JSON wins and a
-/// warning is logged. If neither exists, returns the default (empty) metadata
-/// and [`MetaFormat::Json`] — preserving the prior behavior for new stores.
+/// Uses a single [`ObjectStore::list_with_delimiter`] to enumerate the
+/// top-level files and matches them against the six known
+/// `atlas.{json,msgpack}{,.zst,.lz4}` filenames. If more than one matches
+/// (shouldn't happen unless the directory was hand-edited), the warning
+/// names them and the priority order in
+/// [`META_VARIANTS`](crate::config::META_VARIANTS) decides — uncompressed
+/// before compressed within each format, JSON before MsgPack overall.
 ///
-/// The returned `MetaFormat` is what subsequent saves should use so the same
-/// file is overwritten instead of leaving stale copies behind.
-pub(crate) async fn load_meta(store: &Arc<dyn ObjectStore>) -> Result<(StoreMeta, MetaFormat)> {
-    let json = try_load(store, MetaFormat::Json).await?;
-    let msgpack = try_load(store, MetaFormat::MsgPack).await?;
-    match (json, msgpack) {
-        (Some(meta), None) => Ok((meta, MetaFormat::Json)),
-        (None, Some(meta)) => Ok((meta, MetaFormat::MsgPack)),
-        (Some(meta), Some(_)) => {
-            warn!(
-                "both atlas.json and atlas.msgpack exist; loading atlas.json and ignoring atlas.msgpack"
-            );
-            Ok((meta, MetaFormat::Json))
-        }
-        (None, None) => Ok((StoreMeta::default(), MetaFormat::Json)),
-    }
-}
+/// If no metadata file is found, returns the default (empty) metadata with
+/// `(Json, Uncompressed)` so a freshly-created store gets the legacy
+/// `atlas.json` filename on its first save.
+///
+/// The returned `(MetaFormat, Codec)` is what subsequent saves should use so
+/// the same file is overwritten instead of leaving stale copies behind.
+pub(crate) async fn load_meta(
+    store: &Arc<dyn ObjectStore>,
+) -> Result<(StoreMeta, MetaFormat, Codec)> {
+    let listing = store
+        .list_with_delimiter(None)
+        .await
+        .map_err(Error::ObjectStore)?;
 
-async fn try_load(store: &Arc<dyn ObjectStore>, format: MetaFormat) -> Result<Option<StoreMeta>> {
-    match store.get(&Path::from(format.filename())).await {
-        Ok(result) => {
-            let bytes = result.bytes().await.map_err(Error::ObjectStore)?;
-            Ok(Some(decode(&bytes, format)?))
+    // Collect filenames present at the root.
+    let present: std::collections::HashSet<&str> = listing
+        .objects
+        .iter()
+        .filter_map(|o| o.location.filename())
+        .collect();
+
+    let matches: Vec<(MetaFormat, Codec)> = META_VARIANTS
+        .iter()
+        .copied()
+        .filter(|&(fmt, comp)| present.contains(fmt.filename(comp)))
+        .collect();
+
+    let (format, compression) = match matches.as_slice() {
+        [] => return Ok((StoreMeta::default(), MetaFormat::Json, Codec::Uncompressed)),
+        [single] => *single,
+        many => {
+            let names: Vec<&str> = many
+                .iter()
+                .map(|&(f, c)| f.filename(c))
+                .collect();
+            let chosen = many[0];
+            warn!(
+                "multiple metadata files present ({names:?}); loading {} by priority order",
+                chosen.0.filename(chosen.1)
+            );
+            chosen
         }
-        Err(object_store::Error::NotFound { .. }) => Ok(None),
-        Err(e) => Err(Error::ObjectStore(e)),
-    }
+    };
+
+    let bytes = store
+        .get(&Path::from(format.filename(compression)))
+        .await
+        .map_err(Error::ObjectStore)?
+        .bytes()
+        .await
+        .map_err(Error::ObjectStore)?;
+    let raw = decompress(&bytes, compression)?;
+    let meta = decode(&raw, format)?;
+    Ok((meta, format, compression))
 }
 
 fn decode(bytes: &[u8], format: MetaFormat) -> Result<StoreMeta> {
@@ -84,14 +115,36 @@ fn encode(meta: &StoreMeta, format: MetaFormat) -> Result<Vec<u8>> {
     }
 }
 
+fn compress(bytes: Vec<u8>, codec: Codec) -> Result<Vec<u8>> {
+    match codec {
+        Codec::Uncompressed => Ok(bytes),
+        // zstd default level (3) — good ratio at low CPU. Metadata is small,
+        // so even level 19 would be sub-millisecond, but the default is fine.
+        Codec::Zstd => Ok(zstd::stream::encode_all(bytes.as_slice(), 0)?),
+        // lz4_flex compression is infallible; size prefix lets decode know the
+        // output length without scanning.
+        Codec::Lz4 => Ok(lz4_flex::compress_prepend_size(&bytes)),
+    }
+}
+
+fn decompress(bytes: &[u8], codec: Codec) -> Result<Vec<u8>> {
+    match codec {
+        Codec::Uncompressed => Ok(bytes.to_vec()),
+        Codec::Zstd => Ok(zstd::stream::decode_all(bytes)?),
+        Codec::Lz4 => Ok(lz4_flex::decompress_size_prepended(bytes)?),
+    }
+}
+
 pub(crate) async fn save_meta(
     store: &Arc<dyn ObjectStore>,
     meta: &StoreMeta,
     format: MetaFormat,
+    compression: Codec,
 ) -> Result<()> {
-    let bytes = encode(meta, format)?;
+    let encoded = encode(meta, format)?;
+    let bytes = compress(encoded, compression)?;
     store
-        .put(&Path::from(format.filename()), bytes.into())
+        .put(&Path::from(format.filename(compression)), bytes.into())
         .await
         .map_err(Error::ObjectStore)?;
     Ok(())
@@ -137,42 +190,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn load_meta_missing_returns_default_json() {
+    async fn load_meta_missing_returns_default_json_uncompressed() {
         let store = make_store();
-        let (meta, format) = load_meta(&store).await.unwrap();
+        let (meta, format, compression) = load_meta(&store).await.unwrap();
         assert_eq!(meta.version, 0);
         assert!(meta.datasets.is_empty());
         assert_eq!(format, MetaFormat::Json);
+        assert_eq!(compression, Codec::Uncompressed);
     }
 
+    /// Roundtrip every (format, compression) pair through save_meta + load_meta.
+    /// Asserts the detected pair matches what was written.
     #[tokio::test]
-    async fn save_and_load_roundtrip_json() {
-        let store = make_store();
-        let meta = sample_meta();
-        save_meta(&store, &meta, MetaFormat::Json).await.unwrap();
+    async fn save_and_load_roundtrip_all_variants() {
+        for &(format, compression) in &META_VARIANTS {
+            let store = make_store();
+            let meta = sample_meta();
+            save_meta(&store, &meta, format, compression).await.unwrap();
 
-        let (loaded, format) = load_meta(&store).await.unwrap();
-        assert_eq!(format, MetaFormat::Json);
-        assert_eq!(loaded.version, 1);
-        let dm = &loaded.datasets["ds1"];
-        assert_eq!(dm.arrays["temp"].dtype, DType::Float32);
-        assert_eq!(dm.arrays["temp"].shape, vec![4, 8]);
-        assert!(matches!(dm.attributes["month"], Attr::Int64(6)));
-    }
-
-    #[tokio::test]
-    async fn save_and_load_roundtrip_msgpack() {
-        let store = make_store();
-        let meta = sample_meta();
-        save_meta(&store, &meta, MetaFormat::MsgPack).await.unwrap();
-
-        let (loaded, format) = load_meta(&store).await.unwrap();
-        assert_eq!(format, MetaFormat::MsgPack);
-        assert_eq!(loaded.version, 1);
-        let dm = &loaded.datasets["ds1"];
-        assert_eq!(dm.arrays["temp"].dtype, DType::Float32);
-        assert_eq!(dm.arrays["temp"].shape, vec![4, 8]);
-        assert!(matches!(dm.attributes["month"], Attr::Int64(6)));
+            let (loaded, detected_fmt, detected_comp) = load_meta(&store).await.unwrap();
+            assert_eq!(detected_fmt, format, "format mismatch for {format:?}/{compression:?}");
+            assert_eq!(
+                detected_comp, compression,
+                "compression mismatch for {format:?}/{compression:?}"
+            );
+            assert_eq!(loaded.version, 1);
+            let dm = &loaded.datasets["ds1"];
+            assert_eq!(dm.arrays["temp"].dtype, DType::Float32);
+            assert_eq!(dm.arrays["temp"].shape, vec![4, 8]);
+            assert!(matches!(dm.attributes["month"], Attr::Int64(6)));
+        }
     }
 
     #[tokio::test]
@@ -188,33 +235,82 @@ mod tests {
         );
     }
 
+    /// Compression should shrink the encoded bytes. Uses a workload large
+    /// enough to overcome compression framing overhead.
     #[tokio::test]
-    async fn load_detects_msgpack_when_only_msgpack_present() {
-        let store = make_store();
-        save_meta(&store, &sample_meta(), MetaFormat::MsgPack)
-            .await
-            .unwrap();
-        let (_, format) = load_meta(&store).await.unwrap();
-        assert_eq!(format, MetaFormat::MsgPack);
+    async fn compression_shrinks_encoded_bytes() {
+        use crate::schema::ArraySchema;
+        let mut meta = StoreMeta {
+            version: 1,
+            ..Default::default()
+        };
+        for i in 0..30 {
+            let mut dm = DatasetMeta::default();
+            for j in 0..5 {
+                dm.arrays.insert(
+                    format!("arr_{j}"),
+                    ArraySchema {
+                        dtype: DType::Float32,
+                        shape: vec![100, 200, 300],
+                        chunk_shape: vec![10, 20, 30],
+                        dimension_names: vec!["a".into(), "b".into(), "c".into()],
+                        codec: Codec::default(),
+                    },
+                );
+            }
+            meta.datasets.insert(format!("dataset_{i}"), dm);
+        }
+
+        for format in [MetaFormat::Json, MetaFormat::MsgPack] {
+            let raw = encode(&meta, format).unwrap();
+            let zstd = compress(raw.clone(), Codec::Zstd).unwrap();
+            let lz4 = compress(raw.clone(), Codec::Lz4).unwrap();
+            assert!(
+                zstd.len() < raw.len(),
+                "{format:?}: zstd ({}) should be smaller than raw ({})",
+                zstd.len(),
+                raw.len()
+            );
+            assert!(
+                lz4.len() < raw.len(),
+                "{format:?}: lz4 ({}) should be smaller than raw ({})",
+                lz4.len(),
+                raw.len()
+            );
+        }
     }
 
     #[tokio::test]
-    async fn load_prefers_json_when_both_present() {
+    async fn load_detects_msgpack_zstd_when_only_that_present() {
         let store = make_store();
-        let mut json_meta = sample_meta();
-        json_meta.version = 42;
-        let mut bin_meta = sample_meta();
-        bin_meta.version = 99;
-        save_meta(&store, &json_meta, MetaFormat::Json)
+        save_meta(&store, &sample_meta(), MetaFormat::MsgPack, Codec::Zstd)
             .await
             .unwrap();
-        save_meta(&store, &bin_meta, MetaFormat::MsgPack)
-            .await
-            .unwrap();
+        let (_, format, compression) = load_meta(&store).await.unwrap();
+        assert_eq!(format, MetaFormat::MsgPack);
+        assert_eq!(compression, Codec::Zstd);
+    }
 
-        let (loaded, format) = load_meta(&store).await.unwrap();
+    /// When more than one metadata file is present, priority order picks
+    /// uncompressed JSON over everything else.
+    #[tokio::test]
+    async fn load_priority_order_when_many_present() {
+        let store = make_store();
+        let mut a = sample_meta();
+        a.version = 1;
+        let mut b = sample_meta();
+        b.version = 2;
+        let mut c = sample_meta();
+        c.version = 3;
+        // Write three different files; uncompressed-JSON should win.
+        save_meta(&store, &c, MetaFormat::MsgPack, Codec::Zstd).await.unwrap();
+        save_meta(&store, &b, MetaFormat::Json, Codec::Zstd).await.unwrap();
+        save_meta(&store, &a, MetaFormat::Json, Codec::Uncompressed).await.unwrap();
+
+        let (loaded, format, compression) = load_meta(&store).await.unwrap();
         assert_eq!(format, MetaFormat::Json);
-        assert_eq!(loaded.version, 42);
+        assert_eq!(compression, Codec::Uncompressed);
+        assert_eq!(loaded.version, 1);
     }
 
     #[tokio::test]
@@ -224,7 +320,9 @@ mod tests {
             version: 1,
             ..Default::default()
         };
-        save_meta(&store, &meta1, MetaFormat::Json).await.unwrap();
+        save_meta(&store, &meta1, MetaFormat::Json, Codec::Uncompressed)
+            .await
+            .unwrap();
 
         let mut meta2 = StoreMeta {
             version: 2,
@@ -233,9 +331,11 @@ mod tests {
         meta2
             .datasets
             .insert("new_ds".into(), DatasetMeta::default());
-        save_meta(&store, &meta2, MetaFormat::Json).await.unwrap();
+        save_meta(&store, &meta2, MetaFormat::Json, Codec::Uncompressed)
+            .await
+            .unwrap();
 
-        let (loaded, _) = load_meta(&store).await.unwrap();
+        let (loaded, _, _) = load_meta(&store).await.unwrap();
         assert_eq!(loaded.version, 2);
         assert!(loaded.datasets.contains_key("new_ds"));
     }

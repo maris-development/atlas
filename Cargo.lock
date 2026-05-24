@@ -75,6 +75,7 @@ dependencies = [
  "array-format",
  "chrono",
  "indexmap",
+ "lz4_flex",
  "ndarray",
  "object_store",
  "parking_lot",
@@ -85,6 +86,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "zstd",
 ]
 
 [[package]]

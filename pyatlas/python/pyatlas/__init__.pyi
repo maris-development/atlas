@@ -12,7 +12,12 @@ class Atlas:
     """A directory-based store for many named datasets of N-dimensional arrays."""
 
     @staticmethod
-    def create(path: str, codec: str = "zstd", meta_format: str = "json") -> "Atlas":
+    def create(
+        path: str,
+        codec: str = "zstd",
+        meta_format: str = "json",
+        meta_compression: str = "none",
+    ) -> "Atlas":
         """Create a new store at the given local filesystem path.
 
         Args:
@@ -23,6 +28,11 @@ class Atlas:
                 `"json"` (default, written as `atlas.json`) or
                 `"msgpack"` / `"mp"` (written as `atlas.msgpack`, ~30-50%
                 smaller and faster to parse, but not human-readable).
+            meta_compression: Compression applied to the encoded metadata file.
+                `"none"` / `"uncompressed"` (default — filename has no extra
+                suffix), `"zstd"` (suffix `.zst`), or `"lz4"` (suffix `.lz4`).
+                Mostly useful for stores with thousands of datasets on a
+                high-latency object store.
         """
         ...
 
@@ -30,8 +40,9 @@ class Atlas:
     def open(path: str) -> "Atlas":
         """Open an existing store at the given local filesystem path.
 
-        The codec and metadata format are auto-detected from the on-disk files
-        (`atlas.json` or `atlas.msgpack`) — no extra arguments required.
+        The codec, metadata format, and compression are auto-detected from the
+        on-disk filename (`atlas.json`, `atlas.msgpack`, `atlas.json.zst`,
+        `atlas.msgpack.lz4`, etc.) — no extra arguments required.
         """
         ...
 

@@ -18,6 +18,7 @@ pub struct Atlas {
     cache: Arc<ArrayCache>,
     codec: Codec,
     meta_format: MetaFormat,
+    meta_compression: Codec,
 }
 
 impl Atlas {
@@ -28,12 +29,13 @@ impl Atlas {
     #[instrument(skip(store), fields(prefix = %prefix))]
     pub async fn open(store: Arc<dyn ObjectStore>, prefix: Path) -> Result<Self> {
         let store = prefixed(store, prefix);
-        let (meta, meta_format) = load_meta(&store).await?;
-        let codec = meta.codec.clone();
+        let (meta, meta_format, meta_compression) = load_meta(&store).await?;
+        let codec = meta.codec;
         info!(
             datasets = meta.datasets.len(),
             ?codec,
             ?meta_format,
+            ?meta_compression,
             "opened atlas store"
         );
         Ok(Self {
@@ -42,15 +44,16 @@ impl Atlas {
             cache: default_cache(),
             codec,
             meta_format,
+            meta_compression,
         })
     }
 
     /// Create a new store at `prefix` within `store`.
-    #[instrument(skip(store, config), fields(prefix = %prefix, codec = ?config.codec, meta_format = ?config.meta_format))]
+    #[instrument(skip(store, config), fields(prefix = %prefix, codec = ?config.codec, meta_format = ?config.meta_format, meta_compression = ?config.meta_compression))]
     pub async fn create(store: Arc<dyn ObjectStore>, prefix: Path, config: StoreConfig) -> Result<Self> {
         let store = prefixed(store, prefix);
-        let meta = StoreMeta { version: 1, codec: config.codec.clone(), ..Default::default() };
-        save_meta(&store, &meta, config.meta_format).await?;
+        let meta = StoreMeta { version: 1, codec: config.codec, ..Default::default() };
+        save_meta(&store, &meta, config.meta_format, config.meta_compression).await?;
         info!("created atlas store");
         Ok(Self {
             store,
@@ -58,6 +61,7 @@ impl Atlas {
             cache: default_cache(),
             codec: config.codec,
             meta_format: config.meta_format,
+            meta_compression: config.meta_compression,
         })
     }
 
@@ -168,7 +172,7 @@ impl Atlas {
         }
         let meta_snapshot = self.meta.lock().clone();
         let datasets = meta_snapshot.datasets.len();
-        save_meta(&self.store, &meta_snapshot, self.meta_format).await?;
+        save_meta(&self.store, &meta_snapshot, self.meta_format, self.meta_compression).await?;
         info!(files, datasets, "flushed atlas store");
         Ok(())
     }
@@ -441,6 +445,37 @@ mod tests {
         assert!(!tmp.path().join("atlas.json").exists());
 
         // Open auto-detects format and reads data back.
+        let s2 = Atlas::open_path(tmp.path()).await.unwrap();
+        let ds2 = s2.open_dataset("ds").await.unwrap();
+        let result = ds2.read_array::<f32>("arr", vec![], vec![]).await.unwrap().unwrap();
+        assert_eq!(result, data.into_shared());
+    }
+
+    #[tokio::test]
+    async fn compressed_meta_roundtrip_through_atlas() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = ndarray::arr1(&[1.0_f32, 2.0, 3.0]).into_dyn();
+
+        {
+            let config = StoreConfig {
+                meta_format: MetaFormat::MsgPack,
+                meta_compression: Codec::Zstd,
+                ..Default::default()
+            };
+            let mut s = Atlas::create_path(tmp.path(), config).await.unwrap();
+            {
+                let mut ds = s.create_dataset("ds").await.unwrap();
+                ds.define_array::<f32>("arr", vec!["x".into()], vec![3], None, None).await.unwrap();
+                ds.write_array("arr", vec![0], data.view()).await.unwrap();
+            }
+            s.flush().await.unwrap();
+        }
+
+        // On-disk file is the zstd-compressed msgpack variant.
+        assert!(tmp.path().join("atlas.msgpack.zst").exists());
+        assert!(!tmp.path().join("atlas.json").exists());
+        assert!(!tmp.path().join("atlas.msgpack").exists());
+
         let s2 = Atlas::open_path(tmp.path()).await.unwrap();
         let ds2 = s2.open_dataset("ds").await.unwrap();
         let result = ds2.read_array::<f32>("arr", vec![], vec![]).await.unwrap().unwrap();

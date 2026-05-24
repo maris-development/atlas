@@ -24,6 +24,8 @@ pub enum Error {
     MetaEncode(#[from] rmp_serde::encode::Error),
     #[error("metadata decode error: {0}")]
     MetaDecode(#[from] rmp_serde::decode::Error),
+    #[error("metadata lz4 decompress error: {0}")]
+    MetaLz4Decompress(#[from] lz4_flex::block::DecompressError),
     #[error("object store error: {0}")]
     ObjectStore(#[from] object_store::Error),
 }

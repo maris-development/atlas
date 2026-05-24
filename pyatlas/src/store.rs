@@ -42,11 +42,22 @@ pub struct PyAtlas {
 impl PyAtlas {
     /// Create a new store at the given local filesystem path.
     #[staticmethod]
-    #[pyo3(signature = (path, codec="zstd", meta_format="json"))]
-    fn create(py: Python<'_>, path: PathBuf, codec: &str, meta_format: &str) -> PyResult<Self> {
+    #[pyo3(signature = (path, codec="zstd", meta_format="json", meta_compression="none"))]
+    fn create(
+        py: Python<'_>,
+        path: PathBuf,
+        codec: &str,
+        meta_format: &str,
+        meta_compression: &str,
+    ) -> PyResult<Self> {
         let codec = parse_codec(codec)?;
         let meta_format = parse_meta_format(meta_format)?;
-        let config = StoreConfig { codec, meta_format };
+        let meta_compression = parse_codec(meta_compression)?;
+        let config = StoreConfig {
+            codec,
+            meta_format,
+            meta_compression,
+        };
         let inner = py
             .detach(|| runtime().block_on(Atlas::create_path(path, config)))
             .map_err(to_py_err)?;

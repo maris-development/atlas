@@ -422,29 +422,122 @@ def test_fill_value_type_mismatch_raises(dtype, fill, exc):
 
 
 @pytest.mark.parametrize(
-    "meta_format,expected_file,other_file",
+    "meta_format,meta_compression,expected_file",
     [
-        ("json", "atlas.json", "atlas.msgpack"),
-        ("msgpack", "atlas.msgpack", "atlas.json"),
+        ("json", "none", "atlas.json"),
+        ("json", "zstd", "atlas.json.zst"),
+        ("json", "lz4", "atlas.json.lz4"),
+        ("msgpack", "none", "atlas.msgpack"),
+        ("msgpack", "zstd", "atlas.msgpack.zst"),
+        ("msgpack", "lz4", "atlas.msgpack.lz4"),
     ],
 )
-def test_create_creates_missing_directory(meta_format, expected_file, other_file):
+def test_create_creates_missing_directory(meta_format, meta_compression, expected_file):
+    all_meta_files = {
+        "atlas.json", "atlas.json.zst", "atlas.json.lz4",
+        "atlas.msgpack", "atlas.msgpack.zst", "atlas.msgpack.lz4",
+    }
     with tempfile.TemporaryDirectory() as d:
         nested = Path(d) / "missing" / "nested"
         assert not nested.exists()
 
-        s = pyatlas.Atlas.create(str(nested), meta_format=meta_format)
+        s = pyatlas.Atlas.create(
+            str(nested),
+            meta_format=meta_format,
+            meta_compression=meta_compression,
+        )
 
         assert nested.is_dir()
         assert (nested / expected_file).exists()
-        assert not (nested / other_file).exists()
+        for other in all_meta_files - {expected_file}:
+            assert not (nested / other).exists(), f"unexpected file: {other}"
 
-        # Store is usable end-to-end.
+        # Store is usable end-to-end — including reopen with auto-detection.
         s.create_dataset("ds")
         s.flush()
 
         s2 = pyatlas.Atlas.open(str(nested))
         assert "ds" in s2.list_datasets()
+
+
+@pytest.mark.parametrize(
+    "meta_format,meta_compression,expected_file",
+    [
+        ("json", "none", "atlas.json"),
+        ("json", "zstd", "atlas.json.zst"),
+        ("json", "lz4", "atlas.json.lz4"),
+        ("msgpack", "none", "atlas.msgpack"),
+        ("msgpack", "zstd", "atlas.msgpack.zst"),
+        ("msgpack", "lz4", "atlas.msgpack.lz4"),
+    ],
+)
+def test_meta_format_compression_full_roundtrip(meta_format, meta_compression, expected_file):
+    """Write data, flush, reopen via auto-detection, read it back, verify
+    attributes survived — once per (format, compression) pair."""
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "store"
+        data = np.arange(12, dtype=np.float32).reshape(3, 4)
+
+        s = pyatlas.Atlas.create(
+            str(path),
+            meta_format=meta_format,
+            meta_compression=meta_compression,
+        )
+        ds = s.create_dataset("ds")
+        ds.define_array(
+            "values",
+            dtype="float32",
+            dims=["x", "y"],
+            shape=[3, 4],
+            chunk_shape=[3, 4],
+        )
+        ds.write_array("values", start=[0, 0], data=data)
+        ds.set_attribute("month", 6)
+        ds.set_attribute("station", "KNMI")
+        s.flush()
+
+        assert (path / expected_file).exists()
+
+        # Auto-detection picks the right file with no hint.
+        s2 = pyatlas.Atlas.open(str(path))
+        assert s2.list_datasets() == ["ds"]
+        ds2 = s2.open_dataset("ds")
+        arr = ds2.read_array("values")
+        assert arr is not None
+        np.testing.assert_array_equal(arr, data)
+        assert ds2.get_attribute("month") == 6
+        assert ds2.get_attribute("station") == "KNMI"
+
+
+def test_compressed_metadata_is_smaller():
+    """End-to-end: zstd-compressed msgpack metadata is smaller than uncompressed."""
+    with tempfile.TemporaryDirectory() as d:
+        plain_path = Path(d) / "plain"
+        zstd_path = Path(d) / "zstd"
+
+        for path, compression in [(plain_path, "none"), (zstd_path, "zstd")]:
+            s = pyatlas.Atlas.create(
+                str(path), meta_format="msgpack", meta_compression=compression
+            )
+            # Populate with enough datasets/arrays for compression to pay off.
+            for i in range(20):
+                ds = s.create_dataset(f"dataset_{i}")
+                for j in range(3):
+                    ds.define_array(
+                        f"arr_{j}",
+                        dtype="float32",
+                        dims=["x", "y"],
+                        shape=[64, 64],
+                        chunk_shape=[8, 8],
+                    )
+            s.flush()
+
+        plain_size = (plain_path / "atlas.msgpack").stat().st_size
+        zstd_size = (zstd_path / "atlas.msgpack.zst").stat().st_size
+        assert zstd_size < plain_size, (
+            f"zstd-compressed ({zstd_size}) should be smaller than "
+            f"uncompressed ({plain_size})"
+        )
 
 
 if __name__ == "__main__":
