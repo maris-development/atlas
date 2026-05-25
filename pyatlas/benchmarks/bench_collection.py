@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import dataclasses
 import shutil
 import sys
 import tempfile
@@ -209,11 +210,18 @@ def bench_netcdf(
     use_groups: bool = False,
     use_dask: bool = False,
     dask_workers: int | None = None,
+    serial: bool = False,
 ) -> BackendResult:
     """Default layout is 1000 separate .nc files (the standard CMIP /
     observational pattern). Pass `use_groups=True` to write a single .nc file
-    containing 1000 netCDF4 groups."""
-    label = "netcdf-groups" if use_groups else "netcdf"
+    containing 1000 netCDF4 groups. Pass `serial=True` to disable
+    `open_mfdataset`'s dask parallelism on read — iterate files in a plain
+    Python loop instead; the apples-to-apples comparison against atlas
+    (default, serial).
+    """
+    label = "netcdf-groups" if use_groups else (
+        "netcdf-no-dask" if serial else "netcdf"
+    )
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
@@ -248,29 +256,41 @@ def bench_netcdf(
         size = dir_size_bytes(root)
         log_phase(label, "size", f"{size / (1024 * 1024):.3f} MiB")
 
-        # open_mfdataset already uses dask under the hood; --use-dask just
-        # tightens the worker count when set.
         files = sorted(root.glob("ds_*.nc"))
-        log_phase(label, f"open_mfdataset across {len(files)} files + load slice")
-        import dask.config as dask_config
+        if serial:
+            # No open_mfdataset, no dask: iterate per file, slice, load.
+            # Apples-to-apples with `atlas` (default, serial).
+            log_phase(label, f"serial open_dataset across {len(files)} files + load slice")
+            with time_block() as rt:
+                for i, path in enumerate(files):
+                    ds = xr.open_dataset(path, engine="netcdf4")
+                    _ = ds[var_names].isel(indexers).load()
+                    ds.close()
+                    progress_tick(i, n_datasets, "read")
+            log_phase(label, "read", f"{rt.elapsed:.3f}s")
+        else:
+            # open_mfdataset already uses dask under the hood; --use-dask just
+            # tightens the worker count when set.
+            log_phase(label, f"open_mfdataset across {len(files)} files + load slice")
+            import dask.config as dask_config
 
-        scheduler_ctx = (
-            dask_config.set(scheduler="threads", num_workers=dask_workers)
-            if use_dask
-            else contextlib.nullcontext()
-        )
-        with scheduler_ctx, time_block() as rt:
-            ds = xr.open_mfdataset(
-                files,
-                combine="nested",
-                concat_dim="station",
-                parallel=True,
-                engine="netcdf4",
-                combine_attrs="drop_conflicts",
+            scheduler_ctx = (
+                dask_config.set(scheduler="threads", num_workers=dask_workers)
+                if use_dask
+                else contextlib.nullcontext()
             )
-            _ = ds[var_names].isel(indexers).load()
-            ds.close()
-        log_phase(label, "read", f"{rt.elapsed:.3f}s")
+            with scheduler_ctx, time_block() as rt:
+                ds = xr.open_mfdataset(
+                    files,
+                    combine="nested",
+                    concat_dim="station",
+                    parallel=True,
+                    engine="netcdf4",
+                    combine_attrs="drop_conflicts",
+                )
+                _ = ds[var_names].isel(indexers).load()
+                ds.close()
+            log_phase(label, "read", f"{rt.elapsed:.3f}s")
     else:
         # Single .nc file with 1000 netCDF4 groups. Less common in the wild
         # but the apples-to-apples analog to zarr/atlas one-container layouts.
@@ -335,16 +355,22 @@ def bench_zarr(
     use_groups: bool = False,
     use_dask: bool = False,
     dask_workers: int | None = None,
+    serial: bool = False,
 ) -> BackendResult:
     """Default layout is 1000 separate zarr stores (mirrors the netcdf
     1000-files default). Pass `use_groups=True` for one store with 1000
-    groups inside (zarr's other canonical multi-dataset pattern)."""
+    groups inside (zarr's other canonical multi-dataset pattern). Pass
+    `serial=True` to disable `open_mfdataset`'s dask parallelism on read —
+    iterate stores one at a time instead.
+    """
     import warnings
 
     import dask.config as dask_config
     from zarr.codecs import ZstdCodec
 
-    label = "zarr-groups" if use_groups else "zarr"
+    label = "zarr-groups" if use_groups else (
+        "zarr-no-dask" if serial else "zarr"
+    )
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
@@ -392,27 +418,37 @@ def bench_zarr(
         size = dir_size_bytes(root)
         log_phase(label, "size", f"{size / (1024 * 1024):.3f} MiB")
 
-        # open_mfdataset already uses dask under the hood; --use-dask just
-        # tightens the worker count when set.
         stores = sorted(str(p) for p in root.glob("ds_*.zarr"))
-        log_phase(label, f"open_mfdataset across {len(stores)} stores + load slice")
-        scheduler_ctx = (
-            dask_config.set(scheduler="threads", num_workers=dask_workers)
-            if use_dask
-            else contextlib.nullcontext()
-        )
-        with scheduler_ctx, time_block() as rt:
-            ds = xr.open_mfdataset(
-                stores,
-                combine="nested",
-                concat_dim="station",
-                parallel=True,
-                engine="zarr",
-                combine_attrs="drop_conflicts",
+        if serial:
+            log_phase(label, f"serial open_zarr across {len(stores)} stores + load slice")
+            with time_block() as rt:
+                for i, store in enumerate(stores):
+                    ds = xr.open_zarr(store)
+                    _ = ds[var_names].isel(indexers).load()
+                    ds.close()
+                    progress_tick(i, n_datasets, "read")
+            log_phase(label, "read", f"{rt.elapsed:.3f}s")
+        else:
+            # open_mfdataset already uses dask under the hood; --use-dask just
+            # tightens the worker count when set.
+            log_phase(label, f"open_mfdataset across {len(stores)} stores + load slice")
+            scheduler_ctx = (
+                dask_config.set(scheduler="threads", num_workers=dask_workers)
+                if use_dask
+                else contextlib.nullcontext()
             )
-            _ = ds[var_names].isel(indexers).load()
-            ds.close()
-        log_phase(label, "read", f"{rt.elapsed:.3f}s")
+            with scheduler_ctx, time_block() as rt:
+                ds = xr.open_mfdataset(
+                    stores,
+                    combine="nested",
+                    concat_dim="station",
+                    parallel=True,
+                    engine="zarr",
+                    combine_attrs="drop_conflicts",
+                )
+                _ = ds[var_names].isel(indexers).load()
+                ds.close()
+            log_phase(label, "read", f"{rt.elapsed:.3f}s")
     else:
         # One store with 1000 groups. open_mfdataset doesn't apply (it's for
         # multiple stores, not groups in one); per-group iteration is the
@@ -519,9 +555,29 @@ def parse_args() -> argparse.Namespace:
         help="Use one .nc file with N groups instead of N separate .nc files (default).",
     )
     p.add_argument(
+        "--netcdf-no-dask",
+        action="store_true",
+        help=(
+            "Add a `netcdf-no-dask` row that reads N .nc files in a serial "
+            "Python loop (no `open_mfdataset`, no dask). Apples-to-apples "
+            "against atlas (default, serial). Additive — the default "
+            "`netcdf` row still runs."
+        ),
+    )
+    p.add_argument(
         "--zarr-groups",
         action="store_true",
         help="Use one zarr store with N groups instead of N separate stores (default).",
+    )
+    p.add_argument(
+        "--zarr-no-dask",
+        action="store_true",
+        help=(
+            "Add a `zarr-no-dask` row that reads N zarr stores in a serial "
+            "Python loop (no `open_mfdataset`, no dask). Apples-to-apples "
+            "against atlas (default, serial). Additive — the default "
+            "`zarr` row still runs."
+        ),
     )
     p.add_argument(
         "--use-dask",
@@ -549,18 +605,30 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Don't delete the tempdir on exit (useful for inspecting files).",
     )
+    p.add_argument(
+        "--n-vars",
+        type=int,
+        default=None,
+        help=(
+            "Override the number of variables in the case by cycling the "
+            "case's default var list and suffixing copies (`_2`, `_3`, ...). "
+            "Default = case's native var count."
+        ),
+    )
     return p.parse_args()
 
 
 def _build_tasks(
-    backends: list[str], n_datasets: int, args: argparse.Namespace
+    backends: list[str], n_datasets: int, args: argparse.Namespace,
+    case: Case | None = None,
 ) -> list[tuple[str, Callable[[Path], BackendResult]]]:
     """Expand the backend list + optional --*-groups flags into a flat list of
     (label, runner) tasks. Each `--*-groups` flag adds an *additional* row
     alongside the default layout for that backend, not in place of it."""
     use_dask = args.use_dask
     dask_workers = args.dask_workers
-    case = CASES[args.case]
+    if case is None:
+        case = CASES[args.case]
     slice_fraction = args.slice_fraction
     tasks: list[tuple[str, Callable[[Path], BackendResult]]] = []
     for name in backends:
@@ -596,6 +664,14 @@ def _build_tasks(
                         use_groups=True, use_dask=use_dask, dask_workers=dask_workers,
                     ),
                 ))
+            if args.netcdf_no_dask:
+                tasks.append((
+                    "netcdf-no-dask",
+                    lambda root: bench_netcdf(
+                        n_datasets, root, case, slice_fraction,
+                        serial=True,
+                    ),
+                ))
         elif name == "zarr":
             tasks.append((
                 "zarr",
@@ -612,6 +688,14 @@ def _build_tasks(
                         use_groups=True, use_dask=use_dask, dask_workers=dask_workers,
                     ),
                 ))
+            if args.zarr_no_dask:
+                tasks.append((
+                    "zarr-no-dask",
+                    lambda root: bench_zarr(
+                        n_datasets, root, case, slice_fraction,
+                        serial=True,
+                    ),
+                ))
     return tasks
 
 
@@ -623,7 +707,19 @@ def main() -> None:
             sys.exit(f"unknown backend {b!r}; choose from {list(BACKENDS)}")
 
     case = CASES[args.case]
-    tasks = _build_tasks(backends, args.datasets, args)
+    if args.n_vars is not None and args.n_vars > 0:
+        original = case.vars
+        if args.n_vars <= len(original):
+            new_vars = original[: args.n_vars]
+        else:
+            new_vars = list(original)
+            for i in range(len(original), args.n_vars):
+                src = original[i % len(original)]
+                suffix = f"_{(i // len(original)) + 1}"
+                new_vars.append(dataclasses.replace(src, name=src.name + suffix))
+            new_vars = tuple(new_vars)
+        case = dataclasses.replace(case, vars=new_vars)
+    tasks = _build_tasks(backends, args.datasets, args, case=case)
 
     tmp = Path(tempfile.mkdtemp(prefix="pyatlas-bench-"))
     print(f"Working dir: {tmp}")
