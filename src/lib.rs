@@ -1,3 +1,5 @@
+#![warn(missing_docs)]
+
 //! ATLAS (Aggregated Tensor Large Array Store) is a directory-based store for thousands of named datasets.
 //!
 //! Each dataset is a virtual collection of named N-dimensional arrays with per-dataset and
@@ -15,6 +17,41 @@
 //!     └── data.af
 //! ```
 //!
+//! # Quick start
+//!
+//! ```
+//! use atlas::{Atlas, Attr, StoreConfig};
+//! use ndarray::Array2;
+//!
+//! # tokio::runtime::Runtime::new().unwrap().block_on(async {
+//! let tmp = tempfile::tempdir().unwrap();
+//!
+//! // Create — codec persists in atlas.json so `open_path` doesn't need it.
+//! let mut s = Atlas::create_path(tmp.path(), StoreConfig::default()).await.unwrap();
+//! {
+//!     let mut ds = s.create_dataset("jan_2024").await.unwrap();
+//!     ds.define_array::<f32>(
+//!         "temperature",
+//!         vec!["lat".into(), "lon".into()],
+//!         vec![4, 8],
+//!         None,        // chunk_shape — defaults to full shape (one chunk)
+//!         None,        // fill_value
+//!     ).await.unwrap();
+//!     let data = Array2::<f32>::from_elem([4, 8], 20.0).into_dyn();
+//!     ds.write_array("temperature", vec![0, 0], data.view()).await.unwrap();
+//!     ds.set_attribute("month", Attr::Int64(1));
+//! }
+//! s.flush().await.unwrap();   // single durability boundary
+//!
+//! // Reopen — no config needed.
+//! let s2 = Atlas::open_path(tmp.path()).await.unwrap();
+//! let ds2 = s2.open_dataset("jan_2024").await.unwrap();
+//! let temp = ds2.read_array::<f32>("temperature", vec![], vec![]).await.unwrap().unwrap();
+//! assert_eq!(temp.shape(), &[4, 8]);
+//! assert_eq!(temp[[0, 0]], 20.0);
+//! # });
+//! ```
+//!
 //! # Thread safety
 //!
 //! `Atlas` and `DatasetView` are `Send + Sync`. Each physical array file
@@ -29,7 +66,7 @@
 //! `atlas.json` is loaded **once** when the store is opened or created; from
 //! then on every mutation (`create_dataset`, `define_array`, `set_attribute`,
 //! …) only touches the in-memory `StoreMeta`. The store does **not** persist
-//! until [`Atlas::flush`] or [`Atlas::close`] is called. Dropping an `Atlas`
+//! until [`Atlas::flush`] is called. Dropping an `Atlas`
 //! without flushing abandons every pending in-memory write.
 
 mod array;

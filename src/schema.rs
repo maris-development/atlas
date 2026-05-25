@@ -12,16 +12,19 @@ use crate::config::Codec;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Attr {
-    // Bool first — only matches JSON `true`/`false`, never any other shape.
+    /// Boolean attribute. Listed first because `#[serde(untagged)]` tries
+    /// variants in order and `bool` only matches JSON `true`/`false`.
     Bool(bool),
-    // TimestampNanoseconds before String: a strict RFC 3339 parse. Strings
-    // that fail this parse fall through to the plain `String` variant.
+    /// Nanosecond-precision UTC timestamp. Stored as an RFC 3339 string;
+    /// the deserializer parses strictly, so non-timestamp strings fall
+    /// through to the `String` variant.
     #[serde(with = "timestamp_ns_serde")]
     TimestampNanoseconds(i64),
+    /// UTF-8 string attribute.
     String(String),
-    // Numeric variants. Integers (no decimal point) match Int64; numbers
-    // with decimals/exponents match Float64.
+    /// 64-bit signed integer attribute (JSON numbers without a decimal point).
     Int64(i64),
+    /// 64-bit float attribute (JSON numbers with a decimal point or exponent).
     Float64(f64),
 }
 
@@ -49,10 +52,15 @@ mod timestamp_ns_serde {
 /// Schema for a single named array within a dataset.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArraySchema {
+    /// Element type of this array.
     #[serde(with = "dtype_serde")]
     pub dtype: DType,
+    /// Logical shape, one entry per axis.
     pub shape: Vec<usize>,
+    /// On-disk chunk shape, same rank as `shape`. Equal to `shape` for
+    /// single-chunk arrays.
     pub chunk_shape: Vec<usize>,
+    /// Named dimensions, one per axis. Order matches `shape`.
     pub dimension_names: Vec<String>,
     /// Codec used when this array was first created; controls how new blocks are written.
     pub codec: Codec,

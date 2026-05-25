@@ -59,6 +59,18 @@ impl ArrayCache {
     }
 }
 
+/// A borrowed handle to one dataset within an [`Atlas`](crate::Atlas).
+///
+/// Carries no independent state — every mutation (`define_array`,
+/// `write_array`, `set_attribute`, `delete_array`) updates the parent
+/// atlas's shared in-memory metadata. Persistence happens when the
+/// parent [`Atlas::flush`](crate::Atlas::flush) is called; `DatasetView`
+/// has no `flush` of its own.
+///
+/// `DatasetView` is `Send` and can be moved across tasks, but holding
+/// many concurrent views to the same dataset and mutating from each is
+/// not protected — the underlying lock is on the shared metadata, not
+/// per-view.
 pub struct DatasetView {
     store: Arc<dyn ObjectStore>,
     pub(crate) cache: Arc<ArrayCache>,
@@ -97,10 +109,13 @@ impl DatasetView {
             .unwrap_or_default()
     }
 
+    /// The dataset name this view points to.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// All array names declared in this dataset, in insertion order.
+    /// Reads from the shared in-memory meta — no disk I/O.
     pub fn list_arrays(&self) -> Vec<String> {
         self.atlas_meta
             .lock()
@@ -110,6 +125,8 @@ impl DatasetView {
             .unwrap_or_default()
     }
 
+    /// Set or overwrite a typed attribute on this dataset. Buffered in the
+    /// in-memory meta until the parent [`Atlas::flush`](crate::Atlas::flush).
     pub fn set_attribute(&mut self, key: &str, value: Attr) {
         let mut meta = self.atlas_meta.lock();
         meta.datasets
@@ -119,6 +136,8 @@ impl DatasetView {
             .insert(key.to_string(), value);
     }
 
+    /// Look up an attribute by key. `None` if the key isn't present (or the
+    /// dataset has no attributes at all yet).
     pub fn get_attribute(&self, key: &str) -> Option<Attr> {
         self.atlas_meta
             .lock()
@@ -148,6 +167,18 @@ impl DatasetView {
         guard.array_stats(&self.name).cloned()
     }
 
+    /// Declare a new array in this dataset.
+    ///
+    /// `dims` are named dimensions (one per axis); `shape` is the logical
+    /// size per axis. `chunk_shape = None` means one chunk per axis (a
+    /// single block per dataset entry — fastest write for small arrays;
+    /// pessimal for slice reads on large arrays). `fill_value` is the
+    /// scalar returned for unwritten cells; cells equal to it are tallied
+    /// as nulls in `array_stats` after [`Atlas::flush`](crate::Atlas::flush).
+    ///
+    /// Errors with [`Error::ArrayAlreadyExists`] if this dataset already
+    /// declares an array with that name, or [`Error::InvalidName`] if
+    /// `array` violates the naming rules.
     #[instrument(skip(self, fill_value), fields(dataset = %self.name, dtype = ?T::DTYPE))]
     pub async fn define_array<T: ArrayElement>(
         &mut self,
@@ -195,6 +226,16 @@ impl DatasetView {
         Ok(())
     }
 
+    /// Write a slab of values into an array previously declared via
+    /// [`define_array`](Self::define_array).
+    ///
+    /// `start` is the per-axis offset to begin writing at; `data`'s shape
+    /// determines the extent. Out-of-bounds writes truncate at the array's
+    /// declared shape. The bytes are buffered in the per-array in-memory
+    /// layer; nothing reaches disk until [`Atlas::flush`](crate::Atlas::flush).
+    ///
+    /// Errors with [`Error::ArrayNotFound`] if no array with this name has
+    /// been declared.
     #[instrument(skip(self, data), fields(dataset = %self.name, elems = data.len()))]
     pub async fn write_array<T: ArrayElement>(
         &mut self,
@@ -224,7 +265,41 @@ impl DatasetView {
         Ok(())
     }
 
-    /// Returns `Ok(None)` if this dataset has no array with that name.
+    /// Read a full or partial array from this dataset.
+    ///
+    /// Empty `start` + empty `shape` reads the full array. Otherwise both
+    /// must have one entry per dimension; only chunks overlapping the
+    /// requested region are decompressed.
+    ///
+    /// Returns `Ok(None)` if this dataset doesn't declare an array with
+    /// that name.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+    /// use atlas::{Atlas, StoreConfig};
+    /// use ndarray::Array2;
+    /// let tmp = tempfile::tempdir().unwrap();
+    /// let mut s = Atlas::create_path(tmp.path(), StoreConfig::default()).await.unwrap();
+    /// {
+    ///     let mut ds = s.create_dataset("ds").await.unwrap();
+    ///     ds.define_array::<f32>("temp", vec!["x".into(), "y".into()],
+    ///                            vec![4, 8], None, None).await.unwrap();
+    ///     let data = Array2::<f32>::from_elem([4, 8], 9.0).into_dyn();
+    ///     ds.write_array("temp", vec![0, 0], data.view()).await.unwrap();
+    ///
+    ///     // Full read.
+    ///     let full = ds.read_array::<f32>("temp", vec![], vec![]).await.unwrap().unwrap();
+    ///     assert_eq!(full.shape(), &[4, 8]);
+    ///
+    ///     // Partial read — a 2×4 sub-region.
+    ///     let part = ds.read_array::<f32>("temp", vec![1, 2], vec![2, 4]).await.unwrap().unwrap();
+    ///     assert_eq!(part.shape(), &[2, 4]);
+    /// }
+    /// s.flush().await.unwrap();
+    /// # });
+    /// ```
     #[instrument(skip(self), fields(dataset = %self.name))]
     pub async fn read_array<T: ArrayElement>(
         &self,
@@ -259,6 +334,10 @@ impl DatasetView {
         Ok(guard.get_array(&self.name)?.fill_value.clone())
     }
 
+    /// Remove an array from this dataset. Tombstones the dataset's entry
+    /// inside the shared array file; persistence happens on the next
+    /// [`Atlas::flush`](crate::Atlas::flush). Errors with
+    /// [`Error::ArrayNotFound`] if no array with that name is declared here.
     #[instrument(skip(self), fields(dataset = %self.name))]
     pub async fn delete_array(&mut self, array: &str) -> Result<()> {
         let codec = self

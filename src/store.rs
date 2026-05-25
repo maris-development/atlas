@@ -12,6 +12,16 @@ use crate::{
     meta::{StoreMeta, load_meta, save_meta},
 };
 
+/// Handle to an opened or newly created atlas store.
+///
+/// Owns the [`object_store`] backend, the in-memory store metadata, a
+/// per-array file cache, and the chosen array / metadata codecs. All
+/// mutations (`create_dataset`, `delete_dataset`, and everything that
+/// flows through a [`DatasetView`]) update in-memory state only —
+/// nothing reaches disk until [`Atlas::flush`].
+///
+/// `Atlas` is `Send + Sync` and safe to share across tasks; each array
+/// file is independently guarded by a `tokio::sync::RwLock`.
 pub struct Atlas {
     store: Arc<dyn ObjectStore>,
     meta: Arc<Mutex<StoreMeta>>,
@@ -25,7 +35,7 @@ impl Atlas {
     /// Open an existing store at `prefix` within `store`.
     ///
     /// Reads `atlas.json` exactly once. Subsequent mutations only touch the
-    /// in-memory meta until [`Atlas::flush`] / [`Atlas::close`] is called.
+    /// in-memory meta until [`Atlas::flush`] is called.
     #[instrument(skip(store), fields(prefix = %prefix))]
     pub async fn open(store: Arc<dyn ObjectStore>, prefix: Path) -> Result<Self> {
         let store = prefixed(store, prefix);
@@ -66,6 +76,27 @@ impl Atlas {
     }
 
     /// Open an existing store at the given local filesystem path.
+    ///
+    /// The metadata format (`atlas.json` / `atlas.msgpack` / `…zst` / `…lz4`)
+    /// and array codec are auto-detected from the on-disk files — no
+    /// [`StoreConfig`] needed on reopen.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+    /// use atlas::{Atlas, StoreConfig};
+    /// let tmp = tempfile::tempdir().unwrap();
+    /// // Create + flush a store so there's something to open.
+    /// {
+    ///     let mut s = Atlas::create_path(tmp.path(), StoreConfig::default()).await.unwrap();
+    ///     s.create_dataset("ds1").await.unwrap();
+    ///     s.flush().await.unwrap();
+    /// }
+    /// let s = Atlas::open_path(tmp.path()).await.unwrap();
+    /// assert!(s.dataset_exists("ds1"));
+    /// # });
+    /// ```
     pub async fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
         let store = Arc::new(LocalFileSystem::new_with_prefix(path.as_ref())?);
         Self::open(store, Path::from("")).await
@@ -73,6 +104,17 @@ impl Atlas {
 
     /// Create a new store at the given local filesystem path. The directory is created
     /// (recursively, like `mkdir -p`) if it does not already exist.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # tokio::runtime::Runtime::new().unwrap().block_on(async {
+    /// use atlas::{Atlas, StoreConfig};
+    /// let tmp = tempfile::tempdir().unwrap();
+    /// let s = Atlas::create_path(tmp.path(), StoreConfig::default()).await.unwrap();
+    /// assert!(s.list_datasets().is_empty());
+    /// # });
+    /// ```
     pub async fn create_path(path: impl AsRef<std::path::Path>, config: StoreConfig) -> Result<Self> {
         let path = path.as_ref();
         std::fs::create_dir_all(path)?;
@@ -80,6 +122,11 @@ impl Atlas {
         Self::create(store, Path::from(""), config).await
     }
 
+    /// Create a new dataset in this store and return a [`DatasetView`]
+    /// for populating it. Errors with [`Error::DatasetAlreadyExists`] if
+    /// a dataset with this name is already registered, or
+    /// [`Error::InvalidName`] if `name` violates the naming rules
+    /// (non-empty, no `/`, no leading `_`, not `.` or `..`).
     #[instrument(skip(self))]
     pub async fn create_dataset(&mut self, name: &str) -> Result<DatasetView> {
         crate::validate_name(name)?;
@@ -100,6 +147,9 @@ impl Atlas {
         ))
     }
 
+    /// Return a [`DatasetView`] for an existing dataset. Errors with
+    /// [`Error::DatasetNotFound`] if no dataset with this name exists.
+    /// Cheap — reads the in-memory metadata, never touches disk.
     #[instrument(skip(self))]
     pub async fn open_dataset(&self, name: &str) -> Result<DatasetView> {
         open_dataset_view(
@@ -112,6 +162,12 @@ impl Atlas {
         .await
     }
 
+    /// Remove a dataset from this store. Tombstones the dataset's entries
+    /// inside every shared array file but does not flush — call
+    /// [`Atlas::flush`] to persist the deletion, and optionally
+    /// [`Atlas::compact`] afterwards to reclaim the storage.
+    /// Errors with [`Error::DatasetNotFound`] if no dataset with this
+    /// name exists.
     #[instrument(skip(self))]
     pub async fn delete_dataset(&mut self, name: &str) -> Result<()> {
         let dataset_meta = {
@@ -133,16 +189,23 @@ impl Atlas {
         Ok(())
     }
 
+    /// All dataset names currently registered in this store, in insertion order.
+    /// Reads from the in-memory store metadata — no disk I/O.
     pub fn list_datasets(&self) -> Vec<String> {
         let meta = self.meta.lock();
         meta.datasets.keys().cloned().collect()
     }
 
+    /// `true` if a dataset with this name is registered. O(1) hash lookup in
+    /// the in-memory store metadata.
     pub fn dataset_exists(&self, name: &str) -> bool {
         let meta = self.meta.lock();
         meta.datasets.contains_key(name)
     }
 
+    /// Distinct array names across all datasets in this store, sorted.
+    /// One entry per physical `.af` file — datasets sharing an array name
+    /// (the common case) collapse to a single entry here.
     pub fn list_arrays(&self) -> Vec<String> {
         let meta = self.meta.lock();
         let mut arrays: Vec<String> = meta

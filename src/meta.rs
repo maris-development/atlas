@@ -17,8 +17,10 @@ use crate::{
 /// added.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct DatasetMeta {
+    /// Array name → schema. Insertion-ordered.
     #[serde(default)]
     pub arrays: IndexMap<String, ArraySchema>,
+    /// Attribute key → typed value. Insertion-ordered.
     #[serde(default)]
     pub attributes: IndexMap<String, Attr>,
 }
