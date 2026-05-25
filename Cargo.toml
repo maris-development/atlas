@@ -3,7 +3,7 @@ members = ["pyatlas"]
 
 [package]
 name = "atlas"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 description = "Directory-based store for thousands of N-dimensional datasets local or remote using object storage."
 license = "Apache-2.0"
