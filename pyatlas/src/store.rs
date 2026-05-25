@@ -2,13 +2,29 @@ use std::path::PathBuf;
 
 use atlas::{Atlas, Codec, DType, MetaFormat, StoreConfig, TimestampNs};
 use numpy::{IntoPyArray, PyArray};
+use object_store::path::Path as ObjStorePath;
 use pyo3::exceptions::{PyKeyError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
+use pyo3_object_store::AnyObjectStore;
 
 use crate::dataset::PyDatasetView;
 use crate::error::to_py_err;
 use crate::runtime::runtime;
+
+/// Either a local filesystem path or an obstore-constructed object store
+/// handle. The Python-facing `Atlas.create` / `Atlas.open` accept either.
+///
+/// PyO3 tries the `ObjectStore` variant first via `AnyObjectStore`'s own
+/// `FromPyObject` impl, which accepts both native pyo3-object_store
+/// instances and externally-constructed handles (e.g.
+/// `obstore.store.S3Store(...)`); strings and `os.PathLike` fall through
+/// to the `Path` arm.
+#[derive(FromPyObject)]
+pub enum AtlasSource {
+    ObjectStore(AnyObjectStore),
+    Path(PathBuf),
+}
 
 fn parse_codec(s: &str) -> PyResult<Codec> {
     Ok(match s.to_ascii_lowercase().as_str() {
@@ -42,12 +58,20 @@ pub struct PyAtlas {
 
 #[pymethods]
 impl PyAtlas {
-    /// Create a new store at the given local filesystem path.
+    /// Create a new atlas store.
+    ///
+    /// `source` is either a local filesystem path (`str` / `os.PathLike`)
+    /// or an [obstore](https://github.com/developmentseed/obstore)-
+    /// constructed store handle (`obstore.store.S3Store`,
+    /// `obstore.store.GCSStore`, `obstore.store.AzureStore`,
+    /// `obstore.store.MemoryStore`, etc.). Cloud-store credentials and
+    /// configuration are entirely obstore's responsibility — pyatlas
+    /// receives an opaque `Arc<dyn ObjectStore>` and writes through it.
     #[staticmethod]
-    #[pyo3(signature = (path, codec="zstd", meta_format="json", meta_compression="none"))]
+    #[pyo3(signature = (source, codec="zstd", meta_format="json", meta_compression="none"))]
     fn create(
         py: Python<'_>,
-        path: PathBuf,
+        source: AtlasSource,
         codec: &str,
         meta_format: &str,
         meta_compression: &str,
@@ -60,18 +84,39 @@ impl PyAtlas {
             meta_format,
             meta_compression,
         };
-        let inner = py
-            .detach(|| runtime().block_on(Atlas::create_path(path, config)))
-            .map_err(to_py_err)?;
+        let inner = match source {
+            AtlasSource::Path(path) => py
+                .detach(|| runtime().block_on(Atlas::create_path(path, config)))
+                .map_err(to_py_err)?,
+            AtlasSource::ObjectStore(store) => {
+                let store = store.into_dyn();
+                py.detach(|| {
+                    runtime().block_on(Atlas::create(store, ObjStorePath::from(""), config))
+                })
+                .map_err(to_py_err)?
+            }
+        };
         Ok(Self { inner })
     }
 
-    /// Open an existing store at the given local filesystem path.
+    /// Open an existing atlas store.
+    ///
+    /// `source` accepts the same shapes as [`Atlas::create`]: a local
+    /// filesystem path or an obstore-constructed store handle. Codec,
+    /// metadata format and metadata compression are auto-detected from
+    /// the on-disk files in both cases.
     #[staticmethod]
-    fn open(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
-        let inner = py
-            .detach(|| runtime().block_on(Atlas::open_path(path)))
-            .map_err(to_py_err)?;
+    fn open(py: Python<'_>, source: AtlasSource) -> PyResult<Self> {
+        let inner = match source {
+            AtlasSource::Path(path) => py
+                .detach(|| runtime().block_on(Atlas::open_path(path)))
+                .map_err(to_py_err)?,
+            AtlasSource::ObjectStore(store) => {
+                let store = store.into_dyn();
+                py.detach(|| runtime().block_on(Atlas::open(store, ObjStorePath::from(""))))
+                    .map_err(to_py_err)?
+            }
+        };
         Ok(Self { inner })
     }
 

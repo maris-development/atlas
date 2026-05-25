@@ -4,7 +4,11 @@ Python bindings for [ATLAS](../README.md) (Aggregated Tensor Large Array Store),
 
 ## Status
 
-- Local filesystem only (wraps `Atlas::open_path` / `Atlas::create_path`)
+- Local filesystem **and** any [`object_store`](https://docs.rs/object_store) backend
+  (S3 / GCS / Azure / HTTP / local) via the optional [obstore](https://github.com/developmentseed/obstore)
+  dependency — see [docs/guides/cloud-storage.md](docs/guides/cloud-storage.md).
+  `pip install "pyatlas[cloud]"` enables it; without it pyatlas still works against
+  local filesystem paths.
 - Sync API backed by an internal multi-threaded tokio runtime; the GIL is released during blocking calls
 - Supported array dtypes: `int8/16/32/64`, `uint8/16/32/64`, `float32/64`, `timestamp_nanoseconds` (aliases: `timestamp_ns`, `datetime64[ns]`), `string` (variable-length; `|S<n>` / `|U<n>` fixed-size inputs are accepted and stored as vlen strings)
   - `bool` is exposed as an attribute type but not as an array dtype (limitation of the underlying `array-format` crate)

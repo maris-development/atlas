@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- **Python 3.9+**
+- **Python 3.10+**
 - A working C/Rust toolchain *only* for source installs; wheels (when
   available) install with no compiler in scope.
 
@@ -41,6 +41,30 @@ To run the test suite:
 ```bash
 pytest pyatlas/tests/ -v
 ```
+
+## Optional: cloud storage (S3, GCS, Azure)
+
+To open or create atlas stores backed by S3, GCS, Azure Blob, or any
+other [`object_store`](https://docs.rs/object_store)-supported backend,
+install the `cloud` extra. This pulls in
+[obstore](https://github.com/developmentseed/obstore):
+
+```bash
+pip install "pyatlas[cloud]"
+```
+
+Then construct an obstore handle and pass it where you'd otherwise pass
+a path:
+
+```python
+import obstore as obs, pyatlas
+
+store = obs.store.S3Store("my-bucket", prefix="stores/jan_2024", region="us-east-1")
+atlas = pyatlas.Atlas.open(store)
+```
+
+See [Cloud storage (S3, GCS, Azure)](guides/cloud-storage.md) for the
+full guide.
 
 ## Optional: benchmark dependencies
 

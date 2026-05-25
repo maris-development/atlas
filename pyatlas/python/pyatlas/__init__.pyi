@@ -1,10 +1,22 @@
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+import os
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Union
 
 import numpy as np
 from numpy.typing import NDArray
 
 if TYPE_CHECKING:
     import xarray as xr
+    # `obstore` is an optional dependency — only needed if you want to
+    # open / create stores against S3, GCS, Azure, or HTTP backends.
+    # `pip install pyatlas[cloud]` pulls it in.
+    import obstore.store as _obstore_store
+
+# Public alias for the polymorphic source argument accepted by
+# `Atlas.create` / `Atlas.open`. Either a local filesystem path or an
+# obstore-constructed store handle (`obstore.store.S3Store`,
+# `obstore.store.GCSStore`, `obstore.store.AzureStore`,
+# `obstore.store.LocalStore`, `obstore.store.HttpStore`).
+AtlasSource = Union[str, "os.PathLike[str]", "_obstore_store.ObjectStore"]
 
 __version__: str
 
@@ -13,15 +25,21 @@ class Atlas:
 
     @staticmethod
     def create(
-        path: str,
+        source: AtlasSource,
         codec: str = "zstd",
         meta_format: str = "json",
         meta_compression: str = "none",
     ) -> "Atlas":
-        """Create a new store at the given local filesystem path.
+        """Create a new store.
 
         Args:
-            path: Directory to create the store in. Will be created if missing.
+            source: Either a local filesystem path (created with `mkdir -p`
+                semantics) or an [obstore](https://github.com/developmentseed/obstore)-
+                constructed store handle (`obstore.store.S3Store`,
+                `obstore.store.GCSStore`, `obstore.store.AzureStore`,
+                `obstore.store.LocalStore`, `obstore.store.HttpStore`).
+                Cloud credentials, region, endpoint and retry policy are
+                obstore's responsibility — pyatlas writes through the handle.
             codec: Compression codec for new array blocks.
                 One of `"zstd"` (default), `"lz4"`, `"none"` / `"uncompressed"`.
             meta_format: On-disk encoding for the metadata file.
@@ -37,12 +55,15 @@ class Atlas:
         ...
 
     @staticmethod
-    def open(path: str) -> "Atlas":
-        """Open an existing store at the given local filesystem path.
+    def open(source: AtlasSource) -> "Atlas":
+        """Open an existing store.
 
-        The codec, metadata format, and compression are auto-detected from the
-        on-disk filename (`atlas.json`, `atlas.msgpack`, `atlas.json.zst`,
-        `atlas.msgpack.lz4`, etc.) — no extra arguments required.
+        Accepts the same shapes as [`Atlas.create`][pyatlas.Atlas.create]:
+        a local filesystem path or an obstore-constructed store handle.
+        The codec, metadata format, and metadata compression are
+        auto-detected from the on-disk filename (`atlas.json`,
+        `atlas.msgpack`, `atlas.json.zst`, `atlas.msgpack.lz4`, etc.) —
+        no extra arguments required.
         """
         ...
 

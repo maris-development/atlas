@@ -100,21 +100,22 @@ array name serialises through one writer.
 
 ## Where Zarr / netCDF still win
 
-- **Cloud object storage.** Zarr is the natural choice on S3 / GCS — chunk
-  files are independent and parallel-readable across processes. `pyatlas`
-  is local filesystem only in this release.
+- **Concurrent writers.** Many independent processes writing the same
+  store is Zarr's home turf; chunk files are independent and
+  parallel-writable. atlas assumes a single writer per store and
+  serialises through one in-memory `StoreMeta`. This is still the case
+  on cloud backends — `pip install "pyatlas[cloud]"` lets atlas read
+  and write S3 / GCS / Azure via [obstore](https://github.com/developmentseed/obstore),
+  but it doesn't lift the single-writer assumption.
 - **Distributed dask schedulers.** Atlas's lazy-read graph captures the
   `DatasetView` directly, which isn't picklable across processes. Use
   `.compute()` (or one of the bulk-read APIs) before handing off to
   `dask.distributed` / `processes` schedulers. Zarr stores have no such
   restriction.
-- **Concurrent writers.** Many independent processes writing the same store
-  is Zarr's home turf; atlas assumes a single writer per store and
-  serialises through one in-memory `StoreMeta`.
 - **Ecosystem breadth.** netCDF has decades of tooling (`ncdump`,
   `cdo`, `nco`, GIS integrations) and Zarr is the de-facto interchange
   format for cloud-scale array data. Atlas is a focused fit for "N small
-  datasets, same schema, on local disk".
+  datasets, same schema, one writer".
 
 ## Compatibility bridge
 

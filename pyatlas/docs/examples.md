@@ -14,6 +14,7 @@ a minute.
 | [`05_codecs.py`](https://github.com/robinskil/atlas/blob/main/pyatlas/examples/05_codecs.py) | Compare `zstd` / `lz4` / `none` array codecs on a smooth `float32` field. Demonstrates per-array codec recording. |
 | [`06_stats_scan.py`](https://github.com/robinskil/atlas/blob/main/pyatlas/examples/06_stats_scan.py) | Find the dataset with the highest peak reading across a fleet of 32 sensors by scanning `array_stats` only — no raw data read. |
 | [`07_shared_arrays.py`](https://github.com/robinskil/atlas/blob/main/pyatlas/examples/07_shared_arrays.py) | 50 datasets sharing 2 physical array files. Prints the on-disk directory listing to confirm the layout. |
+| [`08_object_store.py`](https://github.com/robinskil/atlas/blob/main/pyatlas/examples/08_object_store.py) | Pass an [obstore](https://github.com/developmentseed/obstore) handle into `Atlas.create` / `Atlas.open` and run the full create / read / xarray / stats loop against it. Demos with `obstore.store.LocalStore` (no credentials); S3 / GCS / Azure variants are commented in at the top. Requires `pip install "pyatlas[cloud]"`. |
 
 ## Running
 

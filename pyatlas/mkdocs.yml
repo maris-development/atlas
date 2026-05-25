@@ -81,6 +81,7 @@ nav:
           - Bulk reads: guides/bulk-reads.md
           - Stats and scans: guides/stats.md
           - Shared physical arrays: guides/shared-arrays.md
+          - Cloud storage (S3, GCS, Azure): guides/cloud-storage.md
     - Examples: examples.md
     - Benchmarks: benchmarks.md
     - API reference:

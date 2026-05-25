@@ -42,6 +42,11 @@ with pyatlas.Atlas.create("/tmp/my_store", codec="zstd") as atlas:
   call, sharing a single file handle.
 - **Sync API, GIL-released** — a multi-threaded tokio runtime backs every
   blocking call; the GIL is released so other Python threads can run.
+- **Local fs or cloud storage** — pass a path string for local, or an
+  [obstore](https://github.com/developmentseed/obstore) handle for S3 /
+  GCS / Azure / HTTP via `pip install "pyatlas[cloud]"`. The full
+  read / write / flush / compact / bulk-read API works identically against
+  either. See [Cloud storage](guides/cloud-storage.md).
 
 ## How does this compare to Zarr / netCDF?
 
@@ -66,8 +71,11 @@ See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the head-to-head, and
 
 ## Status
 
-- Local filesystem only this release (wraps `Atlas::open_path` /
-  `Atlas::create_path`).
+- Local filesystem **and** any [`object_store`](https://docs.rs/object_store)
+  backend (S3 / GCS / Azure / HTTP / local) via the optional
+  [obstore](https://github.com/developmentseed/obstore) dependency.
+  `pip install "pyatlas[cloud]"` enables it; see
+  [Cloud storage (S3, GCS, Azure)](guides/cloud-storage.md).
 - Lazy dask reads use the threaded scheduler only; `.compute()` before
   crossing into distributed/multiprocessing schedulers.
 - `bool`, `binary`, `list[...]`, `fixed_size_list[...,N]` are reserved for
