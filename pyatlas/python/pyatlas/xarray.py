@@ -381,11 +381,15 @@ def _view_to_dask_array(view: "DatasetView", name: str) -> Any:
     return da.block(nested)
 
 
-def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":
+def _view_to_xarray(view: "DatasetView", force_lazy: bool = False) -> "xr.Dataset":
     """Convert an atlas `DatasetView` into an xarray Dataset.
 
     Variables stored with `chunk_shape != shape` come back dask-backed (one task
-    per on-disk chunk); full-shape arrays come back eager as numpy.
+    per on-disk chunk); full-shape arrays come back eager as numpy unless
+    ``force_lazy=True``, in which case they're wrapped in a single-chunk
+    `dask.array` so the returned Dataset is uniformly lazy (used by
+    `_atlas_to_xarray_many` so concat returns a lazy graph regardless of the
+    source chunk_shape).
     """
     import xarray as xr
 
@@ -426,6 +430,9 @@ def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":
             arr = view.read_array(name)
             if arr is None:
                 continue
+            if force_lazy and shape:
+                import dask.array as da
+                arr = da.from_array(arr, chunks=tuple(shape))
         else:
             arr = _view_to_dask_array(view, name)
         dims = list(meta["dimension_names"])
@@ -466,6 +473,66 @@ def _view_to_xarray(view: "DatasetView") -> "xr.Dataset":
     coords = {n: _with_attrs(n, t) for n, t in coords.items()}
 
     return xr.Dataset(data_vars=data_vars, coords=coords, attrs=dataset_attrs)
+
+
+def _atlas_to_xarray_many(
+    atlas: "Atlas",
+    names: list[str],
+    concat_dim: str = "dataset",
+    parallel: bool = True,  # noqa: ARG001  — kept for API compat; ignored
+) -> "xr.Dataset":
+    """Open many atlas datasets and stack them into one xr.Dataset along
+    `concat_dim`. atlas-native equivalent of `xr.open_mfdataset(...)`.
+
+    Implementation: opens the first dataset to discover the schema (vars,
+    dims, dtypes, coords, per-var attrs), then for each data variable calls
+    `Atlas.read_array_across` to bulk-read across all `names` in one Rust
+    call. The N reads share one `RwLock::read` guard on the shared physical
+    file and dispatch concurrently on the tokio runtime — avoids the N
+    Python ↔ Rust round-trips the prior dask-delayed implementation paid.
+
+    Returns eager numpy-backed arrays of shape `(len(names), *original_shape)`.
+    Wrap with `.chunk(...)` downstream if you need dask laziness.
+
+    The `parallel` parameter is accepted for API compatibility but no longer
+    selects an implementation — the bulk path is always taken.
+    """
+    import numpy as np
+    import xarray as xr
+
+    if not names:
+        raise ValueError("to_xarray_many: `names` is empty")
+
+    # Schema discovery from the first dataset (cheap: in-memory meta lookup).
+    first_view = atlas.open_dataset(names[0])
+    template = _view_to_xarray(first_view, force_lazy=False)
+
+    # Bulk-read each data variable across all datasets in one Rust call,
+    # returning a pre-stacked (N, *shape) numpy array. Skips the Python-side
+    # `np.stack` copy that the list-returning `read_array_across` would
+    # require — significant on big workloads (a 1000-dataset gridded run
+    # saves several seconds of memory bandwidth).
+    #
+    # Variables are processed serially because each Rust call internally
+    # parallelises N reads up to num_cpus — running multiple vars in
+    # parallel would oversubscribe CPU.
+    data_vars: dict[str, xr.DataArray] = {}
+    for var in template.data_vars:
+        stacked = atlas.read_array_across_stacked(var, names)
+        original_dims = list(template[var].dims)
+        original_attrs = dict(template[var].attrs)
+        data_vars[var] = xr.DataArray(
+            stacked,
+            dims=[concat_dim, *original_dims],
+            attrs=original_attrs,
+        )
+
+    # Coords + dataset-level attrs come from the first dataset, matching
+    # xarray.open_mfdataset(coords="minimal", compat="override") semantics.
+    coords = {name: template.coords[name] for name in template.coords}
+    coords[concat_dim] = xr.DataArray(np.asarray(names), dims=[concat_dim])
+
+    return xr.Dataset(data_vars=data_vars, coords=coords, attrs=dict(template.attrs))
 
 
 def _write_xarray_new_dataset(

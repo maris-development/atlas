@@ -31,15 +31,16 @@ import xarray as xr
 
 import pyatlas
 from _common import (
-    SLICE_HOURS,
-    VARIABLES,
+    CASES,
     BackendResult,
+    Case,
     dir_size_bytes,
     generate_dataset,
     log_phase,
     parallel_compute,
     print_results_table,
     progress_tick,
+    slice_indexers,
     time_block,
 )
 
@@ -50,13 +51,22 @@ from _common import (
 def bench_atlas(
     n_datasets: int,
     root: Path,
+    case: Case,
+    slice_fraction: float,
     use_dask: bool = False,
     dask_workers: int | None = None,
 ) -> BackendResult:
     if root.exists():
         shutil.rmtree(root)
 
-    log_phase("atlas", f"writing {n_datasets} datasets")
+    var_names = list(case.var_names)
+    indexers = slice_indexers(case, slice_fraction)
+
+    chunks_per_var = (
+        {v: list(case.chunk_shape) for v in var_names} if case.chunk_shape else None
+    )
+
+    log_phase("atlas", f"writing {n_datasets} datasets (case={case.name})")
     with time_block() as wt:
         with pyatlas.Atlas.create(
             str(root),
@@ -65,15 +75,17 @@ def bench_atlas(
             meta_compression="zstd",
         ) as atlas:
             for i in range(n_datasets):
-                atlas.add_xr_dataset(generate_dataset(i, use_dask=use_dask), f"ds_{i:04d}")
+                atlas.add_xr_dataset(
+                    generate_dataset(i, case, use_dask=use_dask),
+                    f"ds_{i:04d}",
+                    chunks=chunks_per_var,
+                )
                 progress_tick(i, n_datasets, "write")
     log_phase("atlas", "write", f"{wt.elapsed:.3f}s")
 
     size = dir_size_bytes(root)
     log_phase("atlas", "size", f"{size / (1024 * 1024):.3f} MiB")
 
-    # Read phase: per-dataset slice. Atlas's canonical "bulk" — to_xarray is
-    # cheap because the multi-dataset container is built into the store.
     log_phase(
         "atlas",
         f"reading slice from {n_datasets} datasets"
@@ -83,10 +95,17 @@ def bench_atlas(
     if use_dask:
         from dask.delayed import delayed
 
+        # Fast path: per-dataset slice reads via `view.read_arrays(...)`
+        # bypass to_xarray's xr.Dataset + dask-graph build overhead. The
+        # dask scheduler still parallelises across datasets; each task does
+        # just one Rust call per variable with the slice already applied.
+        start = [s.start for s in indexers.values()]
+        shape = [s.stop - s.start for s in indexers.values()]
+
         @delayed
         def load_one(idx: int):
-            ds = atlas.to_xarray(f"ds_{idx:04d}")
-            return ds[list(VARIABLES)].isel(time=slice(0, SLICE_HOURS)).load()
+            view = atlas.open_dataset(f"ds_{idx:04d}")
+            return view.read_arrays(var_names, start=start, shape=shape)
 
         tasks = [load_one(i) for i in range(n_datasets)]
         with time_block() as rt:
@@ -95,11 +114,88 @@ def bench_atlas(
         with time_block() as rt:
             for i in range(n_datasets):
                 ds = atlas.to_xarray(f"ds_{i:04d}")
-                _ = ds[list(VARIABLES)].isel(time=slice(0, SLICE_HOURS)).load()
+                _ = ds[var_names].isel(indexers).load()
                 progress_tick(i, n_datasets, "read")
     log_phase("atlas", "read", f"{rt.elapsed:.3f}s")
 
     return BackendResult(name="atlas", write_s=wt.elapsed, read_s=rt.elapsed, size_bytes=size)
+
+
+# ── atlas (bulk, single-call to_xarray_many) ────────────────────────────
+
+
+def bench_atlas_bulk(
+    n_datasets: int,
+    root: Path,
+    case: Case,
+    slice_fraction: float,
+    use_dask: bool = False,
+    dask_workers: int | None = None,
+) -> BackendResult:
+    """Same write phase as `bench_atlas`; read phase is one
+    `Atlas.to_xarray_many(...)` call — the atlas-native equivalent of
+    `xr.open_mfdataset`. Stacked Dataset is sliced and `.load()`-ed in one
+    dask compute."""
+    import dask.config as dask_config
+
+    if root.exists():
+        shutil.rmtree(root)
+
+    var_names = list(case.var_names)
+    indexers = slice_indexers(case, slice_fraction)
+    names = [f"ds_{i:04d}" for i in range(n_datasets)]
+    chunks_per_var = (
+        {v: list(case.chunk_shape) for v in var_names} if case.chunk_shape else None
+    )
+
+    log_phase("atlas-bulk", f"writing {n_datasets} datasets (case={case.name})")
+    with time_block() as wt:
+        with pyatlas.Atlas.create(
+            str(root),
+            codec="zstd",
+            meta_format="msgpack",
+            meta_compression="zstd",
+        ) as atlas:
+            for i, name in enumerate(names):
+                atlas.add_xr_dataset(
+                    generate_dataset(i, case, use_dask=use_dask),
+                    name,
+                    chunks=chunks_per_var,
+                )
+                progress_tick(i, n_datasets, "write")
+    log_phase("atlas-bulk", "write", f"{wt.elapsed:.3f}s")
+
+    size = dir_size_bytes(root)
+    log_phase("atlas-bulk", "size", f"{size / (1024 * 1024):.3f} MiB")
+
+    log_phase(
+        "atlas-bulk",
+        f"read_array_across_stacked × {len(var_names)} vars + slice push-down"
+        + (f" (dask, workers={dask_workers or 'default'})" if use_dask else ""),
+    )
+    atlas = pyatlas.Atlas.open(str(root))
+
+    # Push the slice down through the low-level API so atlas only decompresses
+    # the chunks overlapping the slice (matches what zarr/netcdf's
+    # `open_mfdataset(...).isel(...).load()` does via dask graph optimization).
+    # `to_xarray_many(...).isel(...)` would also work but slices in numpy
+    # *after* decompressing the full per-dataset chunks, wasting work when
+    # `chunk_shape != shape`.
+    start = [s.start for s in indexers.values()]
+    shape = [s.stop - s.start for s in indexers.values()]
+    scheduler_ctx = (
+        dask_config.set(scheduler="threads", num_workers=dask_workers)
+        if use_dask
+        else contextlib.nullcontext()
+    )
+    with scheduler_ctx, time_block() as rt:
+        # One Rust call per variable; each returns a stacked
+        # (N, *slice_shape) numpy array directly.
+        for var in var_names:
+            _ = atlas.read_array_across_stacked(var, names, start=start, shape=shape)
+    log_phase("atlas-bulk", "read", f"{rt.elapsed:.3f}s")
+
+    return BackendResult(name="atlas-bulk", write_s=wt.elapsed, read_s=rt.elapsed, size_bytes=size)
 
 
 # ── netCDF ────────────────────────────────────────────────────────────────
@@ -108,6 +204,8 @@ def bench_atlas(
 def bench_netcdf(
     n_datasets: int,
     root: Path,
+    case: Case,
+    slice_fraction: float,
     use_groups: bool = False,
     use_dask: bool = False,
     dask_workers: int | None = None,
@@ -120,17 +218,25 @@ def bench_netcdf(
         shutil.rmtree(root)
     root.mkdir(parents=True)
 
+    var_names = list(case.var_names)
+    indexers = slice_indexers(case, slice_fraction)
+
     netcdf_encoding = {
-        var: {"zlib": True, "complevel": 4} for var in VARIABLES
+        var: {
+            "zlib": True,
+            "complevel": 4,
+            **({"chunksizes": list(case.chunk_shape)} if case.chunk_shape else {}),
+        }
+        for var in var_names
     }
 
     if not use_groups:
         # Default: 1000 separate .nc files. open_mfdataset is the canonical
         # xarray idiom for this layout.
-        log_phase(label, f"writing {n_datasets} .nc files")
+        log_phase(label, f"writing {n_datasets} .nc files (case={case.name})")
         with time_block() as wt:
             for i in range(n_datasets):
-                ds = generate_dataset(i, use_dask=use_dask)
+                ds = generate_dataset(i, case, use_dask=use_dask)
                 ds.to_netcdf(
                     root / f"ds_{i:04d}.nc",
                     engine="netcdf4",
@@ -162,17 +268,17 @@ def bench_netcdf(
                 engine="netcdf4",
                 combine_attrs="drop_conflicts",
             )
-            _ = ds[list(VARIABLES)].isel(time=slice(0, SLICE_HOURS)).load()
+            _ = ds[var_names].isel(indexers).load()
             ds.close()
         log_phase(label, "read", f"{rt.elapsed:.3f}s")
     else:
         # Single .nc file with 1000 netCDF4 groups. Less common in the wild
         # but the apples-to-apples analog to zarr/atlas one-container layouts.
         path = root / "store.nc"
-        log_phase(label, f"writing {n_datasets} groups into one .nc file")
+        log_phase(label, f"writing {n_datasets} groups into one .nc file (case={case.name})")
         with time_block() as wt:
             for i in range(n_datasets):
-                ds = generate_dataset(i, use_dask=use_dask)
+                ds = generate_dataset(i, case, use_dask=use_dask)
                 # First write creates the file; subsequent writes append a group.
                 ds.to_netcdf(
                     path,
@@ -199,7 +305,7 @@ def bench_netcdf(
             @delayed
             def load_one(idx: int):
                 ds = xr.open_dataset(path, group=f"ds_{idx:04d}", engine="netcdf4")
-                out = ds[list(VARIABLES)].isel(time=slice(0, SLICE_HOURS)).load()
+                out = ds[var_names].isel(indexers).load()
                 ds.close()
                 return out
 
@@ -210,7 +316,7 @@ def bench_netcdf(
             with time_block() as rt:
                 for i in range(n_datasets):
                     ds = xr.open_dataset(path, group=f"ds_{i:04d}", engine="netcdf4")
-                    _ = ds[list(VARIABLES)].isel(time=slice(0, SLICE_HOURS)).load()
+                    _ = ds[var_names].isel(indexers).load()
                     ds.close()
                     progress_tick(i, n_datasets, "read")
         log_phase(label, "read", f"{rt.elapsed:.3f}s")
@@ -224,6 +330,8 @@ def bench_netcdf(
 def bench_zarr(
     n_datasets: int,
     root: Path,
+    case: Case,
+    slice_fraction: float,
     use_groups: bool = False,
     use_dask: bool = False,
     dask_workers: int | None = None,
@@ -241,6 +349,9 @@ def bench_zarr(
         shutil.rmtree(root)
     root.mkdir(parents=True)
 
+    var_names = list(case.var_names)
+    indexers = slice_indexers(case, slice_fraction)
+
     # xarray writes consolidated metadata by default, which zarr 3 warns about
     # on every group write — drowns the benchmark output. The warning is
     # informational (consolidated metadata isn't in the v3 spec yet, but works);
@@ -255,16 +366,20 @@ def bench_zarr(
     # variable. (Pass a `zarr.codecs.ZstdCodec` — numcodecs codecs are not
     # accepted directly by zarr 3's v3 array path.)
     zarr_encoding = {
-        var: {"compressors": (ZstdCodec(level=3),)} for var in VARIABLES
+        var: {
+            "compressors": (ZstdCodec(level=3),),
+            **({"chunks": tuple(case.chunk_shape)} if case.chunk_shape else {}),
+        }
+        for var in var_names
     }
 
     if not use_groups:
         # Default: 1000 separate zarr stores. open_mfdataset works for
         # multiple zarr stores via engine="zarr".
-        log_phase(label, f"writing {n_datasets} .zarr stores")
+        log_phase(label, f"writing {n_datasets} .zarr stores (case={case.name})")
         with time_block() as wt:
             for i in range(n_datasets):
-                ds = generate_dataset(i, use_dask=use_dask)
+                ds = generate_dataset(i, case, use_dask=use_dask)
                 ds.to_zarr(
                     str(root / f"ds_{i:04d}.zarr"),
                     mode="w",
@@ -295,17 +410,17 @@ def bench_zarr(
                 engine="zarr",
                 combine_attrs="drop_conflicts",
             )
-            _ = ds[list(VARIABLES)].isel(time=slice(0, SLICE_HOURS)).load()
+            _ = ds[var_names].isel(indexers).load()
             ds.close()
         log_phase(label, "read", f"{rt.elapsed:.3f}s")
     else:
         # One store with 1000 groups. open_mfdataset doesn't apply (it's for
         # multiple stores, not groups in one); per-group iteration is the
         # only option.
-        log_phase(label, f"writing {n_datasets} groups into one store")
+        log_phase(label, f"writing {n_datasets} groups into one store (case={case.name})")
         with time_block() as wt:
             for i in range(n_datasets):
-                ds = generate_dataset(i, use_dask=use_dask)
+                ds = generate_dataset(i, case, use_dask=use_dask)
                 ds.to_zarr(
                     str(root),
                     group=f"ds_{i:04d}",
@@ -330,7 +445,7 @@ def bench_zarr(
             @delayed
             def load_one(idx: int):
                 ds = xr.open_zarr(str(root), group=f"ds_{idx:04d}")
-                return ds[list(VARIABLES)].isel(time=slice(0, SLICE_HOURS)).load()
+                return ds[var_names].isel(indexers).load()
 
             tasks = [load_one(i) for i in range(n_datasets)]
             with time_block() as rt:
@@ -339,7 +454,7 @@ def bench_zarr(
             with time_block() as rt:
                 for i in range(n_datasets):
                     ds = xr.open_zarr(str(root), group=f"ds_{i:04d}")
-                    _ = ds[list(VARIABLES)].isel(time=slice(0, SLICE_HOURS)).load()
+                    _ = ds[var_names].isel(indexers).load()
                     progress_tick(i, n_datasets, "read")
         log_phase(label, "read", f"{rt.elapsed:.3f}s")
 
@@ -369,6 +484,34 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=1,
         help="Re-run each backend N times and report the mean (size is single-run).",
+    )
+    p.add_argument(
+        "--case",
+        default="sensors",
+        choices=sorted(CASES.keys()),
+        help=(
+            "Workload case (default 'sensors' — preserves the original "
+            "sensor-fleet behavior). 'gridded' is (lon, lat, time); "
+            "'profile' is (depth, time). Scale --datasets down for bigger cases."
+        ),
+    )
+    p.add_argument(
+        "--slice-fraction",
+        type=float,
+        default=0.25,
+        help=(
+            "Read slice covers the first int(F * dim_len) elements of every "
+            "dim. Default 0.25; for 'sensors' time=24 this gives time=[0:6]."
+        ),
+    )
+    p.add_argument(
+        "--atlas-bulk",
+        action="store_true",
+        help=(
+            "Add an `atlas-bulk` row that reads via Atlas.to_xarray_many "
+            "(atlas-native equivalent of xr.open_mfdataset) instead of "
+            "iterating per-dataset. Additive — the default `atlas` row still runs."
+        ),
     )
     p.add_argument(
         "--netcdf-groups",
@@ -417,39 +560,56 @@ def _build_tasks(
     alongside the default layout for that backend, not in place of it."""
     use_dask = args.use_dask
     dask_workers = args.dask_workers
+    case = CASES[args.case]
+    slice_fraction = args.slice_fraction
     tasks: list[tuple[str, Callable[[Path], BackendResult]]] = []
     for name in backends:
         if name == "atlas":
             tasks.append((
                 "atlas",
-                lambda root: bench_atlas(n_datasets, root, use_dask=use_dask, dask_workers=dask_workers),
+                lambda root: bench_atlas(
+                    n_datasets, root, case, slice_fraction,
+                    use_dask=use_dask, dask_workers=dask_workers,
+                ),
             ))
+            if args.atlas_bulk:
+                tasks.append((
+                    "atlas-bulk",
+                    lambda root: bench_atlas_bulk(
+                        n_datasets, root, case, slice_fraction,
+                        use_dask=use_dask, dask_workers=dask_workers,
+                    ),
+                ))
         elif name == "netcdf":
             tasks.append((
                 "netcdf",
                 lambda root: bench_netcdf(
-                    n_datasets, root, use_groups=False, use_dask=use_dask, dask_workers=dask_workers
+                    n_datasets, root, case, slice_fraction,
+                    use_groups=False, use_dask=use_dask, dask_workers=dask_workers,
                 ),
             ))
             if args.netcdf_groups:
                 tasks.append((
                     "netcdf-groups",
                     lambda root: bench_netcdf(
-                        n_datasets, root, use_groups=True, use_dask=use_dask, dask_workers=dask_workers
+                        n_datasets, root, case, slice_fraction,
+                        use_groups=True, use_dask=use_dask, dask_workers=dask_workers,
                     ),
                 ))
         elif name == "zarr":
             tasks.append((
                 "zarr",
                 lambda root: bench_zarr(
-                    n_datasets, root, use_groups=False, use_dask=use_dask, dask_workers=dask_workers
+                    n_datasets, root, case, slice_fraction,
+                    use_groups=False, use_dask=use_dask, dask_workers=dask_workers,
                 ),
             ))
             if args.zarr_groups:
                 tasks.append((
                     "zarr-groups",
                     lambda root: bench_zarr(
-                        n_datasets, root, use_groups=True, use_dask=use_dask, dask_workers=dask_workers
+                        n_datasets, root, case, slice_fraction,
+                        use_groups=True, use_dask=use_dask, dask_workers=dask_workers,
                     ),
                 ))
     return tasks
@@ -462,13 +622,15 @@ def main() -> None:
         if b not in BACKENDS:
             sys.exit(f"unknown backend {b!r}; choose from {list(BACKENDS)}")
 
+    case = CASES[args.case]
     tasks = _build_tasks(backends, args.datasets, args)
 
     tmp = Path(tempfile.mkdtemp(prefix="pyatlas-bench-"))
     print(f"Working dir: {tmp}")
-    print(f"Tasks: {[t[0] for t in tasks]}")
+    print(f"Case:        {case.name} — shape={case.shape} dims={case.dim_names}")
+    print(f"Tasks:       {[t[0] for t in tasks]}")
     if args.use_dask:
-        print(f"Dask: enabled, workers={args.dask_workers or 'default'}")
+        print(f"Dask:        enabled, workers={args.dask_workers or 'default'}")
     try:
         results: list[BackendResult] = []
         for label, runner in tasks:
@@ -487,7 +649,7 @@ def main() -> None:
                     size_bytes=runs[-1].size_bytes,
                 )
             )
-        print_results_table(results, args.datasets)
+        print_results_table(results, args.datasets, case, args.slice_fraction)
     finally:
         if args.keep_output:
             print(f"\nOutput kept at: {tmp}")

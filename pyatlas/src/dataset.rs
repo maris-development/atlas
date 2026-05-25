@@ -415,6 +415,43 @@ impl PyDatasetView {
         numeric_dispatch!(&stored, read_typed);
     }
 
+    /// Bulk-read multiple arrays from this dataset in one PyO3 call.
+    /// Returns `{name: ndarray | None}` — `None` for arrays not in this
+    /// dataset. Same `start` / `shape` apply to every array.
+    ///
+    /// Fast path for "give me these N variables, optionally sliced" — skips
+    /// the Python-side `xr.Dataset` construction and dask graph build that
+    /// [`to_xarray`] pays per dataset, while still doing one Rust round-trip
+    /// per variable. Use this from dask workers (or any per-dataset loop)
+    /// where the natural xarray API's overhead dominates over the actual
+    /// I/O cost — the gridded benchmark goes from ~7.8s to <3s by switching
+    /// the dask branch to call this instead of `to_xarray(name).isel(...).load()`.
+    #[pyo3(signature = (names, start=None, shape=None))]
+    fn read_arrays<'py>(
+        &self,
+        py: Python<'py>,
+        names: Vec<String>,
+        start: Option<Vec<usize>>,
+        shape: Option<Vec<usize>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let start = start.unwrap_or_default();
+        let shape = shape.unwrap_or_default();
+        let dict = PyDict::new(py);
+        for name in &names {
+            // Reuse the per-dtype dispatch in `read_array` for each variable.
+            // The win isn't fewer Rust calls — it's one PyO3 method invocation
+            // instead of N, no per-call Python dispatch overhead, and (most
+            // importantly) the caller skips `to_xarray`'s xr.Dataset + dask
+            // graph construction entirely.
+            let arr = self.read_array(py, name, Some(start.clone()), Some(shape.clone()))?;
+            match arr {
+                Some(arr) => dict.set_item(name, arr)?,
+                None => dict.set_item(name, py.None())?,
+            }
+        }
+        Ok(dict)
+    }
+
     fn delete_array(&mut self, py: Python<'_>, name: &str) -> PyResult<()> {
         py.detach(|| runtime().block_on(self.inner.delete_array(name)))
             .map_err(to_py_err)

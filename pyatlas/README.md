@@ -217,6 +217,53 @@ Run any of them with:
 python pyatlas/examples/01_basics.py
 ```
 
+## Benchmarks
+
+A reproducible comparison against `netCDF4` and Zarr v3 lives in [`benchmarks/`](benchmarks/). The harness writes the **same** deterministic data through each backend, then measures write time, slice-read time, and on-disk size. Each backend uses its canonical "many datasets" layout: atlas = one store with N datasets, netcdf = N separate `.nc` files (read via `xr.open_mfdataset`), zarr = N separate `.zarr` stores (also via `open_mfdataset`).
+
+Headline numbers on a typical Apple Silicon laptop, 1000 datasets each:
+
+**`--case gridded`** — `(100, 100, 48)` per variable × 3 variables, chunks `(50, 50, 24)`, slice 25%. Decompression-dominated; ~1.8 GB raw. All three backends push the slice down to chunk-level reads.
+
+| Backend | Read slice (s) | Write (s) | Storage (MiB) |
+|---|---:|---:|---:|
+| **atlas-bulk** (`read_array_across_stacked` + slice push-down) | **2.12** | 59 | 6387 |
+| **atlas + `--use-dask`** (per-dataset `view.read_arrays(...)`) | **3.21** | 60 | 6387 |
+| zarr (`open_mfdataset(parallel=True).isel(...)`) | 5.99 | 38 | 6392 |
+| atlas (default, serial `to_xarray(...).isel(...).load()`) | 10.23 | 51 | 6387 |
+| netcdf (`open_mfdataset(parallel=True).isel(...)`) | 13.91 | 122 | 5596 |
+
+**`--case profile`** — `(50, 168)` per variable × 2 variables, slice 25%. Overhead-dominated; ~67 MB raw.
+
+| Backend | Read slice (s) | Write (s) | Storage (MiB) |
+|---|---:|---:|---:|
+| **atlas-bulk** (`to_xarray_many`) | **0.08** | 0.77 | 55.5 |
+| **atlas (default, serial)** | **0.32** | 0.91 | 55.5 |
+| atlas + `--use-dask` | 2.03 | 2.98 | 55.6 |
+| netcdf | 4.27 | 2.98 | 62.3 |
+| zarr | 4.07 | 11.43 | 61.6 |
+
+**TL;DR**:
+
+- On large per-dataset workloads (`gridded` with realistic chunking + slice push-down): **`atlas-bulk` beats zarr by 2.8×** on slice reads, and **`atlas + --use-dask` beats zarr by 1.9×**. zarr remains the fastest writer.
+- On small per-dataset workloads (`profile`): atlas wins on everything — reads ~50× faster than zarr, writes ~12× faster. Per-dataset overhead is atlas's home court.
+- **API picker for reads** (in rough order of speed):
+  - Cross-dataset slice of the same vars across many datasets → `Atlas.to_xarray_many` / `Atlas.read_array_across_stacked` (the `atlas-bulk` path; one Rust call per variable).
+  - Per-dataset slice reads inside a dask worker → `view.read_arrays(vars, start, shape)` (returns `dict[str, np.ndarray]`; skips xr.Dataset + per-chunk dask graph). This is what `bench_atlas` with `--use-dask` does internally.
+  - Natural xarray code → `to_xarray(name).isel(...).load()`. Most ergonomic but pays per-chunk dask graph build overhead on chunked storage.
+- `--use-dask` is workload-dependent: helps when per-dataset decompression is the bottleneck, hurts otherwise.
+
+See the [top-level README's Benchmarks section](../README.md#benchmarks) for the full breakdown and caveats.
+
+Install + run:
+
+```bash
+pip install -e "pyatlas[bench]"
+python pyatlas/benchmarks/bench_collection.py --case gridded --datasets 1000
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md) for all flags (`--case sensors|gridded|profile`, `--use-dask`, `--atlas-bulk`, `--netcdf-groups`, `--zarr-groups`, …).
+
 ## Testing
 
 ```bash

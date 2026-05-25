@@ -259,6 +259,90 @@ After deleting arrays or datasets, the underlying `.af` files may retain dead sp
 
 ---
 
+## Benchmarks
+
+A reproducible comparison against NetCDF (`netCDF4`) and Zarr v3 lives in [`pyatlas/benchmarks/`](pyatlas/benchmarks/). The harness writes the **same** deterministic data through each backend, then measures three things:
+
+1. **Write** — total wall time to populate the collection.
+2. **Read slice** — read a fixed slice of every variable from every dataset, summed.
+3. **Storage** — total bytes on disk for the backend's directory.
+
+Each backend uses its **canonical "many datasets" layout** rather than a forced apples-to-apples one — `atlas` uses one store with N datasets, `netcdf` uses N separate `.nc` files (the standard CMIP layout, read via `xr.open_mfdataset(parallel=True)`), `zarr` uses N separate `.zarr` stores (also read via `open_mfdataset`). The point is to compare "what's the fastest each library can do for this workload using its idiomatic pattern," not to handicap any of them.
+
+### Workloads
+
+The harness ships two named workloads (`--case`):
+
+| Case | Variables | Per-dataset shape | Typical use |
+|---|---|---|---|
+| `sensors` (default) | `temperature`, `pressure`, `humidity` (f32/f64/f32) | `(24,)` on `(time,)` | Hourly weather-station fleet — tiny per-dataset I/O, per-dataset overhead dominates |
+| `gridded` | same three vars | `(100, 100, 48)` on `(lon, lat, time)` | Geophysical-style grid — actual decompression dominates |
+
+Both workloads run N=1000 datasets by default. Read slice is the first 25% of each dimension (`--slice-fraction 0.25`).
+
+### Results
+
+Numbers are wall-clock seconds on a single laptop (Apple Silicon, AC power, single run — treat as relative not absolute):
+
+#### `--case gridded --datasets 1000` (1.8 GB raw — decompression dominates)
+
+`(100, 100, 48)` per variable × 3 variables × 1000 datasets, chunk
+shape `(50, 50, 24)` (8 chunks per variable). All three backends push
+the `(0:25, 0:25, 0:12)` slice down to chunk-level reads.
+
+| Backend | Layout / pattern | Read slice (s) | Write (s) | Storage (MiB) |
+|---|---|---:|---:|---:|
+| **atlas-bulk** | 1 store, `read_array_across_stacked` with slice push-down | **2.12** | 59 | 6387 |
+| **atlas + `--use-dask`** | 1 store, dask-threaded per-dataset `view.read_arrays(...)` | **3.21** | 60 | 6387 |
+| zarr | 1000 separate stores, `xr.open_mfdataset(parallel=True).isel(...)` | 5.99 | 38 | 6392 |
+| atlas (default) | 1 store, serial per-dataset `to_xarray(...).isel(...).load()` | 10.23 | 51 | 6387 |
+| netcdf | 1000 `.nc` files, `xr.open_mfdataset(parallel=True).isel(...)` | 13.91 | 122 | 5596 |
+
+#### `--case profile --datasets 1000` (~67 MB raw — per-dataset overhead dominates)
+
+2 variables on `(depth=50, time=168)` — oceanographic-style time × depth cast.
+
+| Backend | Read slice (s) | Write (s) | Storage (MiB) |
+|---|---:|---:|---:|
+| **atlas-bulk** | **0.08** | 0.77 | 55.5 |
+| **atlas (default)** | **0.32** | 0.91 | 55.5 |
+| atlas + `--use-dask` | 2.03 | 2.98 | 55.6 |
+| netcdf | 4.27 | 2.98 | 62.3 |
+| zarr | 4.07 | 11.43 | 61.6 |
+
+This is the workload atlas was structurally designed for. The shared `atlas.msgpack.zst` + one `.af` file per variable means a 1000-dataset open is essentially free, and the read path collapses to "decompress 1000 small blocks from 2 sequential files." Both zarr's 1000-store mfdataset and netcdf's 1000-file mfdataset pay metadata overhead 1000× over.
+
+Note `--use-dask` is *slower* than default atlas here: when per-dataset I/O is tiny, dask scheduler overhead dominates. The rule of thumb flips by workload — dask helps when per-dataset decompression is the bottleneck (gridded), hurts when per-dataset overhead is the bottleneck (profile).
+
+#### `--case sensors --datasets 1000` (tiny per-dataset shapes — atlas's design wins)
+
+| Backend | Read slice (s) | Write (s) | Storage (KiB) |
+|---|---:|---:|---:|
+| atlas | ~0.02 | ~0.1 | ~80 |
+| zarr | ~0.6 | ~2.0 | ~370 |
+| netcdf | ~0.25 | ~0.16 | ~730 |
+
+For tiny-shape datasets the comparison is dominated by per-dataset overhead, which is exactly atlas's structural advantage (one store, one metadata file, one physical file per array name).
+
+### What the numbers say
+
+- **Reads on gridded** (decompression-dominated, with realistic chunking + slice push-down): `atlas-bulk` reads in **2.12s vs zarr's 6.00s — 2.8× faster**. `atlas + --use-dask` (using the new `view.read_arrays(...)` fast path) hits **3.21s — 1.9× faster than zarr**. The win comes from atlas's structural advantage (one open of one file per variable, in-memory metadata) combined with APIs that bypass `to_xarray`'s xr.Dataset + per-chunk dask graph overhead. zarr and netcdf both push the slice down through `open_mfdataset(...).isel(...)` via dask graph optimization — they're not penalised by the chunking; atlas just wins by amortising metadata and skipping per-dataset Python overhead.
+- **Reads on profile** (overhead-dominated): atlas wins by an order of magnitude. `atlas-bulk` is **~50× faster than zarr** (0.08s vs 4.07s) because the per-dataset I/O is small enough that everything is overhead — and atlas's structural design is built for exactly that case. Default serial `atlas` is still ~12× faster than zarr.
+- **Default `atlas.to_xarray` iteration is currently SLOW on chunked storage** (10.23s vs zarr's 6.00s). It goes through `to_xarray(name)` which returns dask-backed arrays per chunk (8 chunks/var × 3 vars × 1000 datasets = 24,000 dask delayed tasks just to build the graph). Dask graph overhead exceeds the parallelism win. **The fix is to use `view.read_arrays(vars, start, shape)` for per-dataset slice reads** — that's what `atlas + --use-dask` does internally and why it hits 3.21s. For cross-dataset reads of the *same* slice from many datasets, prefer `Atlas.to_xarray_many` / `read_array_across_stacked` (the `atlas-bulk` row).
+- **Workload sensitivity**: `--use-dask` helps when per-dataset decompression is the bottleneck and *hurts* when per-dataset overhead is the bottleneck (profile: default `atlas` 0.32s → dask 2.03s). Picking the right API for the workload matters more than picking dask vs serial.
+- **Writes on gridded**: zarr is fastest (~31s vs atlas's ~50s) — each `to_zarr(...)` just dumps bytes into a per-dataset subtree, while atlas does more bookkeeping per call (schema registration, per-dataset attrs into the shared `atlas.msgpack.zst`, block addressing in the shared array file). Atlas still beats netcdf decisively.
+- **Writes on profile**: atlas wins ~12× (0.91s vs zarr's 11.43s, netcdf's 2.98s). At small per-dataset sizes the metadata write dominates, and atlas's amortised single-flush model wins.
+- **Storage**: atlas and zarr are essentially tied (both zstd); netcdf wins on the gridded case because zlib happens to compress this particular workload tighter, but loses on profile/sensors because the per-file overhead dominates.
+
+### Caveats
+
+- **Single laptop, single run** — variance can be 10–20%. The benchmark deliberately doesn't drop OS caches between runs (it measures warm-cache repeat-query performance, which is what real analytic workloads see).
+- **Local filesystem only** — atlas's biggest potential read win is over a high-latency object store where the metadata-shape difference dominates; that's a different benchmark.
+- **`netCDF4` vs `h5netcdf`** — using the C-library binding (the more common production choice).
+- Run it yourself: `pip install -e "pyatlas[bench]"` then `python pyatlas/benchmarks/bench_collection.py --case gridded --datasets 1000`. See [`pyatlas/benchmarks/README.md`](pyatlas/benchmarks/README.md) for all flags.
+
+---
+
 ## Thread safety
 
 `Atlas` and `DatasetView` are `Send + Sync` and work with the default multi-thread Tokio runtime.

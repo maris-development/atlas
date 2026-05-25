@@ -94,6 +94,74 @@ class Atlas:
         """
         ...
 
+    def to_xarray_many(
+        self,
+        names: Sequence[str],
+        concat_dim: str = "dataset",
+        parallel: bool = True,
+    ) -> "xr.Dataset":
+        """Open many datasets and stack them along `concat_dim` as one Dataset.
+
+        atlas-native equivalent of `xr.open_mfdataset(...)`. Each variable comes
+        back shape `(len(names), *original_shape)` as eager numpy. Wrap with
+        `.chunk(...)` downstream if you need dask laziness.
+
+        Implementation calls `Atlas.read_array_across` once per variable —
+        N per-dataset reads share one `RwLock::read` guard on the shared
+        physical file and dispatch concurrently on the tokio runtime.
+
+        Variable names + dtypes must match across all listed datasets.
+        Coordinates and dataset-level attrs are taken from the first dataset.
+
+        The `parallel` parameter is accepted for API compatibility but no
+        longer selects an implementation — the bulk path is always taken.
+        """
+        ...
+
+    def read_array_across(
+        self,
+        array: str,
+        dataset_names: Sequence[str],
+        start: Optional[Sequence[int]] = None,
+        shape: Optional[Sequence[int]] = None,
+    ) -> list[Optional[NDArray[Any]]]:
+        """Bulk-read the same slice of `array` across many datasets.
+
+        Returns a list of length `len(dataset_names)` — one numpy array per
+        dataset, or `None` for datasets that don't declare `array`. All reads
+        share one `RwLock::read` guard on the array's shared physical file and
+        dispatch concurrently on the tokio runtime via a `JoinSet` capped at
+        `num_cpus` in-flight tasks. Replaces N individual `read_array` calls
+        with a single Python ↔ Rust round-trip.
+
+        `start` / `shape` follow the same conventions as
+        `DatasetView.read_array`: omit both to read each dataset's full array.
+
+        For the common "stack and use as one array" pattern, prefer
+        [`read_array_across_stacked`] which skips the Python-side
+        `np.stack` copy.
+        """
+        ...
+
+    def read_array_across_stacked(
+        self,
+        array: str,
+        dataset_names: Sequence[str],
+        start: Optional[Sequence[int]] = None,
+        shape: Optional[Sequence[int]] = None,
+    ) -> NDArray[Any]:
+        """Stacked variant of `read_array_across`: returns one numpy ndarray
+        of shape `(len(dataset_names), *per_dataset_shape)` instead of a list.
+
+        The output buffer is pre-allocated in Rust; each parallel read writes
+        its row in as the task completes. Skips the ~N × per_dataset_size of
+        memory copies that `np.stack(read_array_across(...))` would do.
+
+        Errors if any listed dataset doesn't declare `array` (the stacked
+        representation has no positional "missing" sentinel).
+        """
+        ...
+
     def flush(self) -> None:
         """Persist the in-memory atlas.json + every cached array file.
 
@@ -176,6 +244,25 @@ class DatasetView:
 
         With `start` and `shape` omitted, returns the entire array. Returns `None`
         if the array does not exist in this dataset.
+        """
+        ...
+
+    def read_arrays(
+        self,
+        names: Sequence[str],
+        start: Optional[Sequence[int]] = None,
+        shape: Optional[Sequence[int]] = None,
+    ) -> dict[str, Optional[NDArray[Any]]]:
+        """Bulk-read multiple arrays in one PyO3 call.
+
+        Returns `{name: ndarray | None}` — `None` for arrays not in this
+        dataset. Same `start` / `shape` apply to every array.
+
+        Fast path for per-dataset slice reads (e.g. inside a dask worker)
+        where `to_xarray(name).isel(...).load()` overhead would dominate the
+        actual I/O cost. Skips the xr.Dataset construction and per-chunk
+        dask graph that `to_xarray` builds. See the benchmarks for the
+        ~3-4× speedup over `to_xarray` iteration on chunked storage.
         """
         ...
 
