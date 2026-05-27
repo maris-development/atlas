@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "atlas-python"
+version = "0.8.0"
+description = "Python bindings for the ATLAS array store"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.23",
+    "xarray>=2023.1",
+    "dask>=2023.1",
+]
+
+[project.optional-dependencies]
+bench = [
+    "zarr>=3",
+    "numcodecs",
+    "netCDF4",
+]
+# Optional — installs the `obstore` Python package so that `Atlas.open` /
+# `Atlas.create` can accept an obstore-constructed S3 / GCS / Azure /
+# HTTP store handle. The path-based local-fs API works without this.
+cloud = [
+    "obstore>=0.9",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "atlas._atlas"
+python-source = "python"
