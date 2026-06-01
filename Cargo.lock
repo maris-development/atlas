@@ -28,8 +28,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "array-format"
-version = "0.8.0"
-source = "git+https://github.com/robinskil/array-format#97245fffdaf700a29c004dc8644e46297259d6e7"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d91c6d4d26f667272f8930d41bc95118716e12858baf115940a626510e7b5873"
 dependencies = [
  "bytes",
  "futures",
@@ -69,8 +70,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "atlas"
-version = "0.8.0"
+name = "atlas-python"
+version = "0.9.0"
+dependencies = [
+ "atlas-rust",
+ "ndarray",
+ "numpy",
+ "object_store",
+ "pyo3",
+ "pyo3-object_store",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "atlas-rust"
+version = "0.9.0"
 dependencies = [
  "array-format",
  "chrono",
@@ -89,21 +105,6 @@ dependencies = [
  "tokio",
  "tracing",
  "zstd",
-]
-
-[[package]]
-name = "atlas-python"
-version = "0.8.0"
-dependencies = [
- "atlas",
- "ndarray",
- "numpy",
- "object_store",
- "pyo3",
- "pyo3-object_store",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
