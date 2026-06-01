@@ -14,6 +14,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Tooling needed to run the test suite (`pytest atlas-python/tests`). The
+# numpy/xarray/dask runtime deps come from `[project].dependencies`; this adds
+# pytest and a netCDF backend (test_xarray reads a .nc fixture via xarray).
+test = [
+    "pytest",
+    "netCDF4",
+]
 bench = [
     "zarr>=3",
     "numcodecs",

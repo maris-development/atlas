@@ -46,7 +46,6 @@ jobs:
               run: |
                   python -m venv .venv
                   source .venv/bin/activate
-                  python -m pip install --upgrade pip
-                  pip install maturin pytest numpy xarray dask
-                  maturin develop --manifest-path atlas-python/Cargo.toml
+                  python -m pip install --upgrade pip maturin
+                  maturin develop --extras test --manifest-path atlas-python/Cargo.toml
                   pytest atlas-python/tests -v
