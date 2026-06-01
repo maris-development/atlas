@@ -21,8 +21,11 @@ This pulls in `numpy>=1.23`, `xarray>=2023.1`, and `dask>=2023.1`.
 
 ## From source (development)
 
-The Python module is built with [maturin](https://www.maturin.rs/); the
-Rust crate lives in `atlas-python/`.
+`atlas-python` is a thin [PyO3](https://pyo3.rs/) binding layer over the
+**[`atlas-rust`](https://github.com/maris-development/atlas)** core crate — all
+storage, compression, and I/O live in Rust. The binding crate lives in
+`atlas-python/` and depends on the core crate at the repo root, both built with
+[maturin](https://www.maturin.rs/).
 
 ```bash
 python3.13 -m venv .venv

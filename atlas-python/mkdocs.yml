@@ -39,6 +39,10 @@ plugins:
               python:
                   paths: ["python"] # python-source layout: package lives at python/atlas
                   options:
+                      # `Atlas`, `DatasetView`, `init_tracing` are re-exported from the
+                      # compiled Rust extension `atlas._atlas`. griffe can't analyse a
+                      # .pyd statically, so dynamically import it to resolve the aliases.
+                      preload_modules: ["atlas._atlas"]
                       docstring_style: numpy
                       show_root_heading: true
                       show_source: false

@@ -1,17 +1,17 @@
 # Atlas
 
-`atlas` is the Python binding for **ATLAS** (Aggregated Tensor Large Array
-Store), a directory-based store for many similarly-shaped N-dimensional
-arrays. One store holds N logical datasets; arrays of the same name across
-datasets share a single physical file on disk, so the on-disk footprint grows
-with *schemas* rather than *datasets*.
+Python bindings to **[`atlas-rust`](https://github.com/maris-development/atlas)** — the
+Rust core that powers ATLAS (Aggregated Tensor Large Array Store). Think of it as a *"zip"
+for N-dimensional data*: store thousands of NetCDF / Zarr-style datasets in one
+high-performance collection, then read any of them back as NumPy or
+[xarray](https://docs.xarray.dev).
 
 ```python
 import numpy as np
 import atlas
 
-with atlas.Atlas.create("/tmp/my_store", codec="zstd") as atlas:
-    ds = atlas.create_dataset("jan_2024")
+with atlas.Atlas.create("/tmp/my_store", codec="zstd") as store:
+    ds = store.create_dataset("jan_2024")
     ds.define_array(
         "temperature",
         dtype="float32",
@@ -22,7 +22,7 @@ with atlas.Atlas.create("/tmp/my_store", codec="zstd") as atlas:
     ds.write_array("temperature", start=[0, 0],
                    data=np.full((8, 16), 20.0, dtype=np.float32))
     ds.set_attribute("month", 1)
-# `with` exit == atlas.close() == single flush to disk
+# `with` exit == store.close() == single flush to disk
 ```
 
 ## What's here

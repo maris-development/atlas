@@ -29,3 +29,4 @@ pyatlas/python/pyatlas/_pyatlas.pyd
 pyatlas/python/pyatlas/_pyatlas.abi3.so
 playground/
 data/
+atlas-python/python/atlas/_atlas.pyd

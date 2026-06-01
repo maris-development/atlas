@@ -10,8 +10,8 @@ to confirm everything persisted.
 import numpy as np
 import atlas
 
-with atlas.Atlas.create("/tmp/my_store", codec="zstd") as atlas:   # (1)
-    ds = atlas.create_dataset("jan_2024")                            # (2)
+with atlas.Atlas.create("/tmp/my_store", codec="zstd") as store:   # (1)
+    ds = store.create_dataset("jan_2024")                            # (2)
     ds.define_array(
         "temperature",
         dtype="float32",
@@ -27,7 +27,7 @@ with atlas.Atlas.create("/tmp/my_store", codec="zstd") as atlas:   # (1)
     )
     ds.set_attribute("month", 1)
     ds.set_attribute("station", "KNMI")
-# (4) `with` exit calls atlas.close() == flush().
+# (4) `with` exit calls store.close() == flush().
 ```
 
 1. **`Atlas.create(path, codec=...)`** — codec is one of `"zstd"`,
@@ -37,8 +37,8 @@ with atlas.Atlas.create("/tmp/my_store", codec="zstd") as atlas:   # (1)
 3. **`fill_value`** is the scalar returned for unwritten cells. Any *written*
    cell equal to the fill value is counted as a null in [`array_stats`](guides/stats.md).
 4. **No I/O until `flush`** — `define_array` and `write_array` only mutate
-   in-memory state. The `with` exit (or an explicit `atlas.flush()` /
-   `atlas.close()`) is the **single durability boundary**.
+   in-memory state. The `with` exit (or an explicit `store.flush()` /
+   `store.close()`) is the **single durability boundary**.
    See [Durability and flushing](guides/durability.md).
 
 ## Reopen and read back
