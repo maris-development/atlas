@@ -102,10 +102,24 @@ mod tests {
 
     #[tokio::test]
     async fn create_and_read_dataset() {
-        let atlas = Atlas::open_path("data/example").await.unwrap();
-        let view = atlas.open_dataset("GL_PR_CT_2FGX5").await.unwrap();
-        let names = view.list_arrays();
-        println!("arrays: {names:?}");
+        let tmp = tempfile::tempdir().unwrap();
+
+        {
+            let mut atlas = Atlas::create_path(tmp.path(), StoreConfig::default())
+                .await
+                .unwrap();
+            {
+                let mut view = atlas.create_dataset("ds").await.unwrap();
+                view.define_array::<f32>("temp", vec!["x".into()], vec![4], None, None)
+                    .await
+                    .unwrap();
+            }
+            atlas.flush().await.unwrap();
+        }
+
+        let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+        let view = atlas.open_dataset("ds").await.unwrap();
+        assert_eq!(view.list_arrays(), vec!["temp".to_string()]);
     }
 
     #[test]
