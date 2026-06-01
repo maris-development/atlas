@@ -52,7 +52,7 @@ jobs:
 
             - uses: actions/setup-python@v6
               with:
-                  python-version: 3.x
+                  python-version: "3.12"
             - run: echo "cache_id=$(date --utc '+%V')" >> $GITHUB_ENV
             - uses: actions/cache@v4
               with:
@@ -61,6 +61,10 @@ jobs:
                   restore-keys: |
                       mkdocs-material-
             - run: pip install mkdocs-material mkdocstrings[python] mike
+              # Build & install the package so the compiled `atlas._atlas` extension is
+              # importable — mkdocstrings preloads it to resolve the re-exported API.
+              # ubuntu-latest ships a Rust toolchain, so maturin can build from source.
+            - run: pip install ./atlas-python
             - env:
                   VERSION: ${{ steps.vars.outputs.version }}
                   ALIAS: ${{ steps.vars.outputs.alias }}
