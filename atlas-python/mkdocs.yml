@@ -22,7 +22,7 @@ theme:
               icon: material/brightness-4
               name: Switch to light mode
 
-repo_url: https://github.com/robinskil/atlas
+repo_url: https://github.com/maris-development/atlas
 plugins:
     - search
     - mike:

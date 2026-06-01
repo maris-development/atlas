@@ -50,7 +50,7 @@ metadata-file size, which is a few MB even at that scale (see
 [Codecs and metadata](codecs-and-meta.md) for msgpack / compression
 options if you want it smaller).
 
-[`examples/06_stats_scan.py`](https://github.com/robinskil/atlas/blob/main/atlas-python/examples/06_stats_scan.py)
+[`examples/06_stats_scan.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/06_stats_scan.py)
 runs exactly this pattern across 32 sensor datasets.
 
 ## How `null_count` works with `fill_value`

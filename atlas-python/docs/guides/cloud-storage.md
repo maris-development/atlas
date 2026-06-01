@@ -92,7 +92,7 @@ list of backends and their credential / region / endpoint options.
 
 A complete runnable script — create / write / `add_xr_dataset` /
 `to_xarray` / `array_stats`, then reopen and verify — lives at
-[`atlas-python/examples/08_object_store.py`](https://github.com/robinskil/atlas/blob/main/atlas-python/examples/08_object_store.py).
+[`atlas-python/examples/08_object_store.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/08_object_store.py).
 It uses `LocalStore` by default so it runs without credentials; swap in
 the S3 / GCS / Azure block at the top to point at a real backend.
 

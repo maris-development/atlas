@@ -5,11 +5,11 @@ members = ["atlas-python"]
 # Registry name on crates.io (`atlas` is taken). The library is still
 # imported as `atlas` — see `[lib]` below.
 name = "atlas-rust"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2024"
 description = "Directory-based store for thousands of N-dimensional datasets local or remote using object storage."
 license = "Apache-2.0"
-repository = "https://github.com/robinskil/atlas"
+repository = "https://github.com/maris-development/atlas"
 readme = "README.md"
 keywords = ["array", "ndarray", "scientific", "storage", "object-store"]
 categories = ["science", "data-structures", "filesystem"]

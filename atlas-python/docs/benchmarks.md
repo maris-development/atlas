@@ -1,7 +1,7 @@
 # Benchmarks
 
 A reproducible comparison against `netCDF4` and Zarr v3 lives in
-[`atlas-python/benchmarks/`](https://github.com/robinskil/atlas/tree/main/atlas-python/benchmarks).
+[`atlas-python/benchmarks/`](https://github.com/maris-development/atlas/tree/main/atlas-python/benchmarks).
 The harness writes the **same** deterministic data through each backend,
 then measures write time, slice-read time, and on-disk size. Each backend
 uses its canonical "many datasets" layout:
@@ -170,7 +170,7 @@ python atlas-python/benchmarks/bench_collection.py --case gridded --datasets 100
 The harness accepts a stack of flags — `--case sensors|gridded|profile`,
 `--use-dask`, `--atlas-bulk`, `--netcdf-groups`, `--zarr-groups`,
 `--slice-fraction`, `--dask-workers`, … — fully documented in
-[`atlas-python/benchmarks/README.md`](https://github.com/robinskil/atlas/blob/main/atlas-python/benchmarks/README.md).
+[`atlas-python/benchmarks/README.md`](https://github.com/maris-development/atlas/blob/main/atlas-python/benchmarks/README.md).
 
 ## Caveats
 

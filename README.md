@@ -2,6 +2,12 @@
 
 A directory-based store for thousands of named datasets, each holding N-dimensional typed arrays. Built on top of the [`array-format`](https://github.com/robinskil/array-format) (`.af`) binary format, with configurable compression (Zstd, LZ4, or none), chunked I/O, and an [`object_store`](https://crates.io/crates/object_store) backend that works on local disk, S3, GCS, Azure Blob, and in-memory.
 
+**Think of it as a "zip" for N-dimensional datasets.** Where a `.zip` bundles many files into one archive, ATLAS gathers many NetCDF / Zarr-style datasets — anything that's a set of named N-dimensional arrays — into a single high-performance collection. But it's more than a bundle: instead of storing each dataset whole, ATLAS lays the data out **variable-first**, so every dataset's `temperature` lives in one file. That makes it cheap to scan or slice a single variable across thousands of datasets at once, while still reading back any individual dataset as a normal NetCDF/xarray-like object.
+
+> **Looking for Python?** The Python bindings live in [`atlas-python/`](atlas-python/) — `pip install atlas-python`, then `import atlas`. They add a NumPy-native API and first-class [xarray](https://docs.xarray.dev) integration. See the [atlas-python README](atlas-python/README.md) for usage.
+>
+> The rest of this document covers **how the format works and the Rust crate**.
+
 ---
 
 ## What it does

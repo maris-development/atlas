@@ -26,7 +26,7 @@ whole store (here: `["temperature", "pressure"]`) — usually a small
 constant. `Atlas.list_datasets()` returns the logical dataset names that
 may run into the thousands.
 
-[`examples/07_shared_arrays.py`](https://github.com/robinskil/atlas/blob/main/atlas-python/examples/07_shared_arrays.py)
+[`examples/07_shared_arrays.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/07_shared_arrays.py)
 walks this with 50 stations × 2 variables and prints the on-disk
 directory listing — exactly two array directories regardless of N.
 

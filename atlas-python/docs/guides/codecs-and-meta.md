@@ -28,7 +28,7 @@ which codec the store was opened with. Existing blocks always decompress
 with whichever codec wrote them; the `codec=` kwarg only affects *new*
 blocks. This means you can switch codecs mid-life without rewriting.
 
-See [`examples/05_codecs.py`](https://github.com/robinskil/atlas/blob/main/atlas-python/examples/05_codecs.py)
+See [`examples/05_codecs.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/05_codecs.py)
 for a head-to-head on a smooth `float32` field (smooth data exposes codec
 differences; pure noise compresses uniformly badly across all three).
 
@@ -62,7 +62,7 @@ Mostly useful for stores with thousands of datasets on a high-latency
 object store: the metadata file is read in full on every open, so trimming
 30–50% off the wire size pays for itself.
 
-[`examples/04_meta_formats.py`](https://github.com/robinskil/atlas/blob/main/atlas-python/examples/04_meta_formats.py)
+[`examples/04_meta_formats.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/04_meta_formats.py)
 walks all six combinations on a 30-dataset × 4-array store and prints the
 size ratios.
 
