@@ -61,6 +61,14 @@ jobs:
                   restore-keys: |
                       mkdocs-material-
             - run: pip install mkdocs-material mkdocstrings[python] mike
-            - run: |
+            - env:
+                  VERSION: ${{ steps.vars.outputs.version }}
+                  ALIAS: ${{ steps.vars.outputs.alias }}
+              run: |
                   git fetch origin gh-pages --depth=1 || true
-                  mike deploy --push --update-aliases -F atlas-python/mkdocs.yml "${{ steps.vars.outputs.version }}" "${{ steps.vars.outputs.alias }}"
+                  # mike rejects an alias identical to the version, so only pass it when it differs
+                  if [[ "$ALIAS" == "$VERSION" ]]; then
+                      mike deploy --push --update-aliases -F atlas-python/mkdocs.yml "$VERSION"
+                  else
+                      mike deploy --push --update-aliases -F atlas-python/mkdocs.yml "$VERSION" "$ALIAS"
+                  fi
