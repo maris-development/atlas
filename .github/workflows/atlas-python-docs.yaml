@@ -63,8 +63,12 @@ jobs:
             - run: pip install mkdocs-material mkdocstrings[python] mike
               # Build & install the package so the compiled `atlas._atlas` extension is
               # importable — mkdocstrings preloads it to resolve the re-exported API.
+              # Editable (-e) so maturin places the compiled `_atlas.*.so` into the
+              # python-source tree (atlas-python/python/atlas/), which is where griffe's
+              # `paths: ["python"]` search path looks for it. A plain install puts it in
+              # site-packages, outside that search path, and the alias fails to resolve.
               # ubuntu-latest ships a Rust toolchain, so maturin can build from source.
-            - run: pip install ./atlas-python
+            - run: pip install -e ./atlas-python
             - env:
                   VERSION: ${{ steps.vars.outputs.version }}
                   ALIAS: ${{ steps.vars.outputs.alias }}
