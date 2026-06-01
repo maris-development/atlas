@@ -11,8 +11,6 @@ permissions:
 jobs:
     linux:
         runs-on: ${{ matrix.runner }}
-        # Only act on this package's releases (a release fires every workflow).
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'atlas-python-v')
         strategy:
             fail-fast: false
             matrix:
@@ -40,7 +38,6 @@ jobs:
 
     macos:
         runs-on: macos-latest
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'atlas-python-v')
         strategy:
             fail-fast: false
             matrix:
@@ -63,7 +60,6 @@ jobs:
 
     windows:
         runs-on: windows-latest
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'atlas-python-v')
         strategy:
             fail-fast: false
             matrix:
@@ -87,7 +83,6 @@ jobs:
 
     sdist:
         runs-on: ubuntu-latest
-        if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'atlas-python-v')
         steps:
             - uses: actions/checkout@v4
             - name: Build sdist
@@ -103,7 +98,7 @@ jobs:
     release:
         name: Publish to PyPI
         runs-on: ubuntu-latest
-        if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'atlas-python-v')
+        if: github.event_name == 'release'
         needs: [linux, macos, windows, sdist]
         permissions:
             id-token: write
