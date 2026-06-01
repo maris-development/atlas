@@ -2,8 +2,10 @@
 members = ["atlas-python"]
 
 [package]
-name = "atlas"
-version = "0.8.0"
+# Registry name on crates.io (`atlas` is taken). The library is still
+# imported as `atlas` — see `[lib]` below.
+name = "atlas-rust"
+version = "0.9.0"
 edition = "2024"
 description = "Directory-based store for thousands of N-dimensional datasets local or remote using object storage."
 license = "Apache-2.0"
@@ -12,12 +14,15 @@ readme = "README.md"
 keywords = ["array", "ndarray", "scientific", "storage", "object-store"]
 categories = ["science", "data-structures", "filesystem"]
 
+[lib]
+name = "atlas"
+
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-array-format = { git = "https://github.com/robinskil/array-format" , version = "0.8.0" }
+array-format = "0.9.0"
 object_store = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

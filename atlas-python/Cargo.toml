@@ -1,6 +1,6 @@
 [package]
 name = "atlas-python"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2021"
 
 [lib]
@@ -8,14 +8,11 @@ name = "_atlas"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-atlas = { path = ".." }
+atlas = { package = "atlas-rust", path = ".." }
 pyo3 = { version = "0.28", features = ["extension-module", "abi3-py310"] }
 numpy = "0.28"
 ndarray = "0.17"
 object_store = "0.13"
-# Resolved via the workspace `[patch.crates-io]` to the obstore git main
-# branch — see the root Cargo.toml. Once a crates.io release tracks
-# object_store 0.13 we can drop the patch and pin the published version.
 pyo3-object_store = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tracing = "0.1"

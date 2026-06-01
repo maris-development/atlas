@@ -1,0 +1,52 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+concurrency:
+    group: ci-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    rust:
+        name: Rust tests
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - uses: Swatinem/rust-cache@v2
+            - name: Build workspace
+              run: cargo build --workspace --verbose
+            - name: Test atlas crate
+              # atlas-python links `pyo3/extension-module` (no libpython), so a
+              # plain `cargo test` binary can't link there — test the core crate.
+              run: cargo test -p atlas-rust --verbose
+
+    python:
+        name: Python tests
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                python-version: ["3.10", "3.13"]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v6
+              with:
+                  python-version: ${{ matrix.python-version }}
+            - uses: dtolnay/rust-toolchain@stable
+            - uses: Swatinem/rust-cache@v2
+            - name: Build extension and run pytest
+              run: |
+                  python -m venv .venv
+                  source .venv/bin/activate
+                  python -m pip install --upgrade pip
+                  pip install maturin pytest numpy xarray dask
+                  maturin develop --manifest-path atlas-python/Cargo.toml
+                  pytest atlas-python/tests -v
