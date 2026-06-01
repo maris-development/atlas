@@ -80,3 +80,9 @@ jobs:
                   else
                       mike deploy --push --update-aliases -F atlas-python/mkdocs.yml "$VERSION" "$ALIAS"
                   fi
+                  # The site root must always redirect to `latest`, so only (re)write the
+                  # root index.html when this run deploys the `latest` alias (releases).
+                  # Manual `dev` runs are published at /dev/ but never touch the root.
+                  if [[ "$ALIAS" == "latest" ]]; then
+                      mike set-default --push -F atlas-python/mkdocs.yml latest
+                  fi
