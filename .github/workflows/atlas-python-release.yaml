@@ -1,0 +1,112 @@
+name: atlas-python release
+
+on:
+    workflow_dispatch:
+    push:
+        tags:
+            - "atlas-python-v*"
+
+permissions:
+    contents: read
+
+jobs:
+    linux:
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                target: [x86_64, aarch64]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.10"
+            - name: Build wheels
+              uses: PyO3/maturin-action@v1
+              with:
+                  target: ${{ matrix.target }}
+                  manylinux: auto
+                  sccache: "true"
+                  args: --release --out dist --manifest-path atlas-python/Cargo.toml
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: wheels-linux-${{ matrix.target }}
+                  path: dist
+
+    macos:
+        runs-on: macos-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                target: [x86_64, aarch64]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.10"
+            - name: Build wheels
+              uses: PyO3/maturin-action@v1
+              with:
+                  target: ${{ matrix.target }}
+                  sccache: "true"
+                  args: --release --out dist --manifest-path atlas-python/Cargo.toml
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: wheels-macos-${{ matrix.target }}
+                  path: dist
+
+    windows:
+        runs-on: windows-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                target: [x64]
+        steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-python@v5
+              with:
+                  python-version: "3.10"
+                  architecture: ${{ matrix.target }}
+            - name: Build wheels
+              uses: PyO3/maturin-action@v1
+              with:
+                  target: ${{ matrix.target }}
+                  sccache: "true"
+                  args: --release --out dist --manifest-path atlas-python/Cargo.toml
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: wheels-windows-${{ matrix.target }}
+                  path: dist
+
+    sdist:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+            - name: Build sdist
+              uses: PyO3/maturin-action@v1
+              with:
+                  command: sdist
+                  args: --out dist --manifest-path atlas-python/Cargo.toml
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: wheels-sdist
+                  path: dist
+
+    release:
+        name: Publish to PyPI
+        runs-on: ubuntu-latest
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        needs: [linux, macos, windows, sdist]
+        permissions:
+            id-token: write
+        environment:
+            name: pypi
+            url: https://pypi.org/p/atlas-python
+        steps:
+            - uses: actions/download-artifact@v4
+              with:
+                  pattern: wheels-*
+                  path: dist
+                  merge-multiple: true
+            - name: Publish to PyPI
+              uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,5 +1,5 @@
 [workspace]
-members = ["pyatlas"]
+members = ["atlas-python"]
 
 [package]
 name = "atlas"
