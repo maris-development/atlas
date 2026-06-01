@@ -1,0 +1,56 @@
+name: atlas-rust release
+
+on:
+    workflow_dispatch:
+    release:
+        types: [published]
+
+permissions:
+    contents: read
+
+jobs:
+    test:
+        name: Test
+        runs-on: ubuntu-latest
+        # Only act on this package's releases (a release fires every workflow).
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'atlas-rust-v')
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - uses: Swatinem/rust-cache@v2
+            - name: Build workspace
+              run: cargo build --workspace --verbose
+            - name: Test atlas crate
+              # atlas-python links `pyo3/extension-module` (no libpython), so a
+              # plain `cargo test` binary can't link there — test the core crate.
+              run: cargo test -p atlas-rust --verbose
+
+    publish:
+        name: Publish to crates.io
+        runs-on: ubuntu-latest
+        needs: test
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.event.release.tag_name, 'atlas-rust-v')
+        steps:
+            - uses: actions/checkout@v4
+            - uses: dtolnay/rust-toolchain@stable
+            - uses: Swatinem/rust-cache@v2
+
+            - name: Verify tag matches crate version
+              if: github.event_name == 'release'
+              run: |
+                  crate_version="$(cargo metadata --no-deps --format-version 1 \
+                      | python3 -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='atlas-rust'))")"
+                  tag_version="${GITHUB_REF_NAME#atlas-rust-v}"
+                  echo "crate=$crate_version tag=$tag_version"
+                  if [ "$crate_version" != "$tag_version" ]; then
+                      echo "::error::Tag $GITHUB_REF_NAME does not match crate version $crate_version"
+                      exit 1
+                  fi
+
+            - name: Package (dry run)
+              run: cargo publish -p atlas-rust --locked --dry-run
+
+            - name: Publish
+              env:
+                  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+              run: cargo publish -p atlas-rust --locked
