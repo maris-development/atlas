@@ -1,5 +1,12 @@
 # ATLAS — Aggregated Tensor Large Array Store
 
+[![CI](https://github.com/maris-development/atlas/actions/workflows/ci.yaml/badge.svg)](https://github.com/maris-development/atlas/actions/workflows/ci.yaml)
+[![crates.io](https://img.shields.io/crates/v/atlas-rust.svg?logo=rust)](https://crates.io/crates/atlas-rust)
+[![docs.rs](https://img.shields.io/docsrs/atlas-rust?logo=docsdotrs&label=docs.rs)](https://docs.rs/atlas-rust)
+[![PyPI](https://img.shields.io/pypi/v/atlas-python.svg?logo=pypi&logoColor=white)](https://pypi.org/project/atlas-python/)
+[![Python docs](https://img.shields.io/badge/docs-atlas--python-blue?logo=materialformkdocs&logoColor=white)](https://maris-development.github.io/atlas/)
+[![License](https://img.shields.io/crates/l/atlas-rust.svg)](LICENSE)
+
 A directory-based store for thousands of named datasets, each holding N-dimensional typed arrays. Built on top of the [`array-format`](https://github.com/robinskil/array-format) (`.af`) binary format, with configurable compression (Zstd, LZ4, or none), chunked I/O, and an [`object_store`](https://crates.io/crates/object_store) backend that works on local disk, S3, GCS, Azure Blob, and in-memory.
 
 **Think of it as a "zip" for N-dimensional datasets.** Where a `.zip` bundles many files into one archive, ATLAS gathers many NetCDF / Zarr-style datasets — anything that's a set of named N-dimensional arrays — into a single high-performance collection. But it's more than a bundle: instead of storing each dataset whole, ATLAS lays the data out **variable-first**, so every dataset's `temperature` lives in one file. That makes it cheap to scan or slice a single variable across thousands of datasets at once, while still reading back any individual dataset as a normal NetCDF/xarray-like object.
