@@ -1,6 +1,16 @@
 name: atlas-python-docs
 on:
     workflow_dispatch:
+        inputs:
+            version:
+                description: "Docs version to publish (e.g. 1.2.3). Leave blank to publish as 'dev'."
+                required: false
+                type: string
+            alias:
+                description: "Alias to update (e.g. latest)."
+                required: false
+                default: dev
+                type: string
     release:
         types: [published]
     push:
@@ -18,17 +28,27 @@ jobs:
                   git config user.name github-actions[bot]
                   git config user.email 41898282+github-actions[bot]@users.noreply.github.com
 
-            - name: Extract version (keep the v)
+            - name: Extract version
               id: vars
+              env:
+                  INPUT_VERSION: ${{ github.event.inputs.version }}
+                  INPUT_ALIAS: ${{ github.event.inputs.alias }}
               run: |
-                  # github.ref = refs/tags/v1.2.3
-                  TAG="${GITHUB_REF#refs/tags/}"   # TAG = v1.2.3
-                  VERSION="${TAG#v}"               # VERSION = 1.2.3
+                  if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+                      # Tag push or release: refs/tags/v1.2.3 -> version=1.2.3, alias=latest
+                      VERSION="${GITHUB_REF#refs/tags/v}"
+                      ALIAS=latest
+                  else
+                      # Manual run: use provided inputs, falling back to 'dev'
+                      VERSION="${INPUT_VERSION:-dev}"
+                      ALIAS="${INPUT_ALIAS:-dev}"
+                  fi
                   echo "version=$VERSION" >> $GITHUB_OUTPUT
+                  echo "alias=$ALIAS" >> $GITHUB_OUTPUT
 
             - name: Show version
               run: |
-                  echo "Version is: ${{ steps.vars.outputs.version }}"
+                  echo "Deploying docs version '${{ steps.vars.outputs.version }}' (alias '${{ steps.vars.outputs.alias }}')"
 
             - uses: actions/setup-python@v6
               with:
@@ -42,5 +62,5 @@ jobs:
                       mkdocs-material-
             - run: pip install mkdocs-material mkdocstrings[python] mike
             - run: |
-                  git fetch origin gh-pages --depth=1
-                  mike deploy --push --update-aliases "${{ steps.vars.outputs.version }}" latest
+                  git fetch origin gh-pages --depth=1 || true
+                  mike deploy --push --update-aliases -F atlas-python/mkdocs.yml "${{ steps.vars.outputs.version }}" "${{ steps.vars.outputs.alias }}"
