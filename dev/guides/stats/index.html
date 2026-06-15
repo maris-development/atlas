@@ -1194,6 +1194,10 @@ NaN, so a written NaN counts as a null.</p>
 <p>For integer arrays, pick a sentinel value (<code>-1</code>, <code>np.iinfo(dtype).min</code>,
 etc.) — any <em>written</em> cell equal to it will also be counted as null. Pick
 a value that can't appear in real data.</p>
+<p>When ingesting via <a href="../xarray/#fill-values-and-missing-data"><code>add_xarray_dataset</code></a>
+you don't set these by hand: float arrays default to a <code>NaN</code> fill, datetimes
+to <code>NaT</code>, and strings to <code>""</code>, so cells masked by <code>mask_and_scale=True</code> are
+counted as null automatically. Pass <code>fill_value=</code> to override.</p>
 <h2 id="what-stats-dont-include">What stats don't include</h2>
 <ul>
 <li><strong>No mean, sum, stdev, or quantiles.</strong> If you need those, read the array

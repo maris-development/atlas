@@ -1230,7 +1230,7 @@ unwrapped first (<code>np.int32(5)</code> is stored as <code>int64</code>).</p>
   validation; the storage representation is always the wider type.</li>
 </ul>
 <h2 id="per-variable-xarray-attributes">Per-variable xarray attributes</h2>
-<p>When you write an <code>xr.Dataset</code> via <code>atlas.add_xr_dataset(ds, name)</code>,
+<p>When you write an <code>xr.Dataset</code> via <code>atlas.add_xarray_dataset(ds, name)</code>,
 per-variable attributes are <strong>flattened</strong> as <code>{var}.{attr}</code> and stored
 alongside the dataset's own <code>attrs</code>:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">xr</span><span class="o">.</span><span class="n">Dataset</span><span class="p">(</span>
@@ -1238,14 +1238,14 @@ alongside the dataset's own <code>attrs</code>:</p>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>                                            <span class="n">attrs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;C&quot;</span><span class="p">})},</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">attrs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;station&quot;</span><span class="p">:</span> <span class="s2">&quot;KNMI&quot;</span><span class="p">},</span>
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">)</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">atlas</span><span class="o">.</span><span class="n">add_xr_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
 </span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># In atlas:</span>
 </span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">view</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
 </span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="n">view</span><span class="o">.</span><span class="n">attributes</span><span class="p">()</span>
 </span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="c1"># {&quot;station&quot;: &quot;KNMI&quot;, &quot;temperature.units&quot;: &quot;C&quot;}</span>
 </span></code></pre></div>
-<p>On read, <code>atlas.to_xarray("jan_2024")</code> reverses the flattening so the
+<p>On read, <code>atlas.open_as_xarray_dataset("jan_2024")</code> reverses the flattening so the
 per-variable attrs end up back on the right <code>DataArray</code>. The dataset-level
 attrs come through directly.</p>
 <p>See <a href="../xarray/">xarray integration</a> for the full storage convention.</p>

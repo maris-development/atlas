@@ -1147,10 +1147,10 @@ high-performance collection, then read any of them back as NumPy or
   append.</li>
 <li><strong>Compression</strong> — zstd / lz4 / uncompressed array codecs and json /
   msgpack metadata, optionally compressed.</li>
-<li><strong>xarray + dask integration</strong> — <code>atlas.add_xr_dataset(ds, name)</code> to
-  ingest, <code>atlas.to_xarray(name)</code> to read back. Dask-backed variables
+<li><strong>xarray + dask integration</strong> — <code>atlas.add_xarray_dataset(ds, name)</code> to
+  ingest, <code>atlas.open_as_xarray_dataset(name)</code> to read back. Dask-backed variables
   stream chunk-by-chunk on write and come back lazily on read.</li>
-<li><strong>Bulk cross-dataset APIs</strong> — <code>to_xarray_many</code> and
+<li><strong>Bulk cross-dataset APIs</strong> — <code>open_as_many_xarray_dataset</code> and
   <code>read_array_across_stacked</code> collapse N per-dataset reads into one PyO3
   call, sharing a single file handle.</li>
 <li><strong>Sync API, GIL-released</strong> — a multi-threaded tokio runtime backs every

@@ -1269,6 +1269,10 @@ on the right is what <code>write_array</code> / <code>read_array</code> expect a
 equal to the fill value is counted as a null in
 <a href="../stats/"><code>array_stats</code></a> — this is how the null count works for
 <code>NaN</code>-filled float arrays.</p>
+<p>When ingesting via <a href="../xarray/#fill-values-and-missing-data"><code>add_xarray_dataset</code></a>
+you don't pass these by hand — float arrays default to a <code>NaN</code> fill, datetimes
+to <code>NaT</code>, and strings to <code>""</code>, so cells masked by <code>mask_and_scale=True</code> are
+recorded as null automatically.</p>
 <h2 id="0-d-scalar-arrays">0-D scalar arrays</h2>
 <p>Every dtype above also works at <code>shape=[]</code> (and <code>chunk_shape=[]</code>,
 implicitly). The numpy round-trip is a 0-D ndarray:</p>

@@ -1174,7 +1174,7 @@ directory listing — exactly two array directories regardless of N.</p>
    reads on the tokio runtime. The kernel-level open/close cost is paid
    once per <em>array</em>, not once per <em>dataset</em>.</li>
 <li><strong>One delta file per array per flush.</strong> N consecutive
-   <code>add_xr_dataset</code> calls write one delta segment per <em>touched array
+   <code>add_xarray_dataset</code> calls write one delta segment per <em>touched array
    name</em> on the next flush, no matter how many datasets contributed. See
    <a href="../durability/">Durability and flushing</a>.</li>
 </ol>

@@ -1191,7 +1191,7 @@ to work against local filesystem paths exactly as before.</p>
 </span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>
 </span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1"># Pass the handle into Atlas.create / Atlas.open exactly where you would</span>
 </span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="c1"># have passed a path. Everything below this line — define_array,</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="c1"># write_array, set_attribute, flush, add_xr_dataset, to_xarray, all of</span>
+</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="c1"># write_array, set_attribute, flush, add_xarray_dataset, open_as_xarray_dataset, all of</span>
 </span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="c1"># the bulk reads — works identically against S3.</span>
 </span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="k">with</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="s2">&quot;zstd&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">atlas</span><span class="p">:</span>
 </span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>    <span class="n">ds</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">create_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
@@ -1238,8 +1238,8 @@ to work against local filesystem paths exactly as before.</p>
 <p>See <a href="https://developmentseed.org/obstore/latest/">obstore's
 documentation</a> for the full
 list of backends and their credential / region / endpoint options.</p>
-<p>A complete runnable script — create / write / <code>add_xr_dataset</code> /
-<code>to_xarray</code> / <code>array_stats</code>, then reopen and verify — lives at
+<p>A complete runnable script — create / write / <code>add_xarray_dataset</code> /
+<code>open_as_xarray_dataset</code> / <code>array_stats</code>, then reopen and verify — lives at
 <a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/08_object_store.py"><code>atlas-python/examples/08_object_store.py</code></a>.
 It uses <code>LocalStore</code> by default so it runs without credentials; swap in
 the S3 / GCS / Azure block at the top to point at a real backend.</p>
@@ -1280,17 +1280,17 @@ the S3 / GCS / Azure block at the top to point at a real backend.</p>
 <td>rewrite array files</td>
 </tr>
 <tr>
-<td><code>read_array_across_stacked</code> / <code>to_xarray_many</code></td>
+<td><code>read_array_across_stacked</code> / <code>open_as_many_xarray_dataset</code></td>
 <td>tokio fan-out</td>
 <td>tokio fan-out, capped at <code>num_cpus</code></td>
 </tr>
 <tr>
-<td>Dask streaming <code>add_xr_dataset</code></td>
+<td>Dask streaming <code>add_xarray_dataset</code></td>
 <td>✓</td>
 <td>✓</td>
 </tr>
 <tr>
-<td>Dask-backed lazy reads (<code>to_xarray</code>)</td>
+<td>Dask-backed lazy reads (<code>open_as_xarray_dataset</code>)</td>
 <td>threaded scheduler only</td>
 <td>threaded scheduler only</td>
 </tr>
@@ -1305,7 +1305,7 @@ per-dataset).</p>
 <h2 id="limitations-specific-to-cloud-backends">Limitations specific to cloud backends</h2>
 <ul>
 <li><strong>Bulk-read concurrency.</strong> <code>read_array_across_stacked</code> and
-  <code>to_xarray_many</code> dispatch on the shared tokio runtime via a <code>JoinSet</code>
+  <code>open_as_many_xarray_dataset</code> dispatch on the shared tokio runtime via a <code>JoinSet</code>
   capped at <code>num_cpus</code>. On S3 the bottleneck is usually HTTP
   concurrency, not CPU — let us know if you'd find a configurable cap
   useful.</li>

@@ -1092,7 +1092,7 @@ a minute.</p>
 </tr>
 <tr>
 <td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/02_xarray.py"><code>02_xarray.py</code></a></td>
-<td>Round-trip an <code>xr.Dataset</code> through atlas using both <code>atlas.add_xr_dataset(...)</code> and the <code>ds.atlas.write(...)</code> accessor.</td>
+<td>Round-trip an <code>xr.Dataset</code> through atlas using both <code>atlas.add_xarray_dataset(...)</code> and the <code>ds.atlas.write(...)</code> accessor.</td>
 </tr>
 <tr>
 <td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/03_dask_streaming.py"><code>03_dask_streaming.py</code></a></td>
@@ -1117,6 +1117,10 @@ a minute.</p>
 <tr>
 <td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/08_object_store.py"><code>08_object_store.py</code></a></td>
 <td>Pass an <a href="https://github.com/developmentseed/obstore">obstore</a> handle into <code>Atlas.create</code> / <code>Atlas.open</code> and run the full create / read / xarray / stats loop against it. Demos with <code>obstore.store.LocalStore</code> (no credentials); S3 / GCS / Azure variants are commented in at the top. Requires <code>pip install "atlas-python[cloud]"</code>.</td>
+</tr>
+<tr>
+<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/09_missing_data.py"><code>09_missing_data.py</code></a></td>
+<td>Ingest an <code>xr.Dataset</code> with masked (missing) cells across float / datetime / string / integer vars. Shows the default <code>NaN</code> / <code>NaT</code> / <code>""</code> fills, the resulting <code>null_count</code>, and overriding per variable with <code>fill_value=</code>.</td>
 </tr>
 </tbody>
 </table>

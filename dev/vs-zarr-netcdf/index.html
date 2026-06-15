@@ -1250,7 +1250,7 @@ returns the logical names that may run into the thousands.</p>
   <code>open_mfdataset(..., parallel=True).isel(...).load()</code>, which still has to
   open N stores and run the slice through xarray.</li>
 <li><strong>One flush amortises N writes.</strong> Atlas's mutations are in-memory until
-  <code>flush()</code>; N consecutive <code>add_xr_dataset</code> calls produce one delta file per
+  <code>flush()</code>; N consecutive <code>add_xarray_dataset</code> calls produce one delta file per
   touched array name regardless of N. See
   <a href="../guides/durability/">Durability and flushing</a>.</li>
 </ul>
@@ -1384,7 +1384,7 @@ zarr / netCDF pipeline that already uses xarray is one line:</p>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">xr</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="s2">&quot;/data/jan_2024.nc&quot;</span><span class="p">)</span>
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># After — atlas</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/data/store&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">to_xarray</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/data/store&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">open_as_xarray_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Per-variable attrs (<code>units</code>, <code>long_name</code>, …), <code>_FillValue</code>, coord
 distinctions, and <code>datetime64[ns]</code> all round-trip. See

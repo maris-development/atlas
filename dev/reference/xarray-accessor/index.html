@@ -1143,13 +1143,13 @@
 <p>Importing <code>atlas</code> registers an accessor at <code>xr.Dataset.atlas</code> (the side
 effect happens on the very first <code>import atlas</code>, so there's no extra
 setup). The accessor is a thin convenience wrapper around the
-<a href="../atlas/#atlas.Atlas.add_xr_dataset"><code>Atlas.add_xr_dataset</code></a> method.</p>
+<a href="../atlas/#atlas.Atlas.add_xarray_dataset"><code>Atlas.add_xarray_dataset</code></a> method.</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span><span class="o">,</span><span class="w"> </span><span class="nn">xarray</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">xr</span>        <span class="c1"># ds.atlas is registered here</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">xr</span><span class="o">.</span><span class="n">Dataset</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
 </span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="k">with</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">atlas</span><span class="p">:</span>
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">atlas</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">atlas</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>           <span class="c1"># accessor form</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">atlas</span><span class="o">.</span><span class="n">add_xr_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;feb_2024&quot;</span><span class="p">)</span>        <span class="c1"># equivalent Atlas method</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;feb_2024&quot;</span><span class="p">)</span>        <span class="c1"># equivalent Atlas method</span>
 </span></code></pre></div>
 <p>See <a href="../../guides/xarray/">xarray integration</a> for the full storage
 conventions and dtype mapping.</p>
@@ -1164,7 +1164,11 @@ conventions and dtype mapping.</p>
     <div class="doc doc-contents first">
 
         <p>Append this Dataset to the open atlas store under <code>name</code>.</p>
-<p>Equivalent to <code>atlas.add_xr_dataset(self_ds, name, chunks)</code>.</p>
+<p>Equivalent to <code>atlas.add_xarray_dataset(self_ds, name, chunks, fill_value)</code>.</p>
+<p><code>fill_value</code> overrides the per-array fill: a bare scalar applies to
+numeric arrays, a <code>{var: scalar}</code> dict targets named vars (<code>None</code>
+disables the default for that var). When omitted, float arrays default
+to a <code>NaN</code> fill so mask_and_scale'd missing cells are recorded as null.</p>
 
 
     </div>

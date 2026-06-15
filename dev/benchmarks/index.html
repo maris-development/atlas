@@ -1241,7 +1241,7 @@ actually reach for:</p>
   numpy (opt in with <code>--atlas-bulk</code>).</li>
 </ul>
 <p>The default (serial) atlas read path — iterate
-<code>view.to_xarray(name).isel(...).load()</code> — isn't in the chart; it scales
+<code>view.open_as_xarray_dataset(name).isel(...).load()</code> — isn't in the chart; it scales
 linearly with N and is fine for small fleets, but at the scales below
 (100+ datasets) you should already be reaching for one of the parallel
 paths. <code>--netcdf-groups</code> / <code>--zarr-groups</code> add layouts that use one file
@@ -1359,7 +1359,7 @@ threaded <code>dask.delayed</code> fan-out has more overhead than tokio's
 <li><strong><code>atlas + --use-dask</code></strong> picks up most of atlas-bulk's win without
   giving up the dask graph: 1.6–4× faster than <code>zarr+dask</code> across the
   sweep, and the natural choice when downstream <code>xr</code> code needs to stay
-  lazy (a <code>to_xarray(...).isel(...)</code> slice chain composes with the
+  lazy (a <code>open_as_xarray_dataset(...).isel(...)</code> slice chain composes with the
   upstream graph, where <code>atlas-bulk</code> returns eager numpy). Reach for
   serial <code>atlas</code> only when the fleet is small enough that the dask
   fan-out overhead doesn't pay back.</li>
@@ -1399,14 +1399,14 @@ same case at any variable count without editing the case definition.</p>
 <h2 id="api-picker-for-reads-in-rough-order-of-speed">API picker for reads (in rough order of speed)</h2>
 <ul>
 <li><strong>Cross-dataset slice of the same vars across many datasets</strong> →
-  <a href="../reference/atlas/"><code>Atlas.to_xarray_many</code></a> /
+  <a href="../reference/atlas/"><code>Atlas.open_as_many_xarray_dataset</code></a> /
   <a href="../reference/atlas/"><code>Atlas.read_array_across_stacked</code></a> (the
   <code>atlas-bulk</code> path; one Rust call per variable).</li>
 <li><strong>Per-dataset slice reads inside a dask worker</strong> →
   <a href="../reference/dataset-view/"><code>view.read_arrays(vars, start, shape)</code></a>
   (returns <code>dict[str, np.ndarray]</code>; skips xr.Dataset + per-chunk dask
   graph). This is what <code>bench_atlas</code> with <code>--use-dask</code> does internally.</li>
-<li><strong>Natural xarray code</strong> → <code>to_xarray(name).isel(...).load()</code>. Most
+<li><strong>Natural xarray code</strong> → <code>open_as_xarray_dataset(name).isel(...).load()</code>. Most
   ergonomic but pays per-chunk dask graph build overhead on chunked
   storage.</li>
 </ul>

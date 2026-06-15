@@ -1772,11 +1772,11 @@ Returns <code>{name: ndarray | None}</code> — <code>None</code> for arrays not
 dataset. Same <code>start</code> / <code>shape</code> apply to every array.</p>
 <p>Fast path for "give me these N variables, optionally sliced" — skips
 the Python-side <code>xr.Dataset</code> construction and dask graph build that
-[<code>to_xarray</code>] pays per dataset, while still doing one Rust round-trip
+[<code>open_as_xarray_dataset</code>] pays per dataset, while still doing one Rust round-trip
 per variable. Use this from dask workers (or any per-dataset loop)
 where the natural xarray API's overhead dominates over the actual
 I/O cost — the gridded benchmark goes from ~7.8s to &lt;3s by switching
-the dask branch to call this instead of <code>to_xarray(name).isel(...).load()</code>.</p>
+the dask branch to call this instead of <code>open_as_xarray_dataset(name).isel(...).load()</code>.</p>
 
 
     </div>

@@ -695,6 +695,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#fill-values-and-missing-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fill values and missing data
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fill values and missing data">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#missing-strings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missing strings
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#limitations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1153,6 +1181,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#fill-values-and-missing-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fill values and missing data
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Fill values and missing data">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#missing-strings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Missing strings
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#limitations" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1207,15 +1263,15 @@ two equivalent entry points:</p>
 </span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="p">)</span>
 </span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>
 </span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="k">with</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">atlas</span><span class="p">:</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="n">atlas</span><span class="o">.</span><span class="n">add_xr_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>     <span class="c1"># method on Atlas</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>    <span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>     <span class="c1"># method on Atlas</span>
 </span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">atlas</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">atlas</span><span class="p">,</span> <span class="s2">&quot;feb_2024&quot;</span><span class="p">)</span>        <span class="c1"># accessor on xr.Dataset (same effect)</span>
 </span></code></pre></div>
-<p><code>add_xr_dataset</code> doesn't flush — N consecutive calls accumulate and one
+<p><code>add_xarray_dataset</code> doesn't flush — N consecutive calls accumulate and one
 <code>atlas.flush()</code> (or the <code>with</code> block exit) persists everything. See
 <a href="#bulk-ingestion">Bulk ingestion</a> below.</p>
 <h2 id="reading-back">Reading back</h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">ds_back</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">to_xarray</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">ds_back</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">open_as_xarray_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">xr</span><span class="o">.</span><span class="n">testing</span><span class="o">.</span><span class="n">assert_identical</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="n">ds_back</span><span class="p">)</span>     <span class="c1"># round-trip is bit-identical</span>
 </span></code></pre></div>
 <p>Variables stored with <code>chunk_shape != shape</code> come back <strong>dask-backed</strong> (one
@@ -1244,7 +1300,7 @@ as numpy. See <a href="../dask/">Dask streaming and lazy reads</a>.</p>
 </tr>
 <tr>
 <td>Per-variable <code>_FillValue</code></td>
-<td>Consumed by <code>define_array</code> as a typed fill value (<strong>not</strong> flattened as a regular attr). The source <code>Dataset.attrs</code> is not mutated.</td>
+<td>Consumed by <code>define_array</code> as a typed fill value (<strong>not</strong> flattened as a regular attr). The source <code>Dataset.attrs</code> is not mutated. See <a href="#fill-values-and-missing-data">Fill values and missing data</a>.</td>
 </tr>
 <tr>
 <td>Coord vs data_var distinction</td>
@@ -1286,7 +1342,7 @@ written via the raw <code>DatasetView</code> API still load cleanly into xarray.
 natively. See <a href="../dtypes/">Supported dtypes</a> for the full list and the
 restrictions.</p>
 <h2 id="bulk-ingestion">Bulk ingestion</h2>
-<p><code>add_xr_dataset</code> never flushes by itself — N consecutive calls accumulate
+<p><code>add_xarray_dataset</code> never flushes by itself — N consecutive calls accumulate
 in memory and one flush at the end persists everything. One delta file is
 written per <strong>array name</strong> touched across the whole batch, not one per
 input file:</p>
@@ -1296,23 +1352,57 @@ input file:</p>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="k">with</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">atlas</span><span class="p">:</span>
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="k">for</span> <span class="n">nc_path</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="s2">&quot;*.nc&quot;</span><span class="p">)):</span>
 </span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>        <span class="n">name</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">splitext</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">basename</span><span class="p">(</span><span class="n">nc_path</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="n">atlas</span><span class="o">.</span><span class="n">add_xr_dataset</span><span class="p">(</span><span class="n">xr</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="n">nc_path</span><span class="p">),</span> <span class="n">name</span><span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>        <span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">xr</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="n">nc_path</span><span class="p">),</span> <span class="n">name</span><span class="p">)</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="c1"># Single flush on `with` exit.</span>
 </span></code></pre></div>
 <p>If the NetCDF files are chunked (<code>xr.open_dataset(path, chunks=...)</code>), the
 dask chunks become the atlas on-disk chunks automatically — see
 <a href="../dask/">Dask streaming and lazy reads</a>.</p>
 <h2 id="overriding-the-on-disk-chunk-shape">Overriding the on-disk chunk shape</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">add_xr_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">,</span> <span class="n">chunks</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">]})</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">,</span> <span class="n">chunks</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">]})</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">atlas</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">atlas</span><span class="p">,</span> <span class="s2">&quot;feb_2024&quot;</span><span class="p">,</span> <span class="n">chunks</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">]})</span>
 </span></code></pre></div>
 <p>This is independent of dask's chunking — the dask chunks are still what
 gets streamed at write time, but the on-disk <code>chunk_shape</code> is whatever you
 pass. Pick this when you want a different read-side chunk layout from
 your write-side memory budget.</p>
+<h2 id="fill-values-and-missing-data">Fill values and missing data</h2>
+<p>When a NetCDF dataset is opened with <code>mask_and_scale=True</code> (xarray's default),
+missing cells become <code>NaN</code> (floats) or <code>NaT</code> (datetimes) and the original
+<code>_FillValue</code> is moved into <code>var.encoding</code>. So that atlas records those masked
+cells as <strong>null</strong> (counted in <code>null_count</code>, excluded from min/max stats, eligible
+for sparse storage), float and datetime arrays default to a <code>NaN</code> / <code>NaT</code> fill
+value on write:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>   <span class="c1"># float vars -&gt; NaN fill, datetime vars -&gt; NaT fill</span>
+</span></code></pre></div>
+<p>Resolution order for each variable's fill value (highest priority first):</p>
+<ol>
+<li>The explicit <code>fill_value</code> argument (below).</li>
+<li>The variable's CF <code>_FillValue</code> attribute, if present in <code>var.attrs</code>.</li>
+<li>Default: <code>NaN</code> for float arrays, <code>NaT</code> for <code>datetime64[ns]</code> arrays, <code>""</code> for
+   string arrays, and none for integer arrays (which have no missing sentinel —
+   give them one via <code>_FillValue</code> or the <code>fill_value</code> argument if needed).</li>
+</ol>
+<h3 id="missing-strings">Missing strings</h3>
+<p>A string can't hold <code>NaN</code>, so missing string cells (<code>None</code>/<code>NaN</code>, e.g. from
+masking) are <strong>substituted on write</strong> with the resolved string fill — the
+<code>fill_value</code> you pass (<code>fill_value={"s": "N/A"}</code>), else the variable's
+<code>_FillValue</code>, else <code>""</code> — and a warning is emitted naming the count. Because the
+same value is declared as the array's fill, those cells are recorded as <strong>null</strong>
+(counted in <code>null_count</code>, excluded from min/max), exactly like <code>NaN</code>/<code>NaT</code> cells.</p>
+<p>One caveat with the <code>""</code> default: a <em>genuinely</em> empty string is indistinguishable
+from a missing one, so it too counts as null. Pass an explicit <code>fill_value</code> (e.g.
+<code>"N/A"</code>) when your data uses <code>""</code> as a real value.</p>
+<p>Override with <code>fill_value</code> — a bare scalar (applies to numeric arrays) or a
+<code>{var: scalar}</code> dict (<code>None</code> disables the default for that variable):</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="o">-</span><span class="mf">9999.0</span><span class="p">})</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">atlas</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">atlas</span><span class="p">,</span> <span class="s2">&quot;feb_2024&quot;</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">})</span>  <span class="c1"># no fill</span>
+</span></code></pre></div>
+<p>A <code>NaN</code> fill is not re-emitted as a <code>_FillValue</code> attribute on read (it's
+self-describing in the float data); non-NaN fills round-trip as <code>_FillValue</code>.</p>
 <h2 id="limitations">Limitations</h2>
 <ul>
-<li><strong>No append-into-existing.</strong> Each call to <code>add_xr_dataset</code> /
+<li><strong>No append-into-existing.</strong> Each call to <code>add_xarray_dataset</code> /
   <code>ds.atlas.write</code> creates a <em>new</em> atlas dataset. Append-style updates to
   an existing dataset go through the raw <code>DatasetView</code> API.</li>
 <li><strong>Threaded scheduler only for lazy reads.</strong> The <code>DatasetView</code> captured

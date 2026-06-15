@@ -707,10 +707,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cross-dataset-all-variables-to_xarray_many" class="md-nav__link">
+  <a href="#cross-dataset-all-variables-open_as_many_xarray_dataset" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cross-dataset, all variables: to_xarray_many
+        Cross-dataset, all variables: open_as_many_xarray_dataset
       
     </span>
   </a>
@@ -1087,10 +1087,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cross-dataset-all-variables-to_xarray_many" class="md-nav__link">
+  <a href="#cross-dataset-all-variables-open_as_many_xarray_dataset" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cross-dataset, all variables: to_xarray_many
+        Cross-dataset, all variables: open_as_many_xarray_dataset
       
     </span>
   </a>
@@ -1154,7 +1154,7 @@ throughput.</p>
 </thead>
 <tbody>
 <tr>
-<td><code>Atlas.to_xarray_many(names, concat_dim, parallel=True)</code></td>
+<td><code>Atlas.open_as_many_xarray_dataset(names, concat_dim, parallel=True)</code></td>
 <td><code>xr.Dataset</code> of shape <code>(N, *original)</code></td>
 <td>You want xarray ergonomics on top of a fleet of identically-shaped datasets.</td>
 </tr>
@@ -1203,16 +1203,16 @@ so you skip the ~N × per_dataset_size of memory copies that
 <code>np.stack(read_array_across(...))</code> would do. The trade-off: it errors if
 any listed dataset doesn't declare the array (there's no positional
 "missing" sentinel in the stacked representation).</p>
-<h2 id="cross-dataset-all-variables-to_xarray_many">Cross-dataset, all variables: <code>to_xarray_many</code></h2>
+<h2 id="cross-dataset-all-variables-open_as_many_xarray_dataset">Cross-dataset, all variables: <code>open_as_many_xarray_dataset</code></h2>
 <p>This is the atlas-native equivalent of <code>xr.open_mfdataset(...)</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">combined</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">to_xarray_many</span><span class="p">(</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">combined</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">open_as_many_xarray_dataset</span><span class="p">(</span>
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    <span class="p">[</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">,</span> <span class="s2">&quot;feb_2024&quot;</span><span class="p">,</span> <span class="s2">&quot;mar_2024&quot;</span><span class="p">],</span>
 </span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    <span class="n">concat_dim</span><span class="o">=</span><span class="s2">&quot;month&quot;</span><span class="p">,</span>
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="p">)</span>
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># Each variable comes back shape (3, *original), eager numpy.</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Coords + dataset-level attrs are taken from the first dataset.</span>
 </span></code></pre></div>
-<p>Internally <code>to_xarray_many</code> calls <code>Atlas.read_array_across</code> once per
+<p>Internally <code>open_as_many_xarray_dataset</code> calls <code>Atlas.read_array_across</code> once per
 variable, so you get the same shared-file-handle / tokio fan-out as the
 single-variable bulk APIs but with the xarray ergonomics.</p>
 <p>Constraints:</p>
@@ -1225,14 +1225,14 @@ single-variable bulk APIs but with the xarray ergonomics.</p>
 </ul>
 <h2 id="per-dataset-multi-array-viewread_arrays">Per-dataset multi-array: <code>view.read_arrays</code></h2>
 <p>Inside a dask worker (or any hot loop over one dataset), the bottleneck is
-usually the per-call <code>to_xarray</code> + dask-graph build, not the I/O. Skip
+usually the per-call <code>open_as_xarray_dataset</code> + dask-graph build, not the I/O. Skip
 both:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">view</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">result</span> <span class="o">=</span> <span class="n">view</span><span class="o">.</span><span class="n">read_arrays</span><span class="p">([</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="s2">&quot;pressure&quot;</span><span class="p">],</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># {&quot;temperature&quot;: np.ndarray, &quot;pressure&quot;: np.ndarray}</span>
 </span></code></pre></div>
 <p><code>read_arrays</code> is what <code>bench_collection.py --use-dask</code> calls inside each
-delayed task — the ~3–4× speedup over <code>to_xarray(name).isel(...).load()</code>
+delayed task — the ~3–4× speedup over <code>open_as_xarray_dataset(name).isel(...).load()</code>
 on chunked storage comes from skipping the per-chunk dask graph build.</p>
 <p>Same start/shape applies to every array; missing arrays come back as
 <code>None</code> (so this is safe to call against a dataset that may or may not
@@ -1240,12 +1240,12 @@ declare every variable).</p>
 <h2 id="api-picker-in-rough-order-of-speed">API picker (in rough order of speed)</h2>
 <ul>
 <li><strong>Cross-dataset slice of the same vars across many datasets</strong> →
-  <code>Atlas.to_xarray_many</code> / <code>Atlas.read_array_across_stacked</code> (the
+  <code>Atlas.open_as_many_xarray_dataset</code> / <code>Atlas.read_array_across_stacked</code> (the
   <code>atlas-bulk</code> benchmark path; one Rust call per variable).</li>
 <li><strong>Per-dataset slice reads inside a dask worker</strong> →
   <code>view.read_arrays(vars, start, shape)</code> (returns <code>dict[str, np.ndarray]</code>;
   skips the xr.Dataset + per-chunk dask graph).</li>
-<li><strong>Natural xarray code, per dataset</strong> → <code>to_xarray(name).isel(...).load()</code>.
+<li><strong>Natural xarray code, per dataset</strong> → <code>open_as_xarray_dataset(name).isel(...).load()</code>.
   Most ergonomic, but pays per-chunk dask graph build overhead on chunked
   storage.</li>
 </ul>
