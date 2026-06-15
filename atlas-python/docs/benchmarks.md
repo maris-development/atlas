@@ -23,7 +23,7 @@ actually reach for:
   numpy (opt in with `--atlas-bulk`).
 
 The default (serial) atlas read path — iterate
-`view.to_xarray(name).isel(...).load()` — isn't in the chart; it scales
+`view.open_as_xarray_dataset(name).isel(...).load()` — isn't in the chart; it scales
 linearly with N and is fine for small fleets, but at the scales below
 (100+ datasets) you should already be reaching for one of the parallel
 paths. `--netcdf-groups` / `--zarr-groups` add layouts that use one file
@@ -96,7 +96,7 @@ threaded `dask.delayed` fan-out has more overhead than tokio's
 - **`atlas + --use-dask`** picks up most of atlas-bulk's win without
   giving up the dask graph: 1.6–4× faster than `zarr+dask` across the
   sweep, and the natural choice when downstream `xr` code needs to stay
-  lazy (a `to_xarray(...).isel(...)` slice chain composes with the
+  lazy (a `open_as_xarray_dataset(...).isel(...)` slice chain composes with the
   upstream graph, where `atlas-bulk` returns eager numpy). Reach for
   serial `atlas` only when the fleet is small enough that the dask
   fan-out overhead doesn't pay back.
@@ -146,14 +146,14 @@ Update the `RESULTS` dict in that script and re-run after a fresh sweep.
 ## API picker for reads (in rough order of speed)
 
 - **Cross-dataset slice of the same vars across many datasets** →
-  [`Atlas.to_xarray_many`](reference/atlas.md) /
+  [`Atlas.open_as_many_xarray_dataset`](reference/atlas.md) /
   [`Atlas.read_array_across_stacked`](reference/atlas.md) (the
   `atlas-bulk` path; one Rust call per variable).
 - **Per-dataset slice reads inside a dask worker** →
   [`view.read_arrays(vars, start, shape)`](reference/dataset-view.md)
   (returns `dict[str, np.ndarray]`; skips xr.Dataset + per-chunk dask
   graph). This is what `bench_atlas` with `--use-dask` does internally.
-- **Natural xarray code** → `to_xarray(name).isel(...).load()`. Most
+- **Natural xarray code** → `open_as_xarray_dataset(name).isel(...).load()`. Most
   ergonomic but pays per-chunk dask graph build overhead on chunked
   storage.
 

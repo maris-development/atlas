@@ -86,18 +86,18 @@ ds = xr.Dataset(
 )
 
 with atlas.Atlas.create("/tmp/my_store") as store:
-    store.add_xr_dataset(ds, "jan_2024")     # store-side method
+    store.add_xarray_dataset(ds, "jan_2024")     # store-side method
     ds.atlas.write(store, "jan_2025")        # xarray accessor (same effect)
 
 # Read back as an xr.Dataset
 store = atlas.Atlas.open("/tmp/my_store")
-ds_back = store.to_xarray("jan_2024")
+ds_back = store.open_as_xarray_dataset("jan_2024")
 xr.testing.assert_identical(ds, ds_back)
 ```
 
 ### Bulk ingestion
 
-`add_xr_dataset` never flushes by itself — N consecutive calls accumulate in memory and a single
+`add_xarray_dataset` never flushes by itself — N consecutive calls accumulate in memory and a single
 `flush()` (or the `with` exit) persists everything.
 
 ```python
@@ -106,35 +106,35 @@ import glob, os, atlas, xarray as xr
 with atlas.Atlas.create("/tmp/store") as store:
     for nc_path in sorted(glob.glob("*.nc")):
         name = os.path.splitext(os.path.basename(nc_path))[0]
-        store.add_xr_dataset(xr.open_dataset(nc_path), name)
+        store.add_xarray_dataset(xr.open_dataset(nc_path), name)
 # One delta file per array name across the whole batch (not one per file).
 ```
 
 ### Streaming dask-backed writes
 
 If a variable's `.data` is a `dask.array.Array` (e.g. from `xr.open_dataset(path, chunks=...)`
-or `ds.chunk({...})`), `add_xr_dataset` / `ds.atlas.write` stream **one dask block at a time**
+or `ds.chunk({...})`), `add_xarray_dataset` / `ds.atlas.write` stream **one dask block at a time**
 into the store rather than materialising the whole array. The dask chunk shape becomes the
 on-disk `chunk_shape`, so the layout maps 1:1. Peak memory ≈ one chunk per variable.
 
 ```python
 ds = xr.open_dataset("big.nc", chunks={"time": 100, "lat": -1, "lon": -1})
 with atlas.Atlas.create("/tmp/store") as store:
-    store.add_xr_dataset(ds, "big")     # streams chunk-by-chunk
+    store.add_xarray_dataset(ds, "big")     # streams chunk-by-chunk
 ```
 
-Pass `chunks={var: [...]}` to `add_xr_dataset` / `ds.atlas.write` to override the on-disk chunk
+Pass `chunks={var: [...]}` to `add_xarray_dataset` / `ds.atlas.write` to override the on-disk chunk
 shape independently of dask's chunking.
 
 ### Lazy dask-backed reads
 
-`store.to_xarray(name)` returns each variable dask-backed whenever it was stored with non-trivial
+`store.open_as_xarray_dataset(name)` returns each variable dask-backed whenever it was stored with non-trivial
 chunking (`chunk_shape != shape`); the dask `chunks` tuple mirrors the on-disk chunk grid and each
 on-disk chunk is one dask task. Full-shape arrays (and 0-D scalars) come back eager as numpy. Call
 `.compute()` to materialise, or slice / `map_blocks` to operate lazily.
 
 ```python
-ds_back = atlas.Atlas.open("/tmp/store").to_xarray("big")
+ds_back = atlas.Atlas.open("/tmp/store").open_as_xarray_dataset("big")
 ds_back["temperature"].data              # -> dask.array.Array
 ds_back["temperature"][0:100].compute()  # reads exactly one chunk
 ```
@@ -149,12 +149,32 @@ picklable, so call `.compute()` before handing off to distributed/multiprocessin
 | Each coord / data variable | A separate array, with `dims` mapped 1:1. |
 | Dataset attrs | Dataset attributes, plain keys. |
 | Per-variable attrs | Flattened as `{var}.{attr}` at the dataset attr level. |
-| Per-variable `_FillValue` | Consumed by `define_array` as a typed fill value (source `Dataset.attrs` is not mutated). |
+| Per-variable `_FillValue` | Consumed by `define_array` as a typed fill value (source `Dataset.attrs` is not mutated). See [Missing data](#missing-data). |
 | Coord vs data_var distinction | JSON list in the internal `_pyatlas_coords` attr. |
 | Non-scalar attr values (list, ndarray) | JSON-encoded string with a `json:` prefix marker. |
 
-Each `add_xr_dataset` / `ds.atlas.write` creates a *new* dataset — there is no append-into-existing
+Each `add_xarray_dataset` / `ds.atlas.write` creates a *new* dataset — there is no append-into-existing
 mode.
+
+### Missing data
+
+When a dataset is opened with `mask_and_scale=True` (xarray's default), masked cells become `NaN`
+(floats) / `NaT` (datetimes) and `_FillValue` is moved into `var.encoding`. So those cells are
+recorded as **null** (counted in `null_count`, excluded from min/max stats), arrays default to a
+sentinel fill on write: `NaN` for floats, `NaT` for `datetime64[ns]`, and `""` for strings (integers
+have none). Missing string cells (`None`/`NaN`) are substituted with the string fill and a warning is
+emitted, since a string can't be stored as null directly.
+
+Override per write with `fill_value` — a bare scalar (numeric arrays) or a `{var: scalar}` dict
+(`None` disables the default for that var); an explicit CF `_FillValue` attribute still takes
+precedence over the default:
+
+```python
+store.add_xarray_dataset(ds, "jan_2024", fill_value={"temperature": -9999.0})
+```
+
+See the [xarray guide](https://github.com/maris-development/atlas/blob/main/atlas-python/docs/guides/xarray.md#fill-values-and-missing-data)
+for the full resolution order.
 
 ## Supported dtypes
 
@@ -189,8 +209,9 @@ handle instead of a local path. The path-based local-filesystem API works withou
 | `list_datasets() -> list[str]` | All dataset names. |
 | `list_arrays() -> list[str]` | Distinct array names across datasets. |
 | `dataset_exists(name) -> bool` | Existence check. |
-| `add_xr_dataset(ds, name, chunks=None)` | Append an `xarray.Dataset` (does **not** flush). |
-| `to_xarray(name) -> xr.Dataset` | Read a dataset back (chunked vars come back dask-backed). |
+| `add_xarray_dataset(ds, name, chunks=None, fill_value=None)` | Append an `xarray.Dataset` (does **not** flush). `fill_value` overrides the per-array fill (scalar or `{var: scalar}`); see [Missing data](#missing-data). |
+| `open_as_xarray_dataset(name) -> xr.Dataset` | Read a dataset back (chunked vars come back dask-backed). |
+| `open_as_many_xarray_dataset(names, concat_dim="dataset") -> xr.Dataset` | Open many datasets stacked along `concat_dim` (eager numpy). |
 | `flush()` | The single durability boundary — persist everything. |
 | `close()` | Alias for `flush()`; also the `with`-block exit. |
 | `compact()` | Reclaim tombstoned space across cached array files. |
@@ -218,13 +239,14 @@ handle instead of a local path. The path-based local-filesystem API works withou
 Runnable, self-contained scripts (each writes to a temp directory):
 
 - [01_basics.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/01_basics.py) — create a store, define arrays, set attributes, reopen, read back.
-- [02_xarray.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/02_xarray.py) — round-trip an `xr.Dataset` via both `store.add_xr_dataset(...)` and the `ds.atlas.write(...)` accessor.
+- [02_xarray.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/02_xarray.py) — round-trip an `xr.Dataset` via both `store.add_xarray_dataset(...)` and the `ds.atlas.write(...)` accessor.
 - [03_dask_streaming.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/03_dask_streaming.py) — stream a dask-chunked `xr.Dataset` in one chunk at a time.
+- [09_missing_data.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/09_missing_data.py) — masked/missing cells with default `NaN` / `NaT` / `""` fills, `null_count`, and `fill_value=` overrides.
 
 ## Performance
 
 ATLAS is tuned for collections of many similarly-shaped datasets. On a "1000 datasets" benchmark
-against netCDF4 and Zarr v3, the bulk read paths (`Atlas.to_xarray_many` /
+against netCDF4 and Zarr v3, the bulk read paths (`Atlas.open_as_many_xarray_dataset` /
 `Atlas.read_array_across_stacked`) beat Zarr by ~2.8× on large chunked slice reads, and on small
 per-dataset workloads ATLAS leads on both reads and writes. See the
 [benchmarks](https://github.com/maris-development/atlas/tree/main/atlas-python/benchmarks) for the full

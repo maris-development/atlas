@@ -83,7 +83,7 @@ Key design points:
 - **Sync Python API, backed by an internal multi-threaded tokio runtime.** Each blocking call uses `py.allow_threads(|| RT.block_on(...))` so other Python threads can run.
 - **Type dispatch via macros.** Atlas's read/write methods are generic over dtype (`T: ArrayElement`); the bindings dispatch at runtime via a `numeric_dispatch!` macro in [pyatlas/src/dataset.rs](pyatlas/src/dataset.rs).
 - **`numpy`-zero-copy on the numeric path.** Python `np.ndarray` ↔ `ndarray::ArrayView` via the `numpy` crate.
-- **xarray integration** lives in [pyatlas/python/pyatlas/xarray.py](pyatlas/python/pyatlas/xarray.py). The `Atlas.add_xr_dataset` Rust pymethod and the `ds.atlas.write` accessor both delegate to the `_write_xarray_new_dataset` helper. dask-backed variables are streamed one chunk at a time via `arr.blocks[idx].compute()`.
+- **xarray integration** lives in [pyatlas/python/pyatlas/xarray.py](pyatlas/python/pyatlas/xarray.py). The `Atlas.add_xarray_dataset` Rust pymethod and the `ds.atlas.write` accessor both delegate to the `_write_xarray_new_dataset` helper. dask-backed variables are streamed one chunk at a time via `arr.blocks[idx].compute()`.
 
 ---
 

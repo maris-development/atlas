@@ -192,24 +192,33 @@ impl PyAtlas {
     ///
     /// Dask-backed variables are streamed one chunk at a time, with the dask
     /// chunk shape becoming the atlas chunk shape unless overridden via `chunks`.
-    #[pyo3(signature = (ds, name, chunks=None))]
-    fn add_xr_dataset(
+    ///
+    /// `fill_value` overrides the per-array fill value: a bare scalar applies to
+    /// numeric arrays, a `{var: scalar}` dict targets named variables (`None`
+    /// disables the default for that variable). When omitted, arrays default to a
+    /// sentinel fill so mask_and_scale'd missing cells are recorded as null: `NaN`
+    /// for floats, `NaT` for `datetime64[ns]`, and `""` for strings (integers have
+    /// none).
+    #[pyo3(signature = (ds, name, chunks=None, fill_value=None))]
+    fn add_xarray_dataset(
         slf: Py<Self>,
         py: Python<'_>,
         ds: Py<PyAny>,
         name: &str,
         chunks: Option<Py<PyAny>>,
+        fill_value: Option<Py<PyAny>>,
     ) -> PyResult<()> {
         let helper = py
             .import("atlas.xarray")?
             .getattr("_write_xarray_new_dataset")?;
         let chunks_arg: Py<PyAny> = chunks.unwrap_or_else(|| py.None());
-        helper.call1((slf, ds, name, chunks_arg))?;
+        let fill_arg: Py<PyAny> = fill_value.unwrap_or_else(|| py.None());
+        helper.call1((slf, ds, name, chunks_arg, fill_arg))?;
         Ok(())
     }
 
     /// Open `name` and return it as an `xarray.Dataset` (eager read).
-    fn to_xarray(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+    fn open_as_xarray_dataset(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
         let view = py
             .detach(|| runtime().block_on(self.inner.open_dataset(name)))
             .map_err(to_py_err)?;
@@ -225,7 +234,7 @@ impl PyAtlas {
     /// `xr.open_mfdataset(...)`. See [`atlas.xarray._atlas_to_xarray_many`]
     /// for the actual builder.
     #[pyo3(signature = (names, concat_dim="dataset", parallel=true))]
-    fn to_xarray_many(
+    fn open_as_many_xarray_dataset(
         slf: Py<Self>,
         py: Python<'_>,
         names: Vec<String>,
@@ -246,7 +255,7 @@ impl PyAtlas {
     /// Sister API to [`Atlas::read_array_across`] in the atlas crate. One
     /// `RwLock::read` guard on the shared physical file; per-dataset reads
     /// dispatched concurrently on the tokio runtime via
-    /// `futures::future::try_join_all`. Lets `to_xarray_many` skip the
+    /// `futures::future::try_join_all`. Lets `open_as_many_xarray_dataset` skip the
     /// per-dataset Python ↔ Rust round-trip entirely.
     #[pyo3(signature = (array, dataset_names, start=None, shape=None))]
     fn read_array_across<'py>(
@@ -268,7 +277,7 @@ impl PyAtlas {
             .array_dtype(array)
             .ok_or_else(|| PyKeyError::new_err(format!("array not found: {array}")))?;
 
-        // String not exposed here — to_xarray_many's schema check rejects
+        // String not exposed here — open_as_many_xarray_dataset's schema check rejects
         // strings before they reach this fast path. Bool / Binary likewise
         // aren't supported through array-format's read path.
         if matches!(dtype, DType::String | DType::Bool | DType::Binary) {
@@ -354,7 +363,7 @@ impl PyAtlas {
     /// Stacked variant of [`PyAtlas::read_array_across`]: returns a single
     /// numpy `ndarray` of shape `(len(dataset_names), *per_dataset_shape)`
     /// instead of a Python list of N arrays. Skips the Python-side `np.stack`
-    /// step that `to_xarray_many` would otherwise pay.
+    /// step that `open_as_many_xarray_dataset` would otherwise pay.
     ///
     /// Errors if any listed dataset doesn't declare `array`.
     #[pyo3(signature = (array, dataset_names, start=None, shape=None))]

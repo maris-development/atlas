@@ -1,6 +1,6 @@
 """Stream a dask-backed xarray Dataset into atlas, one chunk at a time.
 
-When a variable's `.data` is a `dask.array.Array`, `store.add_xr_dataset` (and
+When a variable's `.data` is a `dask.array.Array`, `store.add_xarray_dataset` (and
 the `ds.atlas.write` accessor) iterates the dask chunk grid and calls
 `view.write_array(start=..., data=chunk)` once per chunk — so peak memory is
 bounded by a single chunk per variable rather than the full array.
@@ -35,7 +35,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as store_dir:
         with atlas.Atlas.create(store_dir) as store:
-            store.add_xr_dataset(ds, "ds")  # streams chunk-by-chunk
+            store.add_xarray_dataset(ds, "ds")  # streams chunk-by-chunk
 
             # Verify the dask chunk shape became the atlas on-disk chunk shape
             view = store.open_dataset("ds")
@@ -45,7 +45,7 @@ def main() -> None:
 
         # Reopen — chunked variables come back dask-backed (one task per on-disk chunk)
         store = atlas.Atlas.open(store_dir)
-        ds_back = store.to_xarray("ds")
+        ds_back = store.open_as_xarray_dataset("ds")
         print(f"Read-back shape:   {ds_back['temperature'].shape}")
         print(f"Read-back chunks:  {ds_back['temperature'].data.chunks}")
         print(f"Read-back .data:   {type(ds_back['temperature'].data).__module__}.{type(ds_back['temperature'].data).__name__}")

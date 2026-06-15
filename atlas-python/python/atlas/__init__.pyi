@@ -91,11 +91,12 @@ class Atlas:
 
     def __repr__(self) -> str: ...
 
-    def add_xr_dataset(
+    def add_xarray_dataset(
         self,
         ds: "xr.Dataset",
         name: str,
         chunks: Optional[dict[str, Sequence[int]]] = None,
+        fill_value: Union[Any, dict[str, Any], None] = None,
     ) -> None:
         """Append an atlas dataset populated from an `xarray.Dataset`.
 
@@ -103,10 +104,19 @@ class Atlas:
         dataset attrs. Dask-backed variables are streamed chunk-by-chunk; their
         chunk shape is used as the atlas chunk shape unless `chunks` overrides
         it per-variable.
+
+        `fill_value` overrides the per-array fill value: a bare scalar applies to
+        numeric arrays, a `{var: scalar}` dict targets named variables (`None`
+        disables the default for that variable). When omitted, arrays default to a
+        sentinel fill so mask_and_scale'd missing cells are recorded as null: `NaN`
+        for floats, `NaT` for `datetime64[ns]`, and `""` for strings (integers
+        have none). Missing string cells (None/NaN) are substituted with the string
+        fill and a warning is emitted, since a string can't be stored as null
+        directly.
         """
         ...
 
-    def to_xarray(self, name: str) -> "xr.Dataset":
+    def open_as_xarray_dataset(self, name: str) -> "xr.Dataset":
         """Open dataset `name` and return it as an `xarray.Dataset`.
 
         Variables stored with `chunk_shape != shape` come back dask-backed (one
@@ -115,7 +125,7 @@ class Atlas:
         """
         ...
 
-    def to_xarray_many(
+    def open_as_many_xarray_dataset(
         self,
         names: Sequence[str],
         concat_dim: str = "dataset",
@@ -280,10 +290,10 @@ class DatasetView:
         dataset. Same `start` / `shape` apply to every array.
 
         Fast path for per-dataset slice reads (e.g. inside a dask worker)
-        where `to_xarray(name).isel(...).load()` overhead would dominate the
+        where `open_as_xarray_dataset(name).isel(...).load()` overhead would dominate the
         actual I/O cost. Skips the xr.Dataset construction and per-chunk
-        dask graph that `to_xarray` builds. See the benchmarks for the
-        ~3-4× speedup over `to_xarray` iteration on chunked storage.
+        dask graph that `open_as_xarray_dataset` builds. See the benchmarks for the
+        ~3-4× speedup over `open_as_xarray_dataset` iteration on chunked storage.
         """
         ...
 

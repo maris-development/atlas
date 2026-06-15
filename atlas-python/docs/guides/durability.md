@@ -52,11 +52,11 @@ atlas" loop fast:
 ```python
 with atlas.Atlas.create("/tmp/store") as atlas:
     for nc_path in sorted(glob.glob("*.nc")):
-        atlas.add_xr_dataset(xr.open_dataset(nc_path), Path(nc_path).stem)
+        atlas.add_xarray_dataset(xr.open_dataset(nc_path), Path(nc_path).stem)
 # One delta file per array name across the whole batch, not one per file.
 ```
 
-If `add_xr_dataset` flushed on every call you'd pay 1000 `atlas.json`
+If `add_xarray_dataset` flushed on every call you'd pay 1000 `atlas.json`
 rewrites and 1000 separate fsyncs per array. The trade-off is that an
 unclean exit (`del atlas` without flush, a crash, a `KeyboardInterrupt`
 inside the `with`) loses everything since the last flush.

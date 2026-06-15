@@ -34,10 +34,10 @@ with atlas.Atlas.create("/tmp/my_store", codec="zstd") as store:
   append.
 - **Compression** — zstd / lz4 / uncompressed array codecs and json /
   msgpack metadata, optionally compressed.
-- **xarray + dask integration** — `atlas.add_xr_dataset(ds, name)` to
-  ingest, `atlas.to_xarray(name)` to read back. Dask-backed variables
+- **xarray + dask integration** — `atlas.add_xarray_dataset(ds, name)` to
+  ingest, `atlas.open_as_xarray_dataset(name)` to read back. Dask-backed variables
   stream chunk-by-chunk on write and come back lazily on read.
-- **Bulk cross-dataset APIs** — `to_xarray_many` and
+- **Bulk cross-dataset APIs** — `open_as_many_xarray_dataset` and
   `read_array_across_stacked` collapse N per-dataset reads into one PyO3
   call, sharing a single file handle.
 - **Sync API, GIL-released** — a multi-threaded tokio runtime backs every

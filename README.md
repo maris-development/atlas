@@ -264,7 +264,7 @@ Choose LZ4 when decompression throughput matters more than storage size (e.g. la
 
 ### Write path
 
-Writes are buffered in-memory across the whole atlas. Calling `Atlas::flush()` compresses and writes every modified block across every cached array file, then rewrites `atlas.json` atomically (a single `PUT`). The write path scales with the number of modified chunks, not the number of datasets, and N consecutive `add_xr_dataset` / `create_dataset` calls amortise to a single flush.
+Writes are buffered in-memory across the whole atlas. Calling `Atlas::flush()` compresses and writes every modified block across every cached array file, then rewrites `atlas.json` atomically (a single `PUT`). The write path scales with the number of modified chunks, not the number of datasets, and N consecutive `add_xarray_dataset` / `create_dataset` calls amortise to a single flush.
 
 ### Compaction
 
@@ -308,7 +308,7 @@ the `(0:25, 0:25, 0:12)` slice down to chunk-level reads.
 | **atlas-bulk** | 1 store, `read_array_across_stacked` with slice push-down | **2.12** | 59 | 6387 |
 | **atlas + `--use-dask`** | 1 store, dask-threaded per-dataset `view.read_arrays(...)` | **3.21** | 60 | 6387 |
 | zarr | 1000 separate stores, `xr.open_mfdataset(parallel=True).isel(...)` | 5.99 | 38 | 6392 |
-| atlas (default) | 1 store, serial per-dataset `to_xarray(...).isel(...).load()` | 10.23 | 51 | 6387 |
+| atlas (default) | 1 store, serial per-dataset `open_as_xarray_dataset(...).isel(...).load()` | 10.23 | 51 | 6387 |
 | netcdf | 1000 `.nc` files, `xr.open_mfdataset(parallel=True).isel(...)` | 13.91 | 122 | 5596 |
 
 #### `--case profile --datasets 1000` (~67 MB raw — per-dataset overhead dominates)
@@ -339,9 +339,9 @@ For tiny-shape datasets the comparison is dominated by per-dataset overhead, whi
 
 ### What the numbers say
 
-- **Reads on gridded** (decompression-dominated, with realistic chunking + slice push-down): `atlas-bulk` reads in **2.12s vs zarr's 6.00s — 2.8× faster**. `atlas + --use-dask` (using the new `view.read_arrays(...)` fast path) hits **3.21s — 1.9× faster than zarr**. The win comes from atlas's structural advantage (one open of one file per variable, in-memory metadata) combined with APIs that bypass `to_xarray`'s xr.Dataset + per-chunk dask graph overhead. zarr and netcdf both push the slice down through `open_mfdataset(...).isel(...)` via dask graph optimization — they're not penalised by the chunking; atlas just wins by amortising metadata and skipping per-dataset Python overhead.
+- **Reads on gridded** (decompression-dominated, with realistic chunking + slice push-down): `atlas-bulk` reads in **2.12s vs zarr's 6.00s — 2.8× faster**. `atlas + --use-dask` (using the new `view.read_arrays(...)` fast path) hits **3.21s — 1.9× faster than zarr**. The win comes from atlas's structural advantage (one open of one file per variable, in-memory metadata) combined with APIs that bypass `open_as_xarray_dataset`'s xr.Dataset + per-chunk dask graph overhead. zarr and netcdf both push the slice down through `open_mfdataset(...).isel(...)` via dask graph optimization — they're not penalised by the chunking; atlas just wins by amortising metadata and skipping per-dataset Python overhead.
 - **Reads on profile** (overhead-dominated): atlas wins by an order of magnitude. `atlas-bulk` is **~50× faster than zarr** (0.08s vs 4.07s) because the per-dataset I/O is small enough that everything is overhead — and atlas's structural design is built for exactly that case. Default serial `atlas` is still ~12× faster than zarr.
-- **Default `atlas.to_xarray` iteration is currently SLOW on chunked storage** (10.23s vs zarr's 6.00s). It goes through `to_xarray(name)` which returns dask-backed arrays per chunk (8 chunks/var × 3 vars × 1000 datasets = 24,000 dask delayed tasks just to build the graph). Dask graph overhead exceeds the parallelism win. **The fix is to use `view.read_arrays(vars, start, shape)` for per-dataset slice reads** — that's what `atlas + --use-dask` does internally and why it hits 3.21s. For cross-dataset reads of the *same* slice from many datasets, prefer `Atlas.to_xarray_many` / `read_array_across_stacked` (the `atlas-bulk` row).
+- **Default `atlas.open_as_xarray_dataset` iteration is currently SLOW on chunked storage** (10.23s vs zarr's 6.00s). It goes through `open_as_xarray_dataset(name)` which returns dask-backed arrays per chunk (8 chunks/var × 3 vars × 1000 datasets = 24,000 dask delayed tasks just to build the graph). Dask graph overhead exceeds the parallelism win. **The fix is to use `view.read_arrays(vars, start, shape)` for per-dataset slice reads** — that's what `atlas + --use-dask` does internally and why it hits 3.21s. For cross-dataset reads of the *same* slice from many datasets, prefer `Atlas.open_as_many_xarray_dataset` / `read_array_across_stacked` (the `atlas-bulk` row).
 - **Workload sensitivity**: `--use-dask` helps when per-dataset decompression is the bottleneck and *hurts* when per-dataset overhead is the bottleneck (profile: default `atlas` 0.32s → dask 2.03s). Picking the right API for the workload matters more than picking dask vs serial.
 - **Writes on gridded**: zarr is fastest (~31s vs atlas's ~50s) — each `to_zarr(...)` just dumps bytes into a per-dataset subtree, while atlas does more bookkeeping per call (schema registration, per-dataset attrs into the shared `atlas.msgpack.zst`, block addressing in the shared array file). Atlas still beats netcdf decisively.
 - **Writes on profile**: atlas wins ~12× (0.91s vs zarr's 11.43s, netcdf's 2.98s). At small per-dataset sizes the metadata write dominates, and atlas's amortised single-flush model wins.

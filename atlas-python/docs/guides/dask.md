@@ -11,7 +11,7 @@ Atlas integrates with dask at both ends of the pipeline:
 
 If a variable's `.data` is a `dask.array.Array` (e.g. from
 `xr.open_dataset(path, chunks=...)` or `ds.chunk({...})`),
-`atlas.add_xr_dataset` / `ds.atlas.write` iterates the dask chunk grid and
+`atlas.add_xarray_dataset` / `ds.atlas.write` iterates the dask chunk grid and
 calls `view.write_array(start=..., data=chunk)` once per chunk. The whole
 array is never materialised.
 
@@ -22,7 +22,7 @@ import atlas
 ds = xr.open_dataset("big.nc", chunks={"time": 100, "lat": -1, "lon": -1})
 
 with atlas.Atlas.create("/tmp/store") as atlas:
-    atlas.add_xr_dataset(ds, "big")     # streams chunk-by-chunk
+    atlas.add_xarray_dataset(ds, "big")     # streams chunk-by-chunk
 ```
 
 The dask chunk shape is also used as the atlas on-disk `chunk_shape`, so
@@ -30,7 +30,7 @@ the layout maps 1:1 with no extra alignment cost. Override per-variable
 with `chunks={"var_name": [...]}`:
 
 ```python
-atlas.add_xr_dataset(ds, "big", chunks={"temperature": [50, 50, 24]})
+atlas.add_xarray_dataset(ds, "big", chunks={"temperature": [50, 50, 24]})
 ```
 
 This decouples write-time memory budget from read-side chunk layout.
@@ -41,7 +41,7 @@ RAM per variable, not 10 GB.
 
 ## Lazy reads
 
-`atlas.to_xarray(name)` returns each variable dask-backed when it was
+`atlas.open_as_xarray_dataset(name)` returns each variable dask-backed when it was
 stored with non-trivial chunking (`chunk_shape != shape`). The dask
 `chunks` tuple mirrors the on-disk chunk grid one-to-one, and each
 on-disk chunk becomes a **single** dask task. Full-shape arrays and 0-D
@@ -50,9 +50,9 @@ scalars come back eager as numpy.
 ```python
 ds = xr.open_dataset("big.nc", chunks={"time": 100, "lat": -1, "lon": -1})
 with atlas.Atlas.create("/tmp/store") as atlas:
-    atlas.add_xr_dataset(ds, "big")
+    atlas.add_xarray_dataset(ds, "big")
 
-ds_back = atlas.Atlas.open("/tmp/store").to_xarray("big")
+ds_back = atlas.Atlas.open("/tmp/store").open_as_xarray_dataset("big")
 type(ds_back["temperature"].data)        # -> dask.array.Array
 ds_back["temperature"][0:100].compute()  # reads exactly one chunk
 ```

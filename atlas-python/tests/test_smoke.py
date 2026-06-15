@@ -266,7 +266,7 @@ def test_atlas_batched_roundtrip():
 
 
 def test_atlas_no_implicit_flush():
-    """add_xr_dataset (or any mutation) doesn't auto-persist — a fresh Atlas
+    """add_xarray_dataset (or any mutation) doesn't auto-persist — a fresh Atlas
     sees nothing until store.flush() is called."""
     with tempfile.TemporaryDirectory() as d:
         s = atlas.Atlas.create(d)

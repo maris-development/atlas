@@ -57,6 +57,11 @@ equal to the fill value is counted as a null in
 [`array_stats`](stats.md) — this is how the null count works for
 `NaN`-filled float arrays.
 
+When ingesting via [`add_xarray_dataset`](xarray.md#fill-values-and-missing-data)
+you don't pass these by hand — float arrays default to a `NaN` fill, datetimes
+to `NaT`, and strings to `""`, so cells masked by `mask_and_scale=True` are
+recorded as null automatically.
+
 ## 0-D scalar arrays
 
 Every dtype above also works at `shape=[]` (and `chunk_shape=[]`,

@@ -421,11 +421,11 @@ impl PyDatasetView {
     ///
     /// Fast path for "give me these N variables, optionally sliced" — skips
     /// the Python-side `xr.Dataset` construction and dask graph build that
-    /// [`to_xarray`] pays per dataset, while still doing one Rust round-trip
+    /// [`open_as_xarray_dataset`] pays per dataset, while still doing one Rust round-trip
     /// per variable. Use this from dask workers (or any per-dataset loop)
     /// where the natural xarray API's overhead dominates over the actual
     /// I/O cost — the gridded benchmark goes from ~7.8s to <3s by switching
-    /// the dask branch to call this instead of `to_xarray(name).isel(...).load()`.
+    /// the dask branch to call this instead of `open_as_xarray_dataset(name).isel(...).load()`.
     #[pyo3(signature = (names, start=None, shape=None))]
     fn read_arrays<'py>(
         &self,
@@ -441,7 +441,7 @@ impl PyDatasetView {
             // Reuse the per-dtype dispatch in `read_array` for each variable.
             // The win isn't fewer Rust calls — it's one PyO3 method invocation
             // instead of N, no per-call Python dispatch overhead, and (most
-            // importantly) the caller skips `to_xarray`'s xr.Dataset + dask
+            // importantly) the caller skips `open_as_xarray_dataset`'s xr.Dataset + dask
             // graph construction entirely.
             let arr = self.read_array(py, name, Some(start.clone()), Some(shape.clone()))?;
             match arr {

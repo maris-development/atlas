@@ -5,8 +5,8 @@
 `obstore.store.S3Store`, `obstore.store.GCSStore`,
 `obstore.store.AzureStore`, `obstore.store.LocalStore`,
 `obstore.store.HttpStore`. The rest of the API (`define_array`,
-`write_array`, `read_array`, `set_attribute`, `flush`, `add_xr_dataset`,
-`to_xarray`, all the bulk reads) works identically against either.
+`write_array`, `read_array`, `set_attribute`, `flush`, `add_xarray_dataset`,
+`open_as_xarray_dataset`, all the bulk reads) works identically against either.
 
 This example uses `obstore.store.LocalStore` so it runs anywhere with no
 credentials. The S3 / GCS / Azure variants are shown commented out at
@@ -97,7 +97,7 @@ def main() -> None:
                 },
                 attrs={"month": 2, "station": "KNMI"},
             )
-            atlas_store.add_xr_dataset(ds, "feb_2024")
+            atlas_store.add_xarray_dataset(ds, "feb_2024")
         # `with` exit calls atlas_store.close() == single flush. On a cloud
         # backend this is the moment one `PutObject` per touched array
         # file + one for the metadata happens — call flush() at coarse
@@ -116,7 +116,7 @@ def main() -> None:
         print(f"\njan_2024.temperature[0,0] = {temp[0, 0]}")
         print(f"jan_2024 attrs            = {jan_back.attributes()}")
 
-        feb_back = atlas2.to_xarray("feb_2024")
+        feb_back = atlas2.open_as_xarray_dataset("feb_2024")
         xr.testing.assert_identical(ds, feb_back)
         print(f"\nfeb_2024 round-tripped identically through xarray ✓")
 

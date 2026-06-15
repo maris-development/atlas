@@ -39,7 +39,7 @@ This shape unlocks two further wins:
   `open_mfdataset(..., parallel=True).isel(...).load()`, which still has to
   open N stores and run the slice through xarray.
 - **One flush amortises N writes.** Atlas's mutations are in-memory until
-  `flush()`; N consecutive `add_xr_dataset` calls produce one delta file per
+  `flush()`; N consecutive `add_xarray_dataset` calls produce one delta file per
   touched array name regardless of N. See
   [Durability and flushing](guides/durability.md).
 
@@ -130,7 +130,7 @@ ds = xr.open_zarr("/data/jan_2024.zarr")
 ds = xr.open_dataset("/data/jan_2024.nc")
 
 # After — atlas
-ds = atlas.Atlas.open("/data/store").to_xarray("jan_2024")
+ds = atlas.Atlas.open("/data/store").open_as_xarray_dataset("jan_2024")
 ```
 
 Per-variable attrs (`units`, `long_name`, …), `_FillValue`, coord

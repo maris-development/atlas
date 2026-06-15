@@ -75,6 +75,11 @@ For integer arrays, pick a sentinel value (`-1`, `np.iinfo(dtype).min`,
 etc.) — any *written* cell equal to it will also be counted as null. Pick
 a value that can't appear in real data.
 
+When ingesting via [`add_xarray_dataset`](xarray.md#fill-values-and-missing-data)
+you don't set these by hand: float arrays default to a `NaN` fill, datetimes
+to `NaT`, and strings to `""`, so cells masked by `mask_and_scale=True` are
+counted as null automatically. Pass `fill_value=` to override.
+
 ## What stats don't include
 
 - **No mean, sum, stdev, or quantiles.** If you need those, read the array
