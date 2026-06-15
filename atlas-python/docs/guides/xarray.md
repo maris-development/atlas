@@ -29,11 +29,11 @@ ds = xr.Dataset(
 )
 
 with atlas.Atlas.create("/tmp/store") as atlas:
-    atlas.add_xr_dataset(ds, "jan_2024")     # method on Atlas
+    atlas.add_xarray_dataset(ds, "jan_2024")     # method on Atlas
     ds.atlas.write(atlas, "feb_2024")        # accessor on xr.Dataset (same effect)
 ```
 
-`add_xr_dataset` doesn't flush — N consecutive calls accumulate and one
+`add_xarray_dataset` doesn't flush — N consecutive calls accumulate and one
 `atlas.flush()` (or the `with` block exit) persists everything. See
 [Bulk ingestion](#bulk-ingestion) below.
 
@@ -41,7 +41,7 @@ with atlas.Atlas.create("/tmp/store") as atlas:
 
 ```python
 atlas = atlas.Atlas.open("/tmp/store")
-ds_back = atlas.to_xarray("jan_2024")
+ds_back = atlas.open_as_xarray_dataset("jan_2024")
 xr.testing.assert_identical(ds, ds_back)     # round-trip is bit-identical
 ```
 
@@ -56,7 +56,7 @@ as numpy. See [Dask streaming and lazy reads](dask.md).
 | Each `data_var` and each `coord` | A separate atlas array; `dims` map 1:1 onto atlas dimension names. |
 | `Dataset.attrs` | Atlas dataset attributes, plain keys. |
 | Per-variable `attrs` | Flattened as `{var}.{attr}` at the dataset attribute level. |
-| Per-variable `_FillValue` | Consumed by `define_array` as a typed fill value (**not** flattened as a regular attr). The source `Dataset.attrs` is not mutated. |
+| Per-variable `_FillValue` | Consumed by `define_array` as a typed fill value (**not** flattened as a regular attr). The source `Dataset.attrs` is not mutated. See [Fill values and missing data](#fill-values-and-missing-data). |
 | Coord vs data_var distinction | JSON list in the internal `_pyatlas_coords` attribute. |
 | Non-scalar attr values (list, ndarray, dict) | JSON-encoded with a `json:` string prefix. |
 
@@ -78,7 +78,7 @@ restrictions.
 
 ## Bulk ingestion
 
-`add_xr_dataset` never flushes by itself — N consecutive calls accumulate
+`add_xarray_dataset` never flushes by itself — N consecutive calls accumulate
 in memory and one flush at the end persists everything. One delta file is
 written per **array name** touched across the whole batch, not one per
 input file:
@@ -90,7 +90,7 @@ import atlas, xarray as xr
 with atlas.Atlas.create("/tmp/store") as atlas:
     for nc_path in sorted(glob.glob("*.nc")):
         name = os.path.splitext(os.path.basename(nc_path))[0]
-        atlas.add_xr_dataset(xr.open_dataset(nc_path), name)
+        atlas.add_xarray_dataset(xr.open_dataset(nc_path), name)
 # Single flush on `with` exit.
 ```
 
@@ -101,7 +101,7 @@ dask chunks become the atlas on-disk chunks automatically — see
 ## Overriding the on-disk chunk shape
 
 ```python
-atlas.add_xr_dataset(ds, "jan_2024", chunks={"temperature": [4, 8]})
+atlas.add_xarray_dataset(ds, "jan_2024", chunks={"temperature": [4, 8]})
 ds.atlas.write(atlas, "feb_2024", chunks={"temperature": [4, 8]})
 ```
 
@@ -110,9 +110,54 @@ gets streamed at write time, but the on-disk `chunk_shape` is whatever you
 pass. Pick this when you want a different read-side chunk layout from
 your write-side memory budget.
 
+## Fill values and missing data
+
+When a NetCDF dataset is opened with `mask_and_scale=True` (xarray's default),
+missing cells become `NaN` (floats) or `NaT` (datetimes) and the original
+`_FillValue` is moved into `var.encoding`. So that atlas records those masked
+cells as **null** (counted in `null_count`, excluded from min/max stats, eligible
+for sparse storage), float and datetime arrays default to a `NaN` / `NaT` fill
+value on write:
+
+```python
+atlas.add_xarray_dataset(ds, "jan_2024")   # float vars -> NaN fill, datetime vars -> NaT fill
+```
+
+Resolution order for each variable's fill value (highest priority first):
+
+1. The explicit `fill_value` argument (below).
+2. The variable's CF `_FillValue` attribute, if present in `var.attrs`.
+3. Default: `NaN` for float arrays, `NaT` for `datetime64[ns]` arrays, `""` for
+   string arrays, and none for integer arrays (which have no missing sentinel —
+   give them one via `_FillValue` or the `fill_value` argument if needed).
+
+### Missing strings
+
+A string can't hold `NaN`, so missing string cells (`None`/`NaN`, e.g. from
+masking) are **substituted on write** with the resolved string fill — the
+`fill_value` you pass (`fill_value={"s": "N/A"}`), else the variable's
+`_FillValue`, else `""` — and a warning is emitted naming the count. Because the
+same value is declared as the array's fill, those cells are recorded as **null**
+(counted in `null_count`, excluded from min/max), exactly like `NaN`/`NaT` cells.
+
+One caveat with the `""` default: a *genuinely* empty string is indistinguishable
+from a missing one, so it too counts as null. Pass an explicit `fill_value` (e.g.
+`"N/A"`) when your data uses `""` as a real value.
+
+Override with `fill_value` — a bare scalar (applies to numeric arrays) or a
+`{var: scalar}` dict (`None` disables the default for that variable):
+
+```python
+atlas.add_xarray_dataset(ds, "jan_2024", fill_value={"temperature": -9999.0})
+ds.atlas.write(atlas, "feb_2024", fill_value={"temperature": None})  # no fill
+```
+
+A `NaN` fill is not re-emitted as a `_FillValue` attribute on read (it's
+self-describing in the float data); non-NaN fills round-trip as `_FillValue`.
+
 ## Limitations
 
-- **No append-into-existing.** Each call to `add_xr_dataset` /
+- **No append-into-existing.** Each call to `add_xarray_dataset` /
   `ds.atlas.write` creates a *new* atlas dataset. Append-style updates to
   an existing dataset go through the raw `DatasetView` API.
 - **Threaded scheduler only for lazy reads.** The `DatasetView` captured

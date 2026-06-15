@@ -1,7 +1,7 @@
 """Compare atlas / netCDF / zarr on a 1000-dataset collection workload.
 
 Each backend uses its canonical "many datasets" layout and read pattern:
-    atlas  — 1 store, 1000 datasets;       iterate `to_xarray(name)`
+    atlas  — 1 store, 1000 datasets;       iterate `open_as_xarray_dataset(name)`
     netCDF — 1000 .nc files;               `xr.open_mfdataset(files, ...)`
     zarr   — 1 store, 1000 groups;         iterate `xr.open_zarr(..., group=name)`
 
@@ -76,7 +76,7 @@ def bench_atlas(
             meta_compression="zstd",
         ) as store:
             for i in range(n_datasets):
-                store.add_xr_dataset(
+                store.add_xarray_dataset(
                     generate_dataset(i, case, use_dask=use_dask),
                     f"ds_{i:04d}",
                     chunks=chunks_per_var,
@@ -97,7 +97,7 @@ def bench_atlas(
         from dask.delayed import delayed
 
         # Fast path: per-dataset slice reads via `view.read_arrays(...)`
-        # bypass to_xarray's xr.Dataset + dask-graph build overhead. The
+        # bypass open_as_xarray_dataset's xr.Dataset + dask-graph build overhead. The
         # dask scheduler still parallelises across datasets; each task does
         # just one Rust call per variable with the slice already applied.
         start = [s.start for s in indexers.values()]
@@ -114,7 +114,7 @@ def bench_atlas(
     else:
         with time_block() as rt:
             for i in range(n_datasets):
-                ds = store.to_xarray(f"ds_{i:04d}")
+                ds = store.open_as_xarray_dataset(f"ds_{i:04d}")
                 _ = ds[var_names].isel(indexers).load()
                 progress_tick(i, n_datasets, "read")
     log_phase("atlas", "read", f"{rt.elapsed:.3f}s")
@@ -122,7 +122,7 @@ def bench_atlas(
     return BackendResult(name="atlas", write_s=wt.elapsed, read_s=rt.elapsed, size_bytes=size)
 
 
-# ── atlas (bulk, single-call to_xarray_many) ────────────────────────────
+# ── atlas (bulk, single-call open_as_many_xarray_dataset) ────────────────────────────
 
 
 def bench_atlas_bulk(
@@ -134,7 +134,7 @@ def bench_atlas_bulk(
     dask_workers: int | None = None,
 ) -> BackendResult:
     """Same write phase as `bench_atlas`; read phase is one
-    `Atlas.to_xarray_many(...)` call — the atlas-native equivalent of
+    `Atlas.open_as_many_xarray_dataset(...)` call — the atlas-native equivalent of
     `xr.open_mfdataset`. Stacked Dataset is sliced and `.load()`-ed in one
     dask compute."""
     import dask.config as dask_config
@@ -158,7 +158,7 @@ def bench_atlas_bulk(
             meta_compression="zstd",
         ) as store:
             for i, name in enumerate(names):
-                store.add_xr_dataset(
+                store.add_xarray_dataset(
                     generate_dataset(i, case, use_dask=use_dask),
                     name,
                     chunks=chunks_per_var,
@@ -179,7 +179,7 @@ def bench_atlas_bulk(
     # Push the slice down through the low-level API so atlas only decompresses
     # the chunks overlapping the slice (matches what zarr/netcdf's
     # `open_mfdataset(...).isel(...).load()` does via dask graph optimization).
-    # `to_xarray_many(...).isel(...)` would also work but slices in numpy
+    # `open_as_many_xarray_dataset(...).isel(...)` would also work but slices in numpy
     # *after* decompressing the full per-dataset chunks, wasting work when
     # `chunk_shape != shape`.
     start = [s.start for s in indexers.values()]
@@ -544,7 +544,7 @@ def parse_args() -> argparse.Namespace:
         "--atlas-bulk",
         action="store_true",
         help=(
-            "Add an `atlas-bulk` row that reads via Atlas.to_xarray_many "
+            "Add an `atlas-bulk` row that reads via Atlas.open_as_many_xarray_dataset "
             "(atlas-native equivalent of xr.open_mfdataset) instead of "
             "iterating per-dataset. Additive — the default `atlas` row still runs."
         ),

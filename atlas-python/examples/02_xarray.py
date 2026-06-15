@@ -1,10 +1,10 @@
 """xarray integration: write an `xr.Dataset` into atlas two equivalent ways, then read it back.
 
 Demonstrates:
-    1. `store.add_xr_dataset(ds, name)` — the atlas-side instance method.
+    1. `store.add_xarray_dataset(ds, name)` — the atlas-side instance method.
     2. `ds.atlas.write(atlas, name)`    — the xarray accessor (registered automatically
                                           when `atlas` is imported).
-    3. `store.to_xarray(name)`          — read back as a fresh `xr.Dataset`.
+    3. `store.open_as_xarray_dataset(name)`          — read back as a fresh `xr.Dataset`.
 
 Per-variable attributes (`units`, `long_name`, …) round-trip through the
 flattened `{var}.{attr}` convention.
@@ -48,7 +48,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as store_dir:
         with atlas.Atlas.create(store_dir) as store:
             # Two equivalent ways to write
-            store.add_xr_dataset(ds, "jan_2024")
+            store.add_xarray_dataset(ds, "jan_2024")
             ds.atlas.write(store, "feb_2024")
 
             print(f"Datasets in store: {store.list_datasets()}")
@@ -57,10 +57,10 @@ def main() -> None:
 
         # Reopen and read back
         store = atlas.Atlas.open(store_dir)
-        ds_jan = store.to_xarray("jan_2024")
-        ds_feb = store.to_xarray("feb_2024")
+        ds_jan = store.open_as_xarray_dataset("jan_2024")
+        ds_feb = store.open_as_xarray_dataset("feb_2024")
 
-        print("\njan_2024 (store.to_xarray):")
+        print("\njan_2024 (store.open_as_xarray_dataset):")
         print(ds_jan)
         print("\njan_2024.temperature.attrs:", ds_jan["temperature"].attrs)
         print("feb_2024 attrs:               ", ds_feb.attrs)

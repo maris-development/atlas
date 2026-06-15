@@ -49,7 +49,7 @@ replace them, so one run can compare multiple variants head-to-head.
 
 | Backend | Always              | Added by `--atlas-bulk` | Added by `--netcdf-groups` | Added by `--zarr-groups` |
 |---|---|---|---|---|
-| atlas         | 1 store, N datasets (iterate `to_xarray` or `view.read_arrays`) | (use `read_array_across_stacked`) | — | — |
+| atlas         | 1 store, N datasets (iterate `open_as_xarray_dataset` or `view.read_arrays`) | (use `read_array_across_stacked`) | — | — |
 | atlas-bulk    | — | (this row) | — | — |
 | netcdf        | N separate `.nc` files    | — | 1 `.nc` file w/ N netCDF4 groups | — |
 | netcdf-groups | —                         | — | (this row)                       | — |
@@ -65,7 +65,7 @@ read pattern (not the layout) — see "Read pattern" below.
 Read the slice from every dataset. Each backend uses its canonical
 "many datasets" idiom:
 
-- **atlas (default, no `--use-dask`)** — iterate `to_xarray(name).isel(slice).load()`.
+- **atlas (default, no `--use-dask`)** — iterate `open_as_xarray_dataset(name).isel(slice).load()`.
   Returns a full xr.Dataset per dataset and slices in xarray. On chunked
   storage this pays per-chunk dask graph build overhead; slow on `gridded`.
 - **atlas (with `--use-dask`)** — fast path: each dask worker calls
@@ -100,14 +100,14 @@ When set, `--use-dask` does three things:
    per-dataset slice load is wrapped in `dask.delayed` and dispatched via
    `dask.compute(*, scheduler="threads")`. For atlas specifically, this
    path uses `view.read_arrays(vars, start, shape)` (the fast Rust dict
-   path) rather than `to_xarray(...).isel(...).load()`, avoiding the
+   path) rather than `open_as_xarray_dataset(...).isel(...).load()`, avoiding the
    xr.Dataset + dask graph overhead that dominates default `atlas`.
 2. **Reads (mfdataset paths)** — default netcdf, default zarr: already use
    dask internally; the flag only constrains the thread pool to
    `--dask-workers` if specified.
 3. **Writes** — `generate_dataset()` returns dask-backed `xr.DataArray`s
    (2 chunks along `time`). Each backend's xarray write triggers a dask
-   compute that streams chunks. Atlas's `add_xr_dataset` already does this
+   compute that streams chunks. Atlas's `add_xarray_dataset` already does this
    chunk-by-chunk; netCDF/zarr `to_*` handle it transparently.
 
 Use `--dask-workers N` to set the thread count; defaults to dask's default

@@ -37,7 +37,7 @@ store = obs.store.S3Store(
 
 # Pass the handle into Atlas.create / Atlas.open exactly where you would
 # have passed a path. Everything below this line — define_array,
-# write_array, set_attribute, flush, add_xr_dataset, to_xarray, all of
+# write_array, set_attribute, flush, add_xarray_dataset, open_as_xarray_dataset, all of
 # the bulk reads — works identically against S3.
 with atlas.Atlas.create(store, codec="zstd") as atlas:
     ds = atlas.create_dataset("jan_2024")
@@ -90,8 +90,8 @@ See [obstore's
 documentation](https://developmentseed.org/obstore/latest/) for the full
 list of backends and their credential / region / endpoint options.
 
-A complete runnable script — create / write / `add_xr_dataset` /
-`to_xarray` / `array_stats`, then reopen and verify — lives at
+A complete runnable script — create / write / `add_xarray_dataset` /
+`open_as_xarray_dataset` / `array_stats`, then reopen and verify — lives at
 [`atlas-python/examples/08_object_store.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/08_object_store.py).
 It uses `LocalStore` by default so it runs without credentials; swap in
 the S3 / GCS / Azure block at the top to point at a real backend.
@@ -107,9 +107,9 @@ Everything atlas exposes works identically against any obstore backend:
 | `set_attribute` / `get_attribute` / `attributes` | ✓ | ✓ |
 | `flush` (the single durability boundary) | fsync + rename | atomic PutObject |
 | `compact` | rewrite array files | rewrite array files |
-| `read_array_across_stacked` / `to_xarray_many` | tokio fan-out | tokio fan-out, capped at `num_cpus` |
-| Dask streaming `add_xr_dataset` | ✓ | ✓ |
-| Dask-backed lazy reads (`to_xarray`) | threaded scheduler only | threaded scheduler only |
+| `read_array_across_stacked` / `open_as_many_xarray_dataset` | tokio fan-out | tokio fan-out, capped at `num_cpus` |
+| Dask streaming `add_xarray_dataset` | ✓ | ✓ |
+| Dask-backed lazy reads (`open_as_xarray_dataset`) | threaded scheduler only | threaded scheduler only |
 
 The [single-flush durability model](durability.md) carries over cleanly:
 on S3, `PutObject` is atomic for the full object, so the in-memory
@@ -121,7 +121,7 @@ per-dataset).
 ## Limitations specific to cloud backends
 
 - **Bulk-read concurrency.** `read_array_across_stacked` and
-  `to_xarray_many` dispatch on the shared tokio runtime via a `JoinSet`
+  `open_as_many_xarray_dataset` dispatch on the shared tokio runtime via a `JoinSet`
   capped at `num_cpus`. On S3 the bottleneck is usually HTTP
   concurrency, not CPU — let us know if you'd find a configurable cap
   useful.

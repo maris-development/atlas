@@ -3,7 +3,7 @@
 Importing `atlas` registers an accessor at `xr.Dataset.atlas` (the side
 effect happens on the very first `import atlas`, so there's no extra
 setup). The accessor is a thin convenience wrapper around the
-[`Atlas.add_xr_dataset`](atlas.md#atlas.Atlas.add_xr_dataset) method.
+[`Atlas.add_xarray_dataset`](atlas.md#atlas.Atlas.add_xarray_dataset) method.
 
 ```python
 import atlas, xarray as xr        # ds.atlas is registered here
@@ -11,7 +11,7 @@ import atlas, xarray as xr        # ds.atlas is registered here
 ds = xr.Dataset(...)
 with atlas.Atlas.create("/tmp/store") as atlas:
     ds.atlas.write(atlas, "jan_2024")           # accessor form
-    atlas.add_xr_dataset(ds, "feb_2024")        # equivalent Atlas method
+    atlas.add_xarray_dataset(ds, "feb_2024")        # equivalent Atlas method
 ```
 
 See [xarray integration](../guides/xarray.md) for the full storage

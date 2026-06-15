@@ -10,14 +10,16 @@ Bulk ingestion — Atlas itself batches; explicit flush on the atlas persists:
     with atlas:
         for nc_path in nc_paths:
             ds = xr.open_dataset(nc_path)
-            atlas.add_xr_dataset(ds, name=Path(nc_path).stem)
+            atlas.add_xarray_dataset(ds, name=Path(nc_path).stem)
     # atlas.close() (== flush) runs on __exit__.
 """
 from __future__ import annotations
 
 import itertools
 import json
+import math
 import time
+import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 
@@ -145,6 +147,82 @@ def _normalize_fill_value(value: Any, np_dtype: np.dtype) -> Any:
     return value
 
 
+# Sentinel distinguishing "the fill_value dict maps this var to None" (explicitly
+# disable the default) from "this var isn't in the dict" (fall through to default).
+_UNSET = object()
+
+# The int64 bit pattern of `datetime64[ns]` NaT (== i64::MIN). Used as the default
+# fill value for timestamp arrays so that NaT (xarray's masked-datetime sentinel)
+# is recorded as null — the datetime parallel to NaN for floats.
+_NAT_INT64 = int(np.datetime64("NaT", "ns").view("int64"))
+
+
+def _resolve_fill_value(
+    var_name: str,
+    np_dtype: np.dtype,
+    attr_fill: Any,
+    fill_value_arg: Any,
+) -> Any:
+    """Decide the atlas fill value for one variable.
+
+    Precedence (highest first):
+      1. The explicit ``fill_value`` kwarg. A ``{var: scalar}`` dict targets named
+         vars (an entry of ``None`` *disables* the default for that var); a bare
+         scalar applies to numeric (int/uint/float) arrays only.
+      2. The variable's CF ``_FillValue`` attribute.
+      3. Default: ``NaN`` for float arrays, ``NaT`` for datetime arrays, and ``""``
+         for string arrays (so mask_and_scale'd / masked missing cells are recorded
+         as null), else ``None``.
+    """
+    override = _UNSET
+    if isinstance(fill_value_arg, dict):
+        override = fill_value_arg.get(var_name, _UNSET)
+    elif fill_value_arg is not None and np_dtype.kind in ("i", "u", "f"):
+        override = fill_value_arg
+    if override is not _UNSET:
+        return None if override is None else _normalize_fill_value(override, np_dtype)
+
+    if attr_fill is not None:
+        return _normalize_fill_value(attr_fill, np_dtype)
+
+    if np_dtype.kind == "f":
+        return float("nan")
+    if np_dtype.kind == "M":  # datetime64 -> NaT, stored as the i64::MIN sentinel
+        return _NAT_INT64
+    if np_dtype.kind in ("O", "S", "U"):  # string -> "" sentinel for missing cells
+        return ""
+    return None
+
+
+def _is_missing_str(x: Any) -> bool:
+    """True if an object-array cell represents a missing string (None or NaN).
+
+    Masked string variables surface missing cells as `None` or (after numpy
+    coercion) a float `NaN` inside an object array.
+    """
+    return x is None or (isinstance(x, float) and math.isnan(x))
+
+
+def _fill_missing_strings(block: np.ndarray, fill: str) -> tuple[np.ndarray, int]:
+    """Replace None/NaN cells in an object-dtype string `block` with `fill`.
+
+    Atlas can't store a missing string as null (the `.af` format has no string
+    null sentinel), so masked string cells are substituted with a real string.
+    Returns ``(block, n_filled)``; non-object blocks (`\\|S` / `\\|U`, which can't
+    hold None/NaN) are returned unchanged with ``n_filled == 0``.
+    """
+    if block.dtype.kind != "O":
+        return block, 0
+    flat = block.reshape(-1)
+    mask = np.fromiter(
+        (_is_missing_str(x) for x in flat), dtype=bool, count=flat.size
+    ).reshape(block.shape)
+    n = int(mask.sum())
+    if not n:
+        return block, 0
+    return np.where(mask, fill, block), n
+
+
 def _is_dask_array(arr: Any) -> bool:
     """Return True if `arr` is a `dask.array.Array`. False if dask isn't installed."""
     try:
@@ -237,6 +315,7 @@ def _write_xarray_to_view(
     view: "DatasetView",
     ds: "xr.Dataset",
     chunks: Optional[dict[str, Sequence[int]]] = None,
+    fill_value: Any = None,
 ) -> None:
     """Populate an empty `DatasetView` with the contents of an xarray Dataset.
 
@@ -265,11 +344,18 @@ def _write_xarray_to_view(
         else:
             chunk_shape = None
 
-        # Extract the CF/netCDF `_FillValue` attribute (if any) so it's passed
-        # to define_array as a typed fill value, not stored as a flattened atlas
-        # attribute. Copy attrs first to avoid mutating the user's Dataset.
+        # Resolve the typed fill value. The CF/netCDF `_FillValue` attribute (if
+        # any) is popped so it's passed to define_array, not stored as a flattened
+        # atlas attribute; `_resolve_fill_value` layers the explicit `fill_value`
+        # override and the NaN-for-floats default on top. Copy attrs first to
+        # avoid mutating the user's Dataset.
         var_attrs = dict(var.attrs)
-        fill_value = _normalize_fill_value(var_attrs.pop("_FillValue", None), var.dtype)
+        resolved_fill = _resolve_fill_value(
+            var_name,
+            np.dtype(var.dtype),
+            var_attrs.pop("_FillValue", None),
+            fill_value,
+        )
 
         view.define_array(
             var_name,
@@ -277,8 +363,13 @@ def _write_xarray_to_view(
             dims=dims,
             shape=shape,
             chunk_shape=chunk_shape,
-            fill_value=fill_value,
+            fill_value=resolved_fill,
         )
+
+        # For string arrays, missing (None/NaN) cells can't be stored as null,
+        # so they're substituted with the resolved string fill (default "").
+        str_fill = resolved_fill if isinstance(resolved_fill, str) else ""
+        n_filled_strings = 0
 
         # Stream blocks: prefetched batches for dask-backed data, a single
         # full-shape block for numpy-backed data.
@@ -287,6 +378,9 @@ def _write_xarray_to_view(
             # numpy datetime64 view to int64 without copying.
             if block.dtype.kind == "M":
                 block = block.view(np.int64)
+            elif atlas_dtype == "string":
+                block, n = _fill_missing_strings(block, str_fill)
+                n_filled_strings += n
             t0 = time.perf_counter_ns()
             view.write_array(var_name, start=start, data=block)
             _log_chunk_event(
@@ -294,6 +388,14 @@ def _write_xarray_to_view(
                 var_name,
                 (time.perf_counter_ns() - t0) // 1000,
                 bytes=int(block.nbytes),
+            )
+
+        if n_filled_strings:
+            warnings.warn(
+                f"{var_name!r}: replaced {n_filled_strings} missing string "
+                f"cell(s) (None/NaN) with {str_fill!r} — atlas cannot store "
+                f"missing strings as null",
+                stacklevel=2,
             )
 
         # Per-variable attrs → flattened as `{var}.{attr}` (sans `_FillValue`).
@@ -456,10 +558,24 @@ def _view_to_xarray(view: "DatasetView", force_lazy: bool = False) -> "xr.Datase
                 continue
         dataset_attrs[key] = _decode_attr_value(value)
 
-    # Restore _FillValue for any array that was defined with one.
+    # Restore _FillValue for any array that was defined with one. The default
+    # NaN (float) / NaT (datetime) / "" (string) sentinels are skipped: they're
+    # self-describing in the data and a spurious `_FillValue` attr can interfere
+    # with NetCDF re-encoding. Explicit fills (e.g. int -1) are still restored.
     for name in array_names:
         fv = view.array_fill_value(name)
-        if fv is None:
+        if (
+            fv is None
+            or (isinstance(fv, float) and math.isnan(fv))
+            or (isinstance(fv, str) and fv == "")
+        ):
+            continue
+        meta = view.array_meta(name)
+        if (
+            meta is not None
+            and meta["dtype"] == "timestamp_nanoseconds"
+            and fv == _NAT_INT64
+        ):
             continue
         per_var_attrs.setdefault(name, {})
         per_var_attrs[name]["_FillValue"] = fv
@@ -501,7 +617,7 @@ def _atlas_to_xarray_many(
     import xarray as xr
 
     if not names:
-        raise ValueError("to_xarray_many: `names` is empty")
+        raise ValueError("open_as_many_xarray_dataset: `names` is empty")
 
     # Schema discovery from the first dataset (cheap: in-memory meta lookup).
     first_view = atlas.open_dataset(names[0])
@@ -540,14 +656,15 @@ def _write_xarray_new_dataset(
     ds: "xr.Dataset",
     name: str,
     chunks: Optional[dict[str, Sequence[int]]] = None,
+    fill_value: Any = None,
 ) -> None:
     """Rust-delegated helper: create a fresh atlas dataset and populate it.
 
-    Both `atlas.add_xr_dataset` and the `ds.atlas.write` accessor route through
+    Both `atlas.add_xarray_dataset` and the `ds.atlas.write` accessor route through
     this function.
     """
     view = atlas.create_dataset(name)
-    _write_xarray_to_view(view, ds, chunks=chunks)
+    _write_xarray_to_view(view, ds, chunks=chunks, fill_value=fill_value)
 
 
 # --- xarray accessor ----------------------------------------------------------
@@ -570,9 +687,15 @@ class _AtlasAccessor:
         atlas: "Atlas",
         name: str,
         chunks: Optional[dict[str, Sequence[int]]] = None,
+        fill_value: Any = None,
     ) -> None:
         """Append this Dataset to the open atlas store under `name`.
 
-        Equivalent to `atlas.add_xr_dataset(self_ds, name, chunks)`.
+        Equivalent to `atlas.add_xarray_dataset(self_ds, name, chunks, fill_value)`.
+
+        `fill_value` overrides the per-array fill: a bare scalar applies to
+        numeric arrays, a `{var: scalar}` dict targets named vars (`None`
+        disables the default for that var). When omitted, float arrays default
+        to a `NaN` fill so mask_and_scale'd missing cells are recorded as null.
         """
-        atlas.add_xr_dataset(self._ds, name, chunks)
+        atlas.add_xarray_dataset(self._ds, name, chunks, fill_value)

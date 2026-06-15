@@ -8,7 +8,7 @@ throughput.
 
 | API | Returns | Use when |
 |---|---|---|
-| `Atlas.to_xarray_many(names, concat_dim, parallel=True)` | `xr.Dataset` of shape `(N, *original)` | You want xarray ergonomics on top of a fleet of identically-shaped datasets. |
+| `Atlas.open_as_many_xarray_dataset(names, concat_dim, parallel=True)` | `xr.Dataset` of shape `(N, *original)` | You want xarray ergonomics on top of a fleet of identically-shaped datasets. |
 | `Atlas.read_array_across(array, names, start, shape)` | `list[np.ndarray | None]` | Per-dataset numpy arrays; some datasets may not declare `array`. |
 | `Atlas.read_array_across_stacked(array, names, start, shape)` | `np.ndarray` of shape `(N, *slice)` | You'll immediately stack — skip the `np.stack` copy. Errors if any listed dataset doesn't declare `array`. |
 | `DatasetView.read_arrays(names, start, shape)` | `dict[str, np.ndarray | None]` | Many arrays out of **one** dataset (e.g. inside a dask worker). |
@@ -46,12 +46,12 @@ so you skip the ~N × per_dataset_size of memory copies that
 any listed dataset doesn't declare the array (there's no positional
 "missing" sentinel in the stacked representation).
 
-## Cross-dataset, all variables: `to_xarray_many`
+## Cross-dataset, all variables: `open_as_many_xarray_dataset`
 
 This is the atlas-native equivalent of `xr.open_mfdataset(...)`:
 
 ```python
-combined = atlas.to_xarray_many(
+combined = atlas.open_as_many_xarray_dataset(
     ["jan_2024", "feb_2024", "mar_2024"],
     concat_dim="month",
 )
@@ -59,7 +59,7 @@ combined = atlas.to_xarray_many(
 # Coords + dataset-level attrs are taken from the first dataset.
 ```
 
-Internally `to_xarray_many` calls `Atlas.read_array_across` once per
+Internally `open_as_many_xarray_dataset` calls `Atlas.read_array_across` once per
 variable, so you get the same shared-file-handle / tokio fan-out as the
 single-variable bulk APIs but with the xarray ergonomics.
 
@@ -74,7 +74,7 @@ Constraints:
 ## Per-dataset multi-array: `view.read_arrays`
 
 Inside a dask worker (or any hot loop over one dataset), the bottleneck is
-usually the per-call `to_xarray` + dask-graph build, not the I/O. Skip
+usually the per-call `open_as_xarray_dataset` + dask-graph build, not the I/O. Skip
 both:
 
 ```python
@@ -84,7 +84,7 @@ result = view.read_arrays(["temperature", "pressure"], start=[0, 0], shape=[4, 8
 ```
 
 `read_arrays` is what `bench_collection.py --use-dask` calls inside each
-delayed task — the ~3–4× speedup over `to_xarray(name).isel(...).load()`
+delayed task — the ~3–4× speedup over `open_as_xarray_dataset(name).isel(...).load()`
 on chunked storage comes from skipping the per-chunk dask graph build.
 
 Same start/shape applies to every array; missing arrays come back as
@@ -94,12 +94,12 @@ declare every variable).
 ## API picker (in rough order of speed)
 
 - **Cross-dataset slice of the same vars across many datasets** →
-  `Atlas.to_xarray_many` / `Atlas.read_array_across_stacked` (the
+  `Atlas.open_as_many_xarray_dataset` / `Atlas.read_array_across_stacked` (the
   `atlas-bulk` benchmark path; one Rust call per variable).
 - **Per-dataset slice reads inside a dask worker** →
   `view.read_arrays(vars, start, shape)` (returns `dict[str, np.ndarray]`;
   skips the xr.Dataset + per-chunk dask graph).
-- **Natural xarray code, per dataset** → `to_xarray(name).isel(...).load()`.
+- **Natural xarray code, per dataset** → `open_as_xarray_dataset(name).isel(...).load()`.
   Most ergonomic, but pays per-chunk dask graph build overhead on chunked
   storage.
 

@@ -58,7 +58,7 @@ Important caveats:
 
 ## Per-variable xarray attributes
 
-When you write an `xr.Dataset` via `atlas.add_xr_dataset(ds, name)`,
+When you write an `xr.Dataset` via `atlas.add_xarray_dataset(ds, name)`,
 per-variable attributes are **flattened** as `{var}.{attr}` and stored
 alongside the dataset's own `attrs`:
 
@@ -68,7 +68,7 @@ ds = xr.Dataset(
                                             attrs={"units": "C"})},
     attrs={"station": "KNMI"},
 )
-atlas.add_xr_dataset(ds, "jan_2024")
+atlas.add_xarray_dataset(ds, "jan_2024")
 
 # In atlas:
 view = atlas.open_dataset("jan_2024")
@@ -76,7 +76,7 @@ view.attributes()
 # {"station": "KNMI", "temperature.units": "C"}
 ```
 
-On read, `atlas.to_xarray("jan_2024")` reverses the flattening so the
+On read, `atlas.open_as_xarray_dataset("jan_2024")` reverses the flattening so the
 per-variable attrs end up back on the right `DataArray`. The dataset-level
 attrs come through directly.
 

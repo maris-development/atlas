@@ -236,7 +236,7 @@ impl Atlas {
     /// `tokio::task::spawn_blocking`'s decompression pool from oversubscribing
     /// the actual CPU cores.
     ///
-    /// This exists because `to_xarray_many` over N datasets used to incur N
+    /// This exists because `open_as_many_xarray_dataset` over N datasets used to incur N
     /// separate Python → Rust → tokio::block_on transitions plus Python-side
     /// dask graph overhead. One call here replaces all of that and gets the
     /// same parallelism dask was providing — but in pure Rust, with no GIL
