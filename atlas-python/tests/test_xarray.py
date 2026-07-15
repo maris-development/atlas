@@ -56,12 +56,14 @@ def test_per_var_attrs_roundtrip():
         store.flush()
 
         view = store.open_dataset("ds_jan")
-        all_attrs = view.attributes()
-        assert all_attrs["temperature.units"] == "celsius"
-        assert all_attrs["temperature.long_name"] == "surface temperature"
-        assert all_attrs["pressure.units"] == "hPa"
-        assert all_attrs["month"] == 1
-        assert all_attrs["station"] == "KNMI"
+        # Global attrs live at the dataset level; per-variable attrs on the array.
+        global_attrs = view.attributes()
+        assert global_attrs["month"] == 1
+        assert global_attrs["station"] == "KNMI"
+        temp_attrs = view.array_attributes("temperature")
+        assert temp_attrs["units"] == "celsius"
+        assert temp_attrs["long_name"] == "surface temperature"
+        assert view.array_attributes("pressure")["units"] == "hPa"
 
         atlas2 = atlas.Atlas.open(d)
         ds_back = atlas2.open_as_xarray_dataset("ds_jan")
@@ -87,9 +89,10 @@ def test_non_scalar_attr_value():
         store.flush()
 
         view = store.open_dataset("ds")
-        on_disk = view.attributes()
-        assert on_disk["v.valid_range"].startswith("json:")
-        assert on_disk["version_history"].startswith("json:")
+        # Per-variable non-scalar attrs are json-encoded on the array; the
+        # dataset-level one is json-encoded at the global level.
+        assert view.array_attributes("v")["valid_range"].startswith("json:")
+        assert view.attributes()["version_history"].startswith("json:")
 
         atlas2 = atlas.Atlas.open(d)
         ds_back = atlas2.open_as_xarray_dataset("ds")
@@ -454,9 +457,9 @@ def test_fill_value_attribute_picked_up():
 
         atlas2 = atlas.Atlas.open(d)
         view = atlas2.open_dataset("ds")
-        attrs = view.attributes()
-        assert "v._FillValue" not in attrs, attrs
-        assert attrs.get("v.units") == "K"
+        v_attrs = view.array_attributes("v")
+        assert "_FillValue" not in v_attrs, v_attrs
+        assert v_attrs.get("units") == "K"
 
         # The user's source Dataset must not be mutated by the write.
         assert ds["v"].attrs["_FillValue"] == np.int32(-1)

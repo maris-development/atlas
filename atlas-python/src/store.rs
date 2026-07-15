@@ -5,7 +5,7 @@ use numpy::{IntoPyArray, PyArray};
 use object_store::path::Path as ObjStorePath;
 use pyo3::exceptions::{PyKeyError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyDict, PyList};
 use pyo3_object_store::AnyObjectStore;
 
 use crate::dataset::PyDatasetView;
@@ -149,6 +149,35 @@ impl PyAtlas {
 
     fn dataset_exists(&self, name: &str) -> bool {
         self.inner.dataset_exists(name)
+    }
+
+    /// The collection-wide merged schema: every unique array (widened dtype +
+    /// dims + per-variable attribute types) and every global attribute type.
+    /// Returns `{"arrays": {name: {"dtype", "dimension_names", "attributes"}},
+    /// "global_attributes": {key: dtype}}`.
+    fn merged_schema<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        use crate::dtype::dtype_to_string;
+        let merged = self.inner.merged_schema();
+        let out = PyDict::new(py);
+        let arrays = PyDict::new(py);
+        for (name, arr) in &merged.arrays {
+            let entry = PyDict::new(py);
+            entry.set_item("dtype", dtype_to_string(&arr.dtype.0))?;
+            entry.set_item("dimension_names", arr.dimension_names.clone())?;
+            let attrs = PyDict::new(py);
+            for (k, ty) in &arr.attributes {
+                attrs.set_item(k, dtype_to_string(&ty.0))?;
+            }
+            entry.set_item("attributes", attrs)?;
+            arrays.set_item(name, entry)?;
+        }
+        out.set_item("arrays", arrays)?;
+        let globals = PyDict::new(py);
+        for (k, ty) in &merged.global_attributes {
+            globals.set_item(k, dtype_to_string(&ty.0))?;
+        }
+        out.set_item("global_attributes", globals)?;
+        Ok(out)
     }
 
     fn __repr__(&self) -> String {

@@ -21,6 +21,9 @@ pub fn to_py_err(err: atlas::Error) -> PyErr {
             PyValueError::new_err(format!("invalid name: {name}"))
         }
         atlas::Error::StoreNotFound => PyFileNotFoundError::new_err("store not found at path"),
+        e @ (atlas::Error::UnsupportedVersion { .. } | atlas::Error::TypeMismatch { .. }) => {
+            PyValueError::new_err(e.to_string())
+        }
         atlas::Error::Io(e) => PyOSError::new_err(e.to_string()),
         e @ (atlas::Error::ObjectStore(_)
         | atlas::Error::ArrayFormat(_)

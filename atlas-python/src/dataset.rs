@@ -71,10 +71,13 @@ impl PyDatasetView {
             .collect()
     }
 
-    /// Returns a dict of attribute name -> Python value.
+    /// Returns a dict of dataset-level (global) attribute name -> Python value.
     fn attributes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let attrs = py
+            .detach(|| runtime().block_on(self.inner.attributes()))
+            .map_err(to_py_err)?;
         let dict = PyDict::new(py);
-        for (k, v) in &self.inner.meta().attributes {
+        for (k, v) in &attrs {
             dict.set_item(k, attr_to_py(py, v)?)?;
         }
         Ok(dict)
@@ -88,15 +91,58 @@ impl PyDatasetView {
         dtype: Option<&str>,
     ) -> PyResult<()> {
         let attr = py_to_attr(value, dtype)?;
-        self.inner.set_attribute(key, attr);
-        Ok(())
+        self.inner.set_attribute(key, attr).map_err(to_py_err)
     }
 
     fn get_attribute(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyAny>>> {
+        let attr = py
+            .detach(|| runtime().block_on(self.inner.get_attribute(key)))
+            .map_err(to_py_err)?;
+        attr.map(|attr| attr_to_py(py, &attr)).transpose()
+    }
+
+    /// Set a per-variable (per-array) attribute, e.g. `units` on `temperature`.
+    #[pyo3(signature = (array, key, value, dtype=None))]
+    fn set_array_attribute(
+        &mut self,
+        array: &str,
+        key: &str,
+        value: &Bound<'_, PyAny>,
+        dtype: Option<&str>,
+    ) -> PyResult<()> {
+        let attr = py_to_attr(value, dtype)?;
         self.inner
-            .get_attribute(key)
-            .map(|attr| attr_to_py(py, &attr))
-            .transpose()
+            .set_array_attribute(array, key, attr)
+            .map_err(to_py_err)
+    }
+
+    /// Get a per-variable attribute on `array`, or `None` if unset.
+    fn get_array_attribute(
+        &self,
+        py: Python<'_>,
+        array: &str,
+        key: &str,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let attr = py
+            .detach(|| runtime().block_on(self.inner.get_array_attribute(array, key)))
+            .map_err(to_py_err)?;
+        attr.map(|attr| attr_to_py(py, &attr)).transpose()
+    }
+
+    /// Returns a dict of per-variable attribute name -> Python value for `array`.
+    fn array_attributes<'py>(
+        &self,
+        py: Python<'py>,
+        array: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let attrs = py
+            .detach(|| runtime().block_on(self.inner.array_attributes(array)))
+            .map_err(to_py_err)?;
+        let dict = PyDict::new(py);
+        for (k, v) in &attrs {
+            dict.set_item(k, attr_to_py(py, v)?)?;
+        }
+        Ok(dict)
     }
 
     /// Returns `{"dtype", "shape", "chunk_shape", "dimension_names"}` for

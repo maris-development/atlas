@@ -4,18 +4,24 @@
 
 An [`Atlas`](../reference/atlas.md) is a directory-backed handle. It owns:
 
-1. An in-memory **`StoreMeta`** — every dataset, every array schema, every
-   attribute. Loaded once at `open`/`create`, mutated by every write,
-   persisted on `flush()`.
+1. An in-memory **`StoreMeta`** — the collection's schema: every dataset and
+   every array schema, plus the attribute-key namespace (which global and
+   per-variable attribute keys exist). Distinct dataset schemas are interned,
+   so thousands of identical schemas cost one copy. Loaded once at
+   `open`/`create`, mutated by every schema write, persisted to `atlas.json`
+   on `flush()`.
 2. A set of **array file caches** — one buffer per array name across the
-   whole store. Pending writes accumulate here until `flush()`.
+   whole store. Pending array writes accumulate here until `flush()`.
+3. A **pending-attribute buffer** — attribute *values* set via `set_attribute`
+   / `set_array_attribute`, drained into the `.af` files on `flush()`.
 
 A [`DatasetView`](../reference/dataset-view.md) is a typed handle into a
 single logical dataset. It exposes the per-dataset array schemas, the
-per-array statistics, and the per-dataset attribute dict. Mutations through
-the view (`define_array`, `write_array`, `set_attribute`, …) update the
-parent atlas's in-memory state; nothing reaches disk until you flush the
-*atlas*.
+per-array statistics, dataset-level (global) attributes, and per-variable
+attributes. Mutations through the view (`define_array`, `write_array`,
+`set_attribute`, `set_array_attribute`, …) update the parent atlas's in-memory
+state; attribute *values* live in the `.af` files, and nothing reaches disk
+until you flush the *atlas*.
 
 ```text
 Atlas ── StoreMeta (in-memory) ─┬─ DatasetView "jan_2024"
@@ -142,3 +148,24 @@ jan.delete_array("temperature")    # tombstone within this dataset
 
 The array's bytes inside the shared physical file are tombstoned; reclaim
 the space with [`atlas.compact()`](durability.md).
+
+## Merged schema and type widening
+
+`atlas.json` also carries a collection-wide **merged schema** — every unique
+array (with its dtype, dimensions, and per-variable attribute types) and every
+global attribute type, folded across all datasets. Read it with
+`atlas.merged_schema()`:
+
+```python
+merged = store.merged_schema()
+merged["arrays"]["temperature"]["dtype"]        # widened dtype across datasets
+merged["arrays"]["temperature"]["attributes"]   # {attr_key: dtype}
+merged["global_attributes"]                     # {attr_key: dtype}
+```
+
+When the same array name or attribute key appears in multiple datasets with
+different types, the merged type is **widened** — but only within numeric types
+(`int16` ∪ `int32` → `int32`, `int32` ∪ `float32` → `float64`) or between
+`string` and `timestamp` (→ `string`). Anything else is a collision:
+`define_array` / `set_attribute` raise `ValueError` (e.g. an `int32` array in
+one dataset and a `string` array under the same name in another).

@@ -1,11 +1,14 @@
 # Attributes
 
-Each [`DatasetView`](../reference/dataset-view.md) carries a typed
-attribute dict. Attributes are stored alongside the dataset's array
-schemas inside `atlas.json` (or `atlas.msgpack`) — they're cheap to read
-and don't load any array bytes.
+Each [`DatasetView`](../reference/dataset-view.md) carries typed attributes at
+two levels: **dataset-level** (global) attributes and **per-variable**
+attributes on individual arrays. Attribute *values* are stored in the `.af`
+files — global values in a reserved `_global` file, per-variable values on the
+variable's own file. Only the attribute *key names* are recorded in
+`atlas.json` (as part of the schema), so listing which attributes exist is
+cheap and doesn't load any array bytes.
 
-## Setting and getting
+## Dataset-level (global) attributes
 
 ```python
 ds = atlas.create_dataset("jan_2024")
@@ -19,48 +22,70 @@ ds.get_attribute("missing")             # -> None
 ds.attributes()                         # -> {"month": 1, "station": "KNMI", "calibrated": True}
 ```
 
+## Per-variable attributes
+
+Attributes can also attach to a specific array (e.g. `units` on `temperature`):
+
+```python
+ds.define_array("temperature", dtype="float32", dims=["lat", "lon"], shape=[4, 8])
+ds.set_array_attribute("temperature", "units", "degC")
+ds.set_array_attribute("temperature", "valid_range", [-40.0, 60.0], dtype="f64")
+
+ds.get_array_attribute("temperature", "units")   # -> "degC"
+ds.array_attributes("temperature")               # -> {"units": "degC", "valid_range": [...]}
+```
+
+`set_array_attribute` raises `KeyError` if the array isn't defined in the
+dataset.
+
+## Durability
+
+Attribute writes are buffered in memory and only reach disk on
+[`atlas.flush()`](durability.md) (or leaving a `with atlas:` block), together
+with the array data. The reserved `_global/data.af` file is created lazily —
+only once a dataset actually sets a global attribute.
+
 ## The on-disk type system
 
-Atlas attributes are stored as one of **five** wire types:
+Atlas's `Attr` type mirrors the underlying `array-format` `AttributeValue`:
 
 | On-disk type | Python type returned on read |
 |---|---|
 | `bool` | `bool` |
-| `int64` | `int` |
-| `float64` | `float` |
+| `int8` / `int16` / `int32` / `int64` | `int` |
+| `uint8` / `uint16` / `uint32` / `uint64` | `int` |
+| `float32` / `float64` | `float` |
 | `string` | `str` |
-| `timestamp_nanoseconds` | `numpy.datetime64[ns]` |
+| `binary` | `bytes` |
+| `timestamp_nanoseconds` | `int` (nanoseconds; stored as an RFC 3339 string) |
+| any of the above as a list | `list` |
 
 Type is inferred from the Python value by default — `int` → `int64`,
-`float` → `float64`, `str` → `string`, `bool` → `bool`. Numpy scalars are
-unwrapped first (`np.int32(5)` is stored as `int64`).
+`float` → `float64`, `str` → `string`, `bytes` → `binary`, `bool` → `bool`.
 
 ## Overriding inferred types
 
-Pass `dtype=` to narrow or force a specific type:
+Pass `dtype=` to narrow or force a specific type (works on both
+`set_attribute` and `set_array_attribute`):
 
 ```python
-ds.set_attribute("sensor_id", 7, dtype="int8")          # range-checked → int64 on disk
-ds.set_attribute("ratio", 0.5, dtype="float32")         # widened → float64 on disk
+ds.set_attribute("sensor_id", 7, dtype="int8")          # stored as int8, range-checked
+ds.set_attribute("ratio", 0.5, dtype="float32")         # stored as float32
 ds.set_attribute("observed_at",
-                 np.datetime64("2024-01-15T10:00", "ns"),
+                 np.datetime64("2024-01-15T10:00", "ns").astype("int64").item(),
                  dtype="timestamp_nanoseconds")
 ```
 
-Important caveats:
-
-- **All integer hints are coerced to `int64`** on disk. `dtype="int8"`
-  range-checks the value but doesn't shrink the storage representation.
-- **All float hints are coerced to `float64`** on disk. `dtype="float32"`
-  is accepted but doesn't change the bytes.
-- The narrower hints exist so you can express *intent* and get runtime
-  validation; the storage representation is always the wider type.
+Unlike earlier versions, width hints now preserve the storage type: `dtype="int8"`
+stores an 8-bit integer, not a widened `int64`. A `timestamp_nanoseconds`
+attribute is stored as an RFC 3339 string and restored to a timestamp on read.
 
 ## Per-variable xarray attributes
 
-When you write an `xr.Dataset` via `atlas.add_xarray_dataset(ds, name)`,
-per-variable attributes are **flattened** as `{var}.{attr}` and stored
-alongside the dataset's own `attrs`:
+When you write an `xr.Dataset` via `atlas.add_xarray_dataset(ds, name)`, each
+variable's `attrs` are stored as **real per-variable attributes** on that
+variable's array, and the dataset's own `attrs` become dataset-level
+attributes:
 
 ```python
 ds = xr.Dataset(
@@ -70,34 +95,21 @@ ds = xr.Dataset(
 )
 atlas.add_xarray_dataset(ds, "jan_2024")
 
-# In atlas:
 view = atlas.open_dataset("jan_2024")
-view.attributes()
-# {"station": "KNMI", "temperature.units": "C"}
+view.attributes()                        # {"station": "KNMI"}
+view.array_attributes("temperature")     # {"units": "C"}
 ```
 
-On read, `atlas.open_as_xarray_dataset("jan_2024")` reverses the flattening so the
-per-variable attrs end up back on the right `DataArray`. The dataset-level
-attrs come through directly.
+On read, `atlas.open_as_xarray_dataset("jan_2024")` puts each variable's attrs
+back on the right `DataArray` and the global attrs back on the Dataset.
 
 See [xarray integration](xarray.md) for the full storage convention.
 
 ## JSON-encoded "complex" attributes
 
-xarray attribute values are sometimes lists, ndarrays, or nested dicts —
-none of which fit into atlas's five on-disk types. The xarray bridge handles
-this by JSON-encoding the value and prefixing the resulting string with
-`json:`. On read the prefix is detected and decoded transparently. You
-generally don't need to think about this, but it's why some attribute
-values come back as strings starting with `json:` if you read them through
-the raw `DatasetView.attributes()` API.
-
-## What attributes can't do
-
-- They're per-dataset, not per-array. Per-variable attrs in xarray
-  round-trip via the `{var}.{attr}` flattening, but the raw `set_attribute`
-  / `get_attribute` API has no array key. Use the array name as a prefix
-  if you need that.
-- There's no list-valued attribute type. Use a JSON-encoded string
-  (`set_attribute("tags", "json:" + json.dumps([...]))`) or, better, the
-  xarray bridge which handles this automatically.
+xarray attribute values are sometimes nested dicts or other structures that
+don't map to atlas's on-disk types. The xarray bridge JSON-encodes those and
+prefixes the string with `json:`, decoding transparently on read. You generally
+don't need to think about this, but it's why some values come back as strings
+starting with `json:` if you read them through the raw attribute API. Simple
+lists of scalars are stored natively as typed-list attributes.

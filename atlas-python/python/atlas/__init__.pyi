@@ -87,6 +87,15 @@ class Atlas:
         """Distinct array names across all datasets."""
         ...
 
+    def merged_schema(self) -> dict[str, Any]:
+        """Collection-wide merged schema.
+
+        Returns ``{"arrays": {name: {"dtype", "dimension_names", "attributes"}},
+        "global_attributes": {key: dtype}}`` — every unique array and attribute
+        with its type widened across all datasets. Descriptive only.
+        """
+        ...
+
     def dataset_exists(self, name: str) -> bool: ...
 
     def __repr__(self) -> str: ...
@@ -217,8 +226,11 @@ class Atlas:
 class DatasetView:
     """A handle to a single dataset within an `Atlas` store.
 
-    Holds the per-dataset array schemas and attributes. Mutations are buffered
-    in-memory until `flush()` is called.
+    Exposes the dataset's array schemas plus its attributes. Dataset-level
+    (global) attributes live in the reserved `_global` file; per-variable
+    attributes live on each array's own file. Attribute *values* are stored in
+    the `.af` files, not in `atlas.json`. Mutations are buffered in-memory until
+    `flush()` is called.
     """
 
     @property
@@ -319,7 +331,7 @@ class DatasetView:
         ...
 
     def attributes(self) -> dict[str, Any]:
-        """All attributes as a dict."""
+        """All dataset-level (global) attributes as a dict."""
         ...
 
     def set_attribute(
@@ -328,7 +340,7 @@ class DatasetView:
         value: Any,
         dtype: Optional[str] = None,
     ) -> None:
-        """Set a typed attribute.
+        """Set a typed dataset-level (global) attribute.
 
         Type is inferred from the Python type by default. Pass `dtype` to force
         a narrower variant (e.g. `dtype="int8"`).
@@ -336,7 +348,30 @@ class DatasetView:
         ...
 
     def get_attribute(self, key: str) -> Any:
-        """Returns the attribute value or `None` if not set."""
+        """Returns the dataset-level attribute value or `None` if not set."""
+        ...
+
+    def set_array_attribute(
+        self,
+        array: str,
+        key: str,
+        value: Any,
+        dtype: Optional[str] = None,
+    ) -> None:
+        """Set a typed per-variable attribute on `array` (e.g. `units`).
+
+        Raises `KeyError` if the array isn't defined in this dataset. Type is
+        inferred from the Python type by default; pass `dtype` to force a
+        narrower variant.
+        """
+        ...
+
+    def get_array_attribute(self, array: str, key: str) -> Any:
+        """Returns the per-variable attribute value on `array`, or `None`."""
+        ...
+
+    def array_attributes(self, array: str) -> dict[str, Any]:
+        """All per-variable attributes on `array` as a dict."""
         ...
 
     def __repr__(self) -> str: ...
