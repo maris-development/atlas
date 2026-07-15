@@ -28,9 +28,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "array-format"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a637a3b5f23ba45eb53f09e643b363163114f0e94d0f6f05f330134cb86d381b"
+checksum = "f894cd59132aa6a00c360fef55469100c39da19c556bbf44a46bd647f7252fae"
 dependencies = [
  "bytes",
  "futures",
@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-python"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "atlas-rust",
  "ndarray",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-rust"
-version = "0.10.0"
+version = "0.11.0"
 dependencies = [
  "array-format",
  "chrono",

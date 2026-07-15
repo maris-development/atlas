@@ -5,35 +5,212 @@ use object_store::{ObjectStore, ObjectStoreExt, path::Path};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+use array_format::DType;
+
 use crate::{
     Error, Result,
     config::{Codec, META_VARIANTS, MetaFormat},
-    schema::{ArraySchema, Attr},
+    schema::{ArraySchema, DTypeS, widen_dtype},
 };
 
-/// Metadata for a single dataset: array schemas and per-dataset attributes.
-/// Both maps preserve insertion order (via [`IndexMap`]) so on-disk layouts
-/// and Python-side dict iteration mirror the order arrays/attributes were
-/// added.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct DatasetMeta {
+/// Current on-disk store-format version. `atlas.json` written by an older
+/// atlas (which inlined per-dataset attributes and duplicated schemas) is not
+/// read by this version — see [`decode`].
+pub(crate) const STORE_FORMAT_VERSION: u32 = 2;
+
+/// Schema for a single dataset: its array schemas plus the attribute-key
+/// namespace (which global/per-array attribute keys the dataset uses).
+///
+/// Attribute **values** are not stored here — they live in the per-array
+/// `.af` files. Only the key names are recorded, so a reader knows which keys
+/// to fetch from the array files. All maps preserve insertion order (via
+/// [`IndexMap`]) so on-disk layouts and Python-side dict iteration mirror the
+/// order arrays/attributes were added.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatasetSchema {
     /// Array name → schema. Insertion-ordered.
     #[serde(default)]
     pub arrays: IndexMap<String, ArraySchema>,
-    /// Attribute key → typed value. Insertion-ordered.
+    /// Dataset-level (global) attribute key → its value type.
     #[serde(default)]
-    pub attributes: IndexMap<String, Attr>,
+    pub global_attrs: IndexMap<String, DTypeS>,
+    /// Array name → that array's per-variable attribute keys → value type.
+    #[serde(default)]
+    pub array_attrs: IndexMap<String, IndexMap<String, DTypeS>>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+impl DatasetSchema {
+    /// Record (or update the type of) a global attribute key.
+    pub(crate) fn register_global_attr(&mut self, key: &str, ty: DType) {
+        self.global_attrs.insert(key.to_string(), DTypeS(ty));
+    }
+
+    /// Record (or update the type of) a per-variable attribute key on `array`.
+    pub(crate) fn register_array_attr(&mut self, array: &str, key: &str, ty: DType) {
+        self.array_attrs
+            .entry(array.to_string())
+            .or_default()
+            .insert(key.to_string(), DTypeS(ty));
+    }
+}
+
+/// A collection-wide, merged view of every unique array and attribute, with
+/// types widened across all datasets. Purely descriptive — reads use each
+/// dataset's own schema; this is a summary written into `atlas.json` for
+/// external tools and quick inspection.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MergedSchema {
+    /// Array name → merged array description.
+    #[serde(default)]
+    pub arrays: IndexMap<String, MergedArray>,
+    /// Global attribute key → merged (widened) type.
+    #[serde(default)]
+    pub global_attributes: IndexMap<String, DTypeS>,
+}
+
+/// One array's merged description across every dataset that declares it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MergedArray {
+    /// Element type, widened across datasets.
+    pub dtype: DTypeS,
+    /// Named dimensions (from the first dataset that declared the array).
+    pub dimension_names: Vec<String>,
+    /// Per-variable attribute key → merged (widened) type.
+    #[serde(default)]
+    pub attributes: IndexMap<String, DTypeS>,
+}
+
+/// Merge one attribute type into a key→type map, widening on collision.
+fn merge_type(map: &mut IndexMap<String, DTypeS>, key: &str, ty: &DType) {
+    match map.get_mut(key) {
+        Some(existing) => {
+            if let Some(w) = widen_dtype(&existing.0, ty) {
+                existing.0 = w;
+            }
+        }
+        None => {
+            map.insert(key.to_string(), DTypeS(ty.clone()));
+        }
+    }
+}
+
+/// Fold every dataset's schema into the collection-wide merged schema.
+/// Type collisions are widened where possible; insert-time validation
+/// (in `DatasetView`) guarantees only widenable types ever reach here.
+pub(crate) fn compute_merged(datasets: &IndexMap<String, DatasetSchema>) -> MergedSchema {
+    let mut merged = MergedSchema::default();
+    for schema in datasets.values() {
+        for (name, arr) in &schema.arrays {
+            let entry = merged
+                .arrays
+                .entry(name.clone())
+                .or_insert_with(|| MergedArray {
+                    dtype: DTypeS(arr.dtype.clone()),
+                    dimension_names: arr.dimension_names.clone(),
+                    attributes: IndexMap::new(),
+                });
+            if let Some(w) = widen_dtype(&entry.dtype.0, &arr.dtype) {
+                entry.dtype.0 = w;
+            }
+            if let Some(attrs) = schema.array_attrs.get(name) {
+                for (k, ty) in attrs {
+                    merge_type(&mut entry.attributes, k, &ty.0);
+                }
+            }
+        }
+        for (k, ty) in &schema.global_attrs {
+            merge_type(&mut merged.global_attributes, k, &ty.0);
+        }
+    }
+    merged
+}
+
+#[derive(Debug, Default, Clone)]
 pub(crate) struct StoreMeta {
     pub version: u32,
     /// Codec used when new arrays are defined in this store.
-    /// Written by `create`, read by `open`. Defaults to `Zstd` for stores
-    /// created before this field existed.
-    #[serde(default)]
     pub codec: Codec,
-    pub datasets: IndexMap<String, DatasetMeta>,
+    /// Dataset name → schema. Insertion-ordered.
+    pub datasets: IndexMap<String, DatasetSchema>,
+}
+
+/// On-disk wire form of [`StoreMeta`]. Identical dataset schemas are
+/// **interned**: each distinct [`DatasetSchema`] is stored once in `schemas`
+/// and every dataset references it by index. A collection of many homogeneous
+/// datasets (same variables/shapes/attribute keys) therefore stores its schema
+/// only once, no matter how many datasets share it.
+#[derive(Serialize, Deserialize)]
+struct StoreMetaWire {
+    version: u32,
+    #[serde(default)]
+    codec: Codec,
+    /// Pool of distinct dataset schemas, in first-seen order.
+    #[serde(default)]
+    schemas: Vec<DatasetSchema>,
+    /// Dataset name → index into `schemas`. Insertion-ordered.
+    #[serde(default)]
+    datasets: IndexMap<String, usize>,
+    /// Collection-wide merged schema (every unique array/attribute with
+    /// widened types). Derived from `schemas`; written for external tooling
+    /// and ignored on load (the per-dataset schemas are the source of truth).
+    #[serde(default)]
+    merged: MergedSchema,
+}
+
+/// Minimal probe used to read the format version before attempting a full
+/// decode, so a store written by an older atlas produces a clear error rather
+/// than an opaque parse failure.
+#[derive(Deserialize)]
+struct MetaVersion {
+    #[serde(default)]
+    version: u32,
+}
+
+/// Build the interned wire form from in-memory metadata. Dataset schemas are
+/// deduplicated by value (linear scan — the pool is tiny for the homogeneous
+/// collections this optimises for).
+fn to_wire(meta: &StoreMeta) -> StoreMetaWire {
+    let mut schemas: Vec<DatasetSchema> = Vec::new();
+    let mut datasets: IndexMap<String, usize> = IndexMap::with_capacity(meta.datasets.len());
+    for (name, schema) in &meta.datasets {
+        let idx = match schemas.iter().position(|s| s == schema) {
+            Some(i) => i,
+            None => {
+                schemas.push(schema.clone());
+                schemas.len() - 1
+            }
+        };
+        datasets.insert(name.clone(), idx);
+    }
+    let merged = compute_merged(&meta.datasets);
+    StoreMetaWire {
+        version: meta.version,
+        codec: meta.codec,
+        schemas,
+        datasets,
+        merged,
+    }
+}
+
+/// Expand the interned wire form back into per-dataset schemas, sharing the
+/// pooled schema for every dataset that references the same index.
+fn from_wire(wire: StoreMetaWire) -> Result<StoreMeta> {
+    let mut datasets: IndexMap<String, DatasetSchema> =
+        IndexMap::with_capacity(wire.datasets.len());
+    for (name, idx) in wire.datasets {
+        let schema = wire.schemas.get(idx).cloned().ok_or_else(|| {
+            Error::ArrayFormat(array_format::Error::Storage(format!(
+                "corrupt metadata: dataset '{name}' references schema index {idx} of {}",
+                wire.schemas.len()
+            )))
+        })?;
+        datasets.insert(name, schema);
+    }
+    Ok(StoreMeta {
+        version: wire.version,
+        codec: wire.codec,
+        datasets,
+    })
 }
 
 /// Load store metadata, auto-detecting both the encoding format and the
@@ -78,10 +255,7 @@ pub(crate) async fn load_meta(
         [] => return Ok((StoreMeta::default(), MetaFormat::Json, Codec::Uncompressed)),
         [single] => *single,
         many => {
-            let names: Vec<&str> = many
-                .iter()
-                .map(|&(f, c)| f.filename(c))
-                .collect();
+            let names: Vec<&str> = many.iter().map(|&(f, c)| f.filename(c)).collect();
             let chosen = many[0];
             warn!(
                 "multiple metadata files present ({names:?}); loading {} by priority order",
@@ -104,16 +278,30 @@ pub(crate) async fn load_meta(
 }
 
 fn decode(bytes: &[u8], format: MetaFormat) -> Result<StoreMeta> {
-    match format {
-        MetaFormat::Json => Ok(serde_json::from_slice(bytes)?),
-        MetaFormat::MsgPack => Ok(rmp_serde::from_slice(bytes)?),
+    // Read the version first so a store written by an older atlas fails with a
+    // clear message instead of an opaque schema-shape parse error.
+    let probe: MetaVersion = match format {
+        MetaFormat::Json => serde_json::from_slice(bytes)?,
+        MetaFormat::MsgPack => rmp_serde::from_slice(bytes)?,
+    };
+    if probe.version != STORE_FORMAT_VERSION {
+        return Err(Error::UnsupportedVersion {
+            found: probe.version,
+            expected: STORE_FORMAT_VERSION,
+        });
     }
+    let wire: StoreMetaWire = match format {
+        MetaFormat::Json => serde_json::from_slice(bytes)?,
+        MetaFormat::MsgPack => rmp_serde::from_slice(bytes)?,
+    };
+    from_wire(wire)
 }
 
 fn encode(meta: &StoreMeta, format: MetaFormat) -> Result<Vec<u8>> {
+    let wire = to_wire(meta);
     match format {
-        MetaFormat::Json => Ok(serde_json::to_vec_pretty(meta)?),
-        MetaFormat::MsgPack => Ok(rmp_serde::to_vec_named(meta)?),
+        MetaFormat::Json => Ok(serde_json::to_vec_pretty(&wire)?),
+        MetaFormat::MsgPack => Ok(rmp_serde::to_vec_named(&wire)?),
     }
 }
 
@@ -156,38 +344,40 @@ pub(crate) async fn save_meta(
 mod tests {
     use super::*;
     use crate::config::Codec;
-    use array_format::DType;
+    use crate::schema::Attr;
+    use array_format::{AttributeValue, DType};
     use object_store::memory::InMemory;
 
     fn make_store() -> Arc<dyn ObjectStore> {
         Arc::new(InMemory::new())
     }
 
-    fn sample_meta() -> StoreMeta {
-        use crate::schema::ArraySchema;
-        let mut meta = StoreMeta {
-            version: 1,
+    fn sample_schema() -> DatasetSchema {
+        let mut s = DatasetSchema {
+            arrays: IndexMap::from([(
+                "temp".into(),
+                ArraySchema {
+                    dtype: DType::Float32,
+                    shape: vec![4, 8],
+                    chunk_shape: vec![2, 4],
+                    dimension_names: vec!["lat".into(), "lon".into()],
+                    codec: Codec::default(),
+                },
+            )]),
             ..Default::default()
         };
-        meta.datasets.insert(
-            "ds1".into(),
-            DatasetMeta {
-                arrays: IndexMap::from([(
-                    "temp".into(),
-                    ArraySchema {
-                        dtype: DType::Float32,
-                        shape: vec![4, 8],
-                        chunk_shape: vec![2, 4],
-                        dimension_names: vec!["lat".into(), "lon".into()],
-                        codec: Codec::default(),
-                    },
-                )]),
-                attributes: IndexMap::from([
-                    ("month".into(), Attr::Int64(6)),
-                    ("active".into(), Attr::Bool(true)),
-                ]),
-            },
-        );
+        s.register_global_attr("month", DType::Int64);
+        s.register_global_attr("active", DType::Bool);
+        s.register_array_attr("temp", "units", DType::String);
+        s
+    }
+
+    fn sample_meta() -> StoreMeta {
+        let mut meta = StoreMeta {
+            version: STORE_FORMAT_VERSION,
+            ..Default::default()
+        };
+        meta.datasets.insert("ds1".into(), sample_schema());
         meta
     }
 
@@ -216,12 +406,50 @@ mod tests {
                 detected_comp, compression,
                 "compression mismatch for {format:?}/{compression:?}"
             );
-            assert_eq!(loaded.version, 1);
-            let dm = &loaded.datasets["ds1"];
-            assert_eq!(dm.arrays["temp"].dtype, DType::Float32);
-            assert_eq!(dm.arrays["temp"].shape, vec![4, 8]);
-            assert!(matches!(dm.attributes["month"], Attr::Int64(6)));
+            assert_eq!(loaded.version, STORE_FORMAT_VERSION);
+            let ds = &loaded.datasets["ds1"];
+            assert_eq!(ds.arrays["temp"].dtype, DType::Float32);
+            assert_eq!(ds.arrays["temp"].shape, vec![4, 8]);
+            let global_keys: Vec<&String> = ds.global_attrs.keys().collect();
+            assert_eq!(global_keys, vec!["month", "active"]);
+            assert_eq!(ds.global_attrs["month"].0, DType::Int64);
+            assert_eq!(ds.array_attrs["temp"]["units"].0, DType::String);
         }
+    }
+
+    /// Identical dataset schemas are interned to a single pool entry on the
+    /// wire and reload as separate but equal in-memory schemas.
+    #[tokio::test]
+    async fn identical_schemas_are_interned() {
+        let mut meta = StoreMeta {
+            version: STORE_FORMAT_VERSION,
+            ..Default::default()
+        };
+        // Three datasets share one schema; a fourth differs.
+        meta.datasets.insert("a".into(), sample_schema());
+        meta.datasets.insert("b".into(), sample_schema());
+        meta.datasets.insert("c".into(), sample_schema());
+        let mut other = sample_schema();
+        other.register_global_attr("extra", DType::Float64);
+        meta.datasets.insert("d".into(), other);
+
+        // Wire form pools identical schemas: two distinct entries, not four.
+        let wire = to_wire(&meta);
+        assert_eq!(wire.schemas.len(), 2);
+        assert_eq!(wire.datasets["a"], wire.datasets["b"]);
+        assert_eq!(wire.datasets["a"], wire.datasets["c"]);
+        assert_ne!(wire.datasets["a"], wire.datasets["d"]);
+
+        // The pooled JSON is far smaller than four inlined copies would be.
+        let store = make_store();
+        save_meta(&store, &meta, MetaFormat::Json, Codec::Uncompressed)
+            .await
+            .unwrap();
+        let (loaded, _, _) = load_meta(&store).await.unwrap();
+        assert_eq!(loaded.datasets.len(), 4);
+        assert_eq!(loaded.datasets["a"], loaded.datasets["b"]);
+        assert_eq!(loaded.datasets["a"].arrays["temp"].shape, vec![4, 8]);
+        assert!(loaded.datasets["d"].global_attrs.contains_key("extra"));
     }
 
     #[tokio::test]
@@ -241,15 +469,14 @@ mod tests {
     /// enough to overcome compression framing overhead.
     #[tokio::test]
     async fn compression_shrinks_encoded_bytes() {
-        use crate::schema::ArraySchema;
         let mut meta = StoreMeta {
-            version: 1,
+            version: STORE_FORMAT_VERSION,
             ..Default::default()
         };
         for i in 0..30 {
-            let mut dm = DatasetMeta::default();
+            let mut ds = DatasetSchema::default();
             for j in 0..5 {
-                dm.arrays.insert(
+                ds.arrays.insert(
                     format!("arr_{j}"),
                     ArraySchema {
                         dtype: DType::Float32,
@@ -260,7 +487,9 @@ mod tests {
                     },
                 );
             }
-            meta.datasets.insert(format!("dataset_{i}"), dm);
+            // Distinct global key per dataset to defeat interning here.
+            ds.register_global_attr(&format!("k_{i}"), DType::Int64);
+            meta.datasets.insert(format!("dataset_{i}"), ds);
         }
 
         for format in [MetaFormat::Json, MetaFormat::MsgPack] {
@@ -299,11 +528,9 @@ mod tests {
     async fn load_priority_order_when_many_present() {
         let store = make_store();
         let mut a = sample_meta();
-        a.version = 1;
-        let mut b = sample_meta();
-        b.version = 2;
-        let mut c = sample_meta();
-        c.version = 3;
+        a.datasets.insert("only_a".into(), DatasetSchema::default());
+        let b = sample_meta();
+        let c = sample_meta();
         // Write three different files; uncompressed-JSON should win.
         save_meta(&store, &c, MetaFormat::MsgPack, Codec::Zstd).await.unwrap();
         save_meta(&store, &b, MetaFormat::Json, Codec::Zstd).await.unwrap();
@@ -312,14 +539,14 @@ mod tests {
         let (loaded, format, compression) = load_meta(&store).await.unwrap();
         assert_eq!(format, MetaFormat::Json);
         assert_eq!(compression, Codec::Uncompressed);
-        assert_eq!(loaded.version, 1);
+        assert!(loaded.datasets.contains_key("only_a"));
     }
 
     #[tokio::test]
     async fn save_overwrites_previous_meta() {
         let store = make_store();
         let meta1 = StoreMeta {
-            version: 1,
+            version: STORE_FORMAT_VERSION,
             ..Default::default()
         };
         save_meta(&store, &meta1, MetaFormat::Json, Codec::Uncompressed)
@@ -327,63 +554,78 @@ mod tests {
             .unwrap();
 
         let mut meta2 = StoreMeta {
-            version: 2,
+            version: STORE_FORMAT_VERSION,
             ..Default::default()
         };
-        meta2
-            .datasets
-            .insert("new_ds".into(), DatasetMeta::default());
+        meta2.datasets.insert("new_ds".into(), DatasetSchema::default());
         save_meta(&store, &meta2, MetaFormat::Json, Codec::Uncompressed)
             .await
             .unwrap();
 
         let (loaded, _, _) = load_meta(&store).await.unwrap();
-        assert_eq!(loaded.version, 2);
         assert!(loaded.datasets.contains_key("new_ds"));
     }
 
+    /// A store written by an older atlas (version != 2) is rejected with a
+    /// clear error rather than a silent misparse.
+    #[tokio::test]
+    async fn legacy_version_rejected() {
+        let store = make_store();
+        let legacy = StoreMeta {
+            version: 1,
+            ..Default::default()
+        };
+        save_meta(&store, &legacy, MetaFormat::Json, Codec::Uncompressed)
+            .await
+            .unwrap();
+        let err = load_meta(&store).await.unwrap_err();
+        assert!(
+            matches!(err, Error::UnsupportedVersion { found: 1, expected: 2 }),
+            "expected UnsupportedVersion, got {err:?}"
+        );
+    }
+
     #[test]
-    fn attr_roundtrip_via_serde() {
+    fn attr_attributevalue_roundtrip() {
         let cases = vec![
             Attr::Bool(true),
+            Attr::Int8(-3),
             Attr::Int64(-1_000_000),
+            Attr::UInt32(42),
+            Attr::Float32(2.5),
             Attr::Float64(2.5),
             Attr::String("hello".into()),
-            Attr::TimestampNanoseconds(1_700_000_000_000_000_000),
+            Attr::Binary(vec![0xde, 0xad]),
+            Attr::Int32List(vec![1, 2, 3]),
+            Attr::Float64List(vec![0.0, 1.5]),
+            Attr::StringList(vec!["a".into(), "b".into()]),
         ];
         for v in cases {
-            let json = serde_json::to_string(&v).unwrap();
-            let back: Attr = serde_json::from_str(&json).unwrap();
+            let av: AttributeValue = v.clone().into();
+            let back: Attr = av.into();
             assert_eq!(v, back);
         }
     }
 
     #[test]
-    fn attr_json_shapes() {
-        assert_eq!(serde_json::to_string(&Attr::Bool(true)).unwrap(), "true");
-        assert_eq!(serde_json::to_string(&Attr::Int64(42)).unwrap(), "42");
-        assert_eq!(serde_json::to_string(&Attr::Float64(1.5)).unwrap(), "1.5");
+    fn timestamp_attr_roundtrips_through_rfc3339_string() {
+        let ts = Attr::TimestampNanoseconds(1_700_000_000_000_000_000);
+        let av: AttributeValue = ts.clone().into();
+        // Stored as an RFC 3339 string in the .af file.
         assert_eq!(
-            serde_json::to_string(&Attr::String("x".into())).unwrap(),
-            "\"x\""
+            av,
+            AttributeValue::String("2023-11-14T22:13:20Z".into())
         );
-        assert_eq!(
-            serde_json::to_string(&Attr::TimestampNanoseconds(1_700_000_000_000_000_000)).unwrap(),
-            "\"2023-11-14T22:13:20Z\"",
-        );
-
-        // Round-tripped non-RFC-3339 string stays as String, not TimestampNanoseconds.
-        let back: Attr = serde_json::from_str("\"not-a-date\"").unwrap();
-        assert_eq!(back, Attr::String("not-a-date".into()));
-
-        // RFC 3339 string deserializes as TimestampNanoseconds (won the order race).
-        let back: Attr = serde_json::from_str("\"2023-11-14T22:13:20Z\"").unwrap();
-        assert_eq!(back, Attr::TimestampNanoseconds(1_700_000_000_000_000_000));
+        // A string that parses as RFC 3339 comes back as a timestamp...
+        let back: Attr = av.into();
+        assert_eq!(back, ts);
+        // ...while a non-timestamp string stays a string.
+        let plain: Attr = AttributeValue::String("not-a-date".into()).into();
+        assert_eq!(plain, Attr::String("not-a-date".into()));
     }
 
     #[test]
     fn array_schema_roundtrip_via_serde() {
-        use crate::schema::ArraySchema;
         let schema = ArraySchema {
             dtype: DType::Float64,
             shape: vec![10, 20],
@@ -394,5 +636,110 @@ mod tests {
         let json = serde_json::to_string(&schema).unwrap();
         let back: ArraySchema = serde_json::from_str(&json).unwrap();
         assert_eq!(schema, back);
+    }
+
+    fn schema_with_array(name: &str, dtype: DType) -> DatasetSchema {
+        DatasetSchema {
+            arrays: IndexMap::from([(
+                name.into(),
+                ArraySchema {
+                    dtype,
+                    shape: vec![2],
+                    chunk_shape: vec![2],
+                    dimension_names: vec!["x".into()],
+                    codec: Codec::default(),
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn merged_schema_widens_numeric_array_dtypes() {
+        let mut datasets: IndexMap<String, DatasetSchema> = IndexMap::new();
+        datasets.insert("a".into(), schema_with_array("temp", DType::Int16));
+        datasets.insert("b".into(), schema_with_array("temp", DType::Int32));
+        let mut c = schema_with_array("temp", DType::Float32);
+        c.register_global_attr("region", DType::String);
+        datasets.insert("c".into(), c);
+
+        let merged = compute_merged(&datasets);
+        // Int16 ∪ Int32 ∪ Float32 → Float64 (float + ≥32-bit int).
+        assert_eq!(merged.arrays["temp"].dtype.0, DType::Float64);
+        assert_eq!(merged.global_attributes["region"].0, DType::String);
+    }
+
+    #[test]
+    fn merged_schema_widens_string_and_timestamp_attr() {
+        let mut datasets: IndexMap<String, DatasetSchema> = IndexMap::new();
+        let mut a = DatasetSchema::default();
+        a.register_global_attr("created", DType::TimestampNs);
+        let mut b = DatasetSchema::default();
+        b.register_global_attr("created", DType::String);
+        datasets.insert("a".into(), a);
+        datasets.insert("b".into(), b);
+
+        let merged = compute_merged(&datasets);
+        assert_eq!(merged.global_attributes["created"].0, DType::String);
+    }
+
+    #[test]
+    fn merged_schema_serialized_in_atlas_json() {
+        let mut meta = StoreMeta {
+            version: STORE_FORMAT_VERSION,
+            ..Default::default()
+        };
+        meta.datasets
+            .insert("a".into(), schema_with_array("temp", DType::Int32));
+        let json = String::from_utf8(encode(&meta, MetaFormat::Json).unwrap()).unwrap();
+        assert!(json.contains("\"merged\""), "atlas.json must include merged schema:\n{json}");
+    }
+}
+
+#[cfg(test)]
+mod widen_tests {
+    use crate::schema::widen_dtype;
+    use array_format::DType;
+
+    #[test]
+    fn numeric_widening() {
+        assert_eq!(widen_dtype(&DType::Int8, &DType::Int32), Some(DType::Int32));
+        assert_eq!(widen_dtype(&DType::UInt8, &DType::UInt16), Some(DType::UInt16));
+        // Mixed sign promotes to a larger signed type.
+        assert_eq!(widen_dtype(&DType::Int8, &DType::UInt8), Some(DType::Int16));
+        assert_eq!(widen_dtype(&DType::Int32, &DType::UInt32), Some(DType::Int64));
+        // Float with a ≥32-bit integer needs f64.
+        assert_eq!(widen_dtype(&DType::Int32, &DType::Float32), Some(DType::Float64));
+        assert_eq!(widen_dtype(&DType::Int8, &DType::Float32), Some(DType::Float32));
+        assert_eq!(widen_dtype(&DType::Float32, &DType::Float64), Some(DType::Float64));
+    }
+
+    #[test]
+    fn string_timestamp_widening() {
+        assert_eq!(
+            widen_dtype(&DType::String, &DType::TimestampNs),
+            Some(DType::String)
+        );
+        assert_eq!(
+            widen_dtype(&DType::TimestampNs, &DType::String),
+            Some(DType::String)
+        );
+    }
+
+    #[test]
+    fn incompatible_types_collide() {
+        assert_eq!(widen_dtype(&DType::Int32, &DType::String), None);
+        assert_eq!(widen_dtype(&DType::Float64, &DType::Bool), None);
+        assert_eq!(widen_dtype(&DType::Binary, &DType::String), None);
+    }
+
+    #[test]
+    fn list_widening_is_elementwise() {
+        let a = DType::List { child: Box::new(DType::Int8) };
+        let b = DType::List { child: Box::new(DType::Int32) };
+        assert_eq!(
+            widen_dtype(&a, &b),
+            Some(DType::List { child: Box::new(DType::Int32) })
+        );
     }
 }

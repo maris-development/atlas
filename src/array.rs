@@ -65,6 +65,35 @@ impl AtlasArray {
     pub(crate) fn try_get(&self) -> Option<Arc<AsyncRwLock<ArrayFile>>> {
         self.inner.get().map(Arc::clone)
     }
+
+    /// Opens the file if it already exists on disk, but — unlike [`get`] —
+    /// never *creates* it. Returns `Ok(None)` when no file is present, so
+    /// read-only paths (e.g. reading attributes that may never have been
+    /// written) don't write an empty base file as a side effect.
+    ///
+    /// If the file exists it is cached like [`get`]; a concurrent racing open
+    /// is harmless (one instance wins the cache slot, both observe the same
+    /// on-disk state).
+    pub(crate) async fn get_existing(&self) -> Result<Option<Arc<AsyncRwLock<ArrayFile>>>> {
+        if let Some(arc) = self.inner.get() {
+            return Ok(Some(Arc::clone(arc)));
+        }
+        let path = OsPath::from(format!("{}/data.af", self.array_name));
+        match self.store.head(&path).await {
+            Ok(_) => {
+                debug!(array = %self.array_name, codec = ?self.codec, "opening existing array file (read-only)");
+                let file =
+                    open_array_file(self.store.clone(), path, &self.codec, &self.delta_cache).await?;
+                let arc = Arc::new(AsyncRwLock::new(file));
+                // Best-effort cache; if another task already populated the cell,
+                // its instance wins and ours is dropped.
+                let _ = self.inner.set(arc);
+                Ok(self.inner.get().map(Arc::clone))
+            }
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(e) => Err(Error::ObjectStore(e)),
+        }
+    }
 }
 
 pub(crate) async fn open_array_file(

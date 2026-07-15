@@ -10,12 +10,25 @@
 //!
 //! ```text
 //! my_store/
-//! ├── atlas.json          <- dataset registry + per-dataset attributes
+//! ├── atlas.json          <- interned per-dataset schema + attribute-key namespace
+//! ├── _global/
+//! │   └── data.af         <- dataset-level (global) attribute VALUES, one entry per dataset
 //! ├── temperature/
-//! │   └── data.af         <- ArrayFile: one named array per dataset
+//! │   └── data.af         <- ArrayFile: one entry per dataset + per-variable attribute VALUES
 //! └── latitude/
 //!     └── data.af
 //! ```
+//!
+//! `atlas.json` stores only the *schema* of the collection — each distinct
+//! per-dataset schema once (interned), the attribute-key namespace, and a
+//! collection-wide **merged schema** (every unique array/attribute with its
+//! type widened across datasets; see [`Atlas::merged_schema`]). All attribute
+//! *values* live in the `.af` files: per-variable attributes on the variable's
+//! own file, and dataset-level attributes in the reserved `_global` file.
+//!
+//! Declaring the same array name (or attribute key) in two datasets with
+//! incompatible types is rejected — types may only widen within numeric types
+//! or between string and timestamp.
 //!
 //! # Quick start
 //!
@@ -39,7 +52,7 @@
 //!     ).await.unwrap();
 //!     let data = Array2::<f32>::from_elem([4, 8], 20.0).into_dyn();
 //!     ds.write_array("temperature", vec![0, 0], data.view()).await.unwrap();
-//!     ds.set_attribute("month", Attr::Int64(1));
+//!     ds.set_attribute("month", Attr::Int64(1)).unwrap();
 //! }
 //! s.flush().await.unwrap();   // single durability boundary
 //!
@@ -64,10 +77,12 @@
 //! # Durability
 //!
 //! `atlas.json` is loaded **once** when the store is opened or created; from
-//! then on every mutation (`create_dataset`, `define_array`, `set_attribute`,
-//! …) only touches the in-memory `StoreMeta`. The store does **not** persist
-//! until [`Atlas::flush`] is called. Dropping an `Atlas`
-//! without flushing abandons every pending in-memory write.
+//! then on every schema mutation (`create_dataset`, `define_array`, …) only
+//! touches the in-memory `StoreMeta`. Attribute writes (`set_attribute`,
+//! `set_array_attribute`) are buffered in memory too. The store does **not**
+//! persist until [`Atlas::flush`] is called, which drains buffered attributes
+//! into the `.af` files and rewrites `atlas.json`. Dropping an `Atlas` without
+//! flushing abandons every pending in-memory write.
 
 mod array;
 mod config;
@@ -80,13 +95,13 @@ mod store;
 pub use config::{Codec, MetaFormat, StoreConfig};
 pub use dataset::DatasetView;
 pub use error::{Error, Result};
-pub use meta::DatasetMeta;
+pub use meta::{DatasetSchema, MergedArray, MergedSchema};
 pub use store::Atlas;
 
 pub use array_format::{
     ArrayElement, ArrayStats, DType, DeltaCache, FillValue, MergedArrayMeta, StatValue, TimestampNs,
 };
-pub use schema::{ArraySchema, Attr};
+pub use schema::{ArraySchema, Attr, DTypeS};
 
 pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() || name.starts_with('_') || name.contains('/') || name == ".." || name == "."

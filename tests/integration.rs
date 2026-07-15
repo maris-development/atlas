@@ -30,7 +30,7 @@ async fn create_write_read_roundtrip() {
         .await
         .unwrap();
         ds.write_array("temperature", vec![0, 0], data.view()).await.unwrap();
-        ds.set_attribute("month", Attr::Int64(1));
+        ds.set_attribute("month", Attr::Int64(1)).unwrap();
     }
     atlas.flush().await.unwrap();
 
@@ -44,7 +44,7 @@ async fn create_write_read_roundtrip() {
         .unwrap()
         .unwrap();
     assert_eq!(result, data.into_shared());
-    assert_eq!(ds2.get_attribute("month"), Some(Attr::Int64(1)));
+    assert_eq!(ds2.get_attribute("month").await.unwrap(), Some(Attr::Int64(1)));
 }
 
 #[tokio::test]
@@ -142,15 +142,158 @@ async fn attributes_survive_reopen() {
         ds.define_array::<f32>("v", vec!["t".into()], vec![2], None, None)
             .await
             .unwrap();
-        ds.set_attribute("sensor", Attr::String("ABC".into()));
-        ds.set_attribute("year", Attr::Int64(2023));
+        ds.set_attribute("sensor", Attr::String("ABC".into())).unwrap();
+        ds.set_attribute("year", Attr::Int64(2023)).unwrap();
     }
     atlas.flush().await.unwrap();
 
     let atlas2 = Atlas::open(store, prefix).await.unwrap();
     let ds2 = atlas2.open_dataset("meta_test").await.unwrap();
-    assert_eq!(ds2.get_attribute("sensor"), Some(Attr::String("ABC".into())));
-    assert_eq!(ds2.get_attribute("year"), Some(Attr::Int64(2023)));
+    assert_eq!(
+        ds2.get_attribute("sensor").await.unwrap(),
+        Some(Attr::String("ABC".into()))
+    );
+    assert_eq!(
+        ds2.get_attribute("year").await.unwrap(),
+        Some(Attr::Int64(2023))
+    );
+}
+
+#[tokio::test]
+async fn per_variable_attributes_survive_reopen() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+        .await
+        .unwrap();
+
+    {
+        let mut ds = atlas.create_dataset("obs").await.unwrap();
+        ds.define_array::<f32>("wind", vec!["t".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        ds.set_array_attribute("wind", "units", Attr::String("m/s".into()))
+            .unwrap();
+        ds.set_array_attribute("wind", "valid_range", Attr::Float32List(vec![0.0, 120.0]))
+            .unwrap();
+        // Dataset-global attribute lives in the reserved _global file.
+        ds.set_attribute("station", Attr::String("KNMI".into())).unwrap();
+    }
+    atlas.flush().await.unwrap();
+
+    // The global-attributes file is created because a global attr was set.
+    assert!(tmp.path().join("_global").join("data.af").exists());
+
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    let ds2 = atlas2.open_dataset("obs").await.unwrap();
+    assert_eq!(
+        ds2.get_array_attribute("wind", "units").await.unwrap(),
+        Some(Attr::String("m/s".into()))
+    );
+    let wind_attrs = ds2.array_attributes("wind").await.unwrap();
+    assert_eq!(wind_attrs.get("units"), Some(&Attr::String("m/s".into())));
+    assert_eq!(
+        wind_attrs.get("valid_range"),
+        Some(&Attr::Float32List(vec![0.0, 120.0]))
+    );
+    assert_eq!(
+        ds2.get_attribute("station").await.unwrap(),
+        Some(Attr::String("KNMI".into()))
+    );
+}
+
+#[tokio::test]
+async fn incompatible_array_dtype_across_datasets_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    {
+        let mut a = atlas.create_dataset("a").await.unwrap();
+        a.define_array::<i32>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+    }
+    // A widenable dtype (i64) is accepted for the same array name...
+    {
+        let mut b = atlas.create_dataset("b").await.unwrap();
+        b.define_array::<i64>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+    }
+    // ...but an incompatible one (String) is rejected.
+    {
+        let mut c = atlas.create_dataset("c").await.unwrap();
+        let err = c
+            .define_array::<String>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, atlas::Error::TypeMismatch { .. }), "got {err:?}");
+    }
+
+    // The merged schema widens i32 ∪ i64 → i64.
+    let merged = atlas.merged_schema();
+    assert_eq!(merged.arrays["x"].dtype.0, DType::Int64);
+}
+
+#[tokio::test]
+async fn incompatible_attribute_type_across_datasets_rejected() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    {
+        let mut a = atlas.create_dataset("a").await.unwrap();
+        a.set_attribute("year", Attr::Int64(2024)).unwrap();
+    }
+    {
+        let mut b = atlas.create_dataset("b").await.unwrap();
+        let err = b.set_attribute("year", Attr::String("twenty".into())).unwrap_err();
+        assert!(matches!(err, atlas::Error::TypeMismatch { .. }), "got {err:?}");
+    }
+}
+
+#[tokio::test]
+async fn per_variable_attribute_lives_in_the_array_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+        .await
+        .unwrap();
+
+    {
+        let mut ds = atlas.create_dataset("jan").await.unwrap();
+        ds.define_array::<f32>("temperature", vec!["lat".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        // Only a per-variable attribute — no dataset-level (global) attribute.
+        ds.set_array_attribute("temperature", "units", Attr::String("celsius".into()))
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+
+    // The attribute value is written into the temperature array's own file...
+    assert!(tmp.path().join("temperature").join("data.af").exists());
+    // ...and NOT into the global-attributes file, which is never created when
+    // only per-variable attributes are set.
+    assert!(
+        !tmp.path().join("_global").exists(),
+        "_global must not be created for per-variable-only attributes"
+    );
+
+    // Round-trips from the temperature file after reopen.
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    let ds2 = atlas2.open_dataset("jan").await.unwrap();
+    assert_eq!(
+        ds2.get_array_attribute("temperature", "units").await.unwrap(),
+        Some(Attr::String("celsius".into()))
+    );
+    // No dataset-level attributes exist.
+    assert!(ds2.attributes().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -185,28 +328,29 @@ async fn meta_survives_flush_and_reopen() {
         ds.define_array::<i64>("time", vec!["t".into()], vec![100], None, None)
             .await
             .unwrap();
-        ds.set_attribute("year", Attr::Int64(2024));
-        ds.set_attribute("active", Attr::Bool(true));
+        ds.set_attribute("year", Attr::Int64(2024)).unwrap();
+        ds.set_attribute("active", Attr::Bool(true)).unwrap();
     }
     atlas.flush().await.unwrap();
 
     let atlas2 = Atlas::open(store, prefix).await.unwrap();
     let ds2 = atlas2.open_dataset("meta_test").await.unwrap();
-    let meta = ds2.meta();
+    let schema = ds2.schema();
 
-    let temp_schema = meta.arrays.get("temp").expect("temp array schema missing");
+    let temp_schema = schema.arrays.get("temp").expect("temp array schema missing");
     assert_eq!(temp_schema.dtype, DType::Float32);
     assert_eq!(temp_schema.shape, vec![4, 8]);
     assert_eq!(temp_schema.chunk_shape, vec![2, 4]);
     assert_eq!(temp_schema.dimension_names, vec!["lat", "lon"]);
 
-    let time_schema = meta.arrays.get("time").expect("time array schema missing");
+    let time_schema = schema.arrays.get("time").expect("time array schema missing");
     assert_eq!(time_schema.dtype, DType::Int64);
     assert_eq!(time_schema.shape, vec![100]);
     assert_eq!(time_schema.chunk_shape, vec![100]);
 
-    assert_eq!(meta.attributes.get("year"), Some(&Attr::Int64(2024)));
-    assert_eq!(meta.attributes.get("active"), Some(&Attr::Bool(true)));
+    let attrs = ds2.attributes().await.unwrap();
+    assert_eq!(attrs.get("year"), Some(&Attr::Int64(2024)));
+    assert_eq!(attrs.get("active"), Some(&Attr::Bool(true)));
 }
 
 #[tokio::test]
@@ -279,7 +423,7 @@ async fn define_array_zero_dimensional_roundtrip() {
 
     let atlas2 = Atlas::open(store, prefix).await.unwrap();
     let ds2 = atlas2.open_dataset("scalars").await.unwrap();
-    let schema = ds2.meta();
+    let schema = ds2.schema();
     let answer = schema.arrays.get("answer").unwrap();
     assert_eq!(answer.shape, Vec::<usize>::new());
     assert_eq!(answer.dimension_names, Vec::<String>::new());
@@ -314,15 +458,15 @@ async fn timestamp_ns_array_and_attr_survive_flush_and_reopen() {
         ])
         .into_dyn();
         ds.write_array("event_time", vec![0], data.view()).await.unwrap();
-        ds.set_attribute("created_at", Attr::TimestampNanoseconds(1_700_000_000_000_000_000));
+        ds.set_attribute("created_at", Attr::TimestampNanoseconds(1_700_000_000_000_000_000)).unwrap();
     }
     atlas.flush().await.unwrap();
 
     let atlas2 = Atlas::open(store, prefix).await.unwrap();
     let ds2 = atlas2.open_dataset("ts").await.unwrap();
 
-    let meta = ds2.meta();
-    let schema = meta.arrays.get("event_time").unwrap();
+    let dataset_schema = ds2.schema();
+    let schema = dataset_schema.arrays.get("event_time").unwrap();
     assert_eq!(schema.dtype, DType::TimestampNs);
 
     let read = ds2
@@ -333,9 +477,11 @@ async fn timestamp_ns_array_and_attr_survive_flush_and_reopen() {
     assert_eq!(read[0].0, 1_700_000_000_000_000_000);
     assert_eq!(read[2].0, 1_700_000_000_000_000_002);
 
+    // Timestamp attributes round-trip through the .af file as an RFC 3339
+    // string and are restored to the timestamp variant on read.
     assert_eq!(
-        meta.attributes.get("created_at"),
-        Some(&Attr::TimestampNanoseconds(1_700_000_000_000_000_000)),
+        ds2.get_attribute("created_at").await.unwrap(),
+        Some(Attr::TimestampNanoseconds(1_700_000_000_000_000_000)),
     );
 }
 
