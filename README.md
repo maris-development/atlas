@@ -61,7 +61,16 @@ The schema is a plain JSON file written on `Atlas::flush()` / `Atlas::close()`. 
 - **Dataset registry** — a map of dataset name → schema-pool index.
 - **Merged schema** — a collection-wide summary listing every unique array (with its dtype widened across all datasets, its dimensions, and its per-variable attribute types) and every global attribute type. Descriptive only — reads always use each dataset's own schema — but handy for tools that want one view of "what's in here." Also exposed programmatically via `Atlas::merged_schema()`.
 
-When the same array name (or attribute key) appears in more than one dataset with different types, the merged type is **widened**. Widening is allowed only within numeric types (e.g. `int16` ∪ `int32` → `int32`; `int32` ∪ `float32` → `float64`) or between `string` and `timestamp` (→ `string`). Any other combination — e.g. an `int32` array in one dataset and a `string` array under the same name in another — is a collision: `define_array` / `set_attribute` reject it with a type-mismatch error.
+When the same array name (or attribute key) appears in more than one dataset with different types, the merged type is **widened**. Widening is allowed only within numeric types (e.g. `int16` ∪ `int32` → `int32`; `int32` ∪ `float32` → `float64`) or between `string` and `timestamp` (→ `string`).
+
+Any other combination — e.g. an `int32` array in one dataset and a `string` array under the same name in another — can't merge. The dataset is **still stored** under its own type (each dataset keeps the type it declared, and its data reads back normally); the merged schema simply keeps the **first-seen** type. Whether that's reported as a warning or an error is set by `StoreConfig::on_type_mismatch`:
+
+| `TypeMismatchPolicy` | Behaviour |
+| --- | --- |
+| `Warn` (default) | Logs a `tracing` warning and carries on — an ingest of many heterogeneous files won't abort because one disagrees. |
+| `Error` | `define_array` / `set_attribute` / `set_array_attribute` return `Error::TypeMismatch`. |
+
+The policy is a **per-session** choice, not an on-disk property: pass it to `Atlas::create`, or to `Atlas::open_with_config` / `Atlas::open_path_with_config` when opening an existing collection (plain `open` / `open_path` use the default). Note that these open variants honour only `on_type_mismatch` — the codec and metadata format are always detected from disk.
 
 Attribute **values** are **not** in `atlas.json` — only their key names are (as part of the schema). Values live in the `.af` files and are read via the `array-format` attribute API. Because `atlas.json` is human-readable and self-describing, you can still inspect or audit the collection's schema with any JSON tool without needing the library.
 

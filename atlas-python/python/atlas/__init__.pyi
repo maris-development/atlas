@@ -29,6 +29,7 @@ class Atlas:
         codec: str = "zstd",
         meta_format: str = "json",
         meta_compression: str = "none",
+        on_type_mismatch: str = "warn",
     ) -> "Atlas":
         """Create a new store.
 
@@ -55,8 +56,12 @@ class Atlas:
         ...
 
     @staticmethod
-    def open(source: AtlasSource) -> "Atlas":
+    def open(source: AtlasSource, on_type_mismatch: str = "warn") -> "Atlas":
         """Open an existing store.
+
+        `on_type_mismatch` (`"warn"` | `"error"`) sets the per-session policy
+        for a dataset whose type can't merge with the collection's existing
+        type for that array/attribute. It is not read from disk.
 
         Accepts the same shapes as [`Atlas.create`][atlas.Atlas.create]:
         a local filesystem path or an obstore-constructed store handle.

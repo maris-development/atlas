@@ -92,7 +92,7 @@ mod meta;
 mod schema;
 mod store;
 
-pub use config::{Codec, MetaFormat, StoreConfig};
+pub use config::{Codec, MetaFormat, StoreConfig, TypeMismatchPolicy};
 pub use dataset::DatasetView;
 pub use error::{Error, Result};
 pub use meta::{DatasetSchema, MergedArray, MergedSchema};
