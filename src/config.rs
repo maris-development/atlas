@@ -64,11 +64,38 @@ pub(crate) const META_VARIANTS: [(MetaFormat, Codec); 6] = [
     (MetaFormat::MsgPack, Codec::Lz4),
 ];
 
+/// What to do when a dataset declares a type that cannot merge with the type
+/// the collection already records for that array name / attribute key.
+///
+/// Types merge when they widen — within numeric types, or between string and
+/// timestamp (see the merged schema in
+/// [`Atlas::merged_schema`](crate::Atlas::merged_schema)). Anything else (say
+/// an `int32` array in one dataset and a `string` array under the same name in
+/// another) is a mismatch. Either way the dataset is **still stored** with its
+/// own type, and the merged schema keeps the **first-seen** type; this policy
+/// only decides whether the mismatch is reported as a warning or an error.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TypeMismatchPolicy {
+    /// Log a `tracing` warning and carry on. The default — an ingest of many
+    /// heterogeneous files shouldn't abort because one of them disagrees.
+    #[default]
+    Warn,
+    /// Reject the insert with [`Error::TypeMismatch`](crate::Error::TypeMismatch).
+    Error,
+}
+
 /// Configuration for opening or creating an [`Atlas`](crate::Atlas).
 #[derive(Debug, Clone)]
 pub struct StoreConfig {
     /// Compression codec used when writing array blocks. Defaults to [`Codec::Zstd`].
     pub codec: Codec,
+    /// How to report a type that can't merge with the collection's existing
+    /// type for an array/attribute. Defaults to [`TypeMismatchPolicy::Warn`].
+    ///
+    /// Unlike the other fields, this is a per-session policy rather than an
+    /// on-disk property: it is honoured by `create` and by the
+    /// `*_with_config` open variants, and is not persisted to `atlas.json`.
+    pub on_type_mismatch: TypeMismatchPolicy,
     /// On-disk encoding for the metadata file. Defaults to [`MetaFormat::Json`].
     /// Only consulted by `create`; `open` detects the format from the filename
     /// present on disk.
@@ -87,6 +114,7 @@ impl Default for StoreConfig {
     fn default() -> Self {
         Self {
             codec: Codec::default(),
+            on_type_mismatch: TypeMismatchPolicy::default(),
             meta_format: MetaFormat::default(),
             meta_compression: Codec::Uncompressed,
         }

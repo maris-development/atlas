@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use atlas::{Atlas, Attr, DType, StatValue, StoreConfig};
+use atlas::{Atlas, Attr, DType, StatValue, StoreConfig, TypeMismatchPolicy};
 use ndarray::ArrayD;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -202,11 +202,13 @@ async fn per_variable_attributes_survive_reopen() {
     );
 }
 
+/// Default policy is `Warn`: an incompatible dtype is still stored under the
+/// dataset's own type, and the merged schema keeps the first-seen type.
 #[tokio::test]
-async fn incompatible_array_dtype_across_datasets_rejected() {
+async fn incompatible_array_dtype_is_stored_and_first_type_wins() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
         .await
         .unwrap();
 
@@ -216,14 +218,62 @@ async fn incompatible_array_dtype_across_datasets_rejected() {
             .await
             .unwrap();
     }
-    // A widenable dtype (i64) is accepted for the same array name...
+    // A widenable dtype (i64) merges: the merged type widens to cover both.
     {
         let mut b = atlas.create_dataset("b").await.unwrap();
         b.define_array::<i64>("x", vec!["i".into()], vec![2], None, None)
             .await
             .unwrap();
     }
-    // ...but an incompatible one (String) is rejected.
+    // An incompatible one (String) is still accepted and stored (warns).
+    {
+        let mut c = atlas.create_dataset("c").await.unwrap();
+        c.define_array::<String>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        let data = ndarray::arr1(&["hello".to_string(), "world".to_string()]).into_dyn();
+        c.write_array("x", vec![0], data.view()).await.unwrap();
+    }
+    atlas.flush().await.unwrap();
+
+    // Merged keeps the FIRST-seen type widened across compatible datasets
+    // (i32 ∪ i64 → i64); the incompatible String does not change it.
+    let merged = atlas.merged_schema();
+    assert_eq!(merged.arrays["x"].dtype.0, DType::Int64);
+
+    // Each dataset kept its own declared type, and the String data reads back.
+    let atlas2 = Atlas::open(store, prefix).await.unwrap();
+    assert_eq!(atlas2.open_dataset("a").await.unwrap().array_meta("x").unwrap().dtype, DType::Int32);
+    assert_eq!(atlas2.open_dataset("c").await.unwrap().array_meta("x").unwrap().dtype, DType::String);
+    let c2 = atlas2.open_dataset("c").await.unwrap();
+    let back = c2.read_array::<String>("x", vec![], vec![]).await.unwrap().unwrap();
+    assert_eq!(back[0], "hello");
+}
+
+/// With `TypeMismatchPolicy::Error` the same insert is rejected instead.
+#[tokio::test]
+async fn incompatible_array_dtype_rejected_under_error_policy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let config = StoreConfig {
+        on_type_mismatch: TypeMismatchPolicy::Error,
+        ..Default::default()
+    };
+    let mut atlas = Atlas::create(store, prefix, config).await.unwrap();
+
+    {
+        let mut a = atlas.create_dataset("a").await.unwrap();
+        a.define_array::<i32>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+    }
+    // Widenable is still fine under Error.
+    {
+        let mut b = atlas.create_dataset("b").await.unwrap();
+        b.define_array::<i64>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+    }
     {
         let mut c = atlas.create_dataset("c").await.unwrap();
         let err = c
@@ -232,27 +282,163 @@ async fn incompatible_array_dtype_across_datasets_rejected() {
             .unwrap_err();
         assert!(matches!(err, atlas::Error::TypeMismatch { .. }), "got {err:?}");
     }
-
-    // The merged schema widens i32 ∪ i64 → i64.
-    let merged = atlas.merged_schema();
-    assert_eq!(merged.arrays["x"].dtype.0, DType::Int64);
 }
 
+/// Attributes follow the same policy as array dtypes.
 #[tokio::test]
-async fn incompatible_attribute_type_across_datasets_rejected() {
+async fn incompatible_attribute_type_follows_policy() {
     let tmp = tempfile::tempdir().unwrap();
     let (store, prefix) = make_store(&tmp);
-    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
-        .await
-        .unwrap();
 
+    // Default (Warn): stored, first type kept in the merged schema.
     {
-        let mut a = atlas.create_dataset("a").await.unwrap();
-        a.set_attribute("year", Attr::Int64(2024)).unwrap();
+        let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+            .await
+            .unwrap();
+        atlas
+            .create_dataset("a")
+            .await
+            .unwrap()
+            .set_attribute("year", Attr::Int64(2024))
+            .unwrap();
+        atlas
+            .create_dataset("b")
+            .await
+            .unwrap()
+            .set_attribute("year", Attr::String("twenty".into()))
+            .unwrap();
+        atlas.flush().await.unwrap();
+
+        let merged = atlas.merged_schema();
+        assert_eq!(merged.global_attributes["year"].0, DType::Int64);
+        // b's own value is still stored under its own type.
+        let b = atlas.open_dataset("b").await.unwrap();
+        assert_eq!(
+            b.get_attribute("year").await.unwrap(),
+            Some(Attr::String("twenty".into()))
+        );
     }
+
+    // Error policy rejects it.
     {
-        let mut b = atlas.create_dataset("b").await.unwrap();
-        let err = b.set_attribute("year", Attr::String("twenty".into())).unwrap_err();
+        let tmp2 = tempfile::tempdir().unwrap();
+        let (store2, prefix2) = make_store(&tmp2);
+        let config = StoreConfig {
+            on_type_mismatch: TypeMismatchPolicy::Error,
+            ..Default::default()
+        };
+        let mut atlas = Atlas::create(store2, prefix2, config).await.unwrap();
+        atlas
+            .create_dataset("a")
+            .await
+            .unwrap()
+            .set_attribute("year", Attr::Int64(2024))
+            .unwrap();
+        let err = atlas
+            .create_dataset("b")
+            .await
+            .unwrap()
+            .set_attribute("year", Attr::String("twenty".into()))
+            .unwrap_err();
+        assert!(matches!(err, atlas::Error::TypeMismatch { .. }), "got {err:?}");
+    }
+}
+
+/// Regression: once a mismatching dtype has been **persisted** under `Warn`,
+/// the first-seen type must still win the comparison — a later dataset
+/// declaring that same odd type is still a mismatch, not silently accepted.
+#[tokio::test]
+async fn persisted_mismatch_does_not_become_the_reference_type() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+
+    // Store i32 (first), then a mismatching String — and flush both.
+    {
+        let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+            .await
+            .unwrap();
+        atlas
+            .create_dataset("a")
+            .await
+            .unwrap()
+            .define_array::<i32>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        atlas
+            .create_dataset("odd")
+            .await
+            .unwrap()
+            .define_array::<String>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        atlas.flush().await.unwrap();
+        // Merged still reports the first-seen type, not the odd one.
+        assert_eq!(atlas.merged_schema().arrays["x"].dtype.0, DType::Int32);
+    }
+
+    // Reopen strictly: another String must STILL be rejected, because the
+    // reference type is the first-seen i32 — not the already-stored String.
+    let config = StoreConfig {
+        on_type_mismatch: TypeMismatchPolicy::Error,
+        ..Default::default()
+    };
+    let mut atlas = Atlas::open_with_config(store, prefix, config).await.unwrap();
+    assert_eq!(atlas.merged_schema().arrays["x"].dtype.0, DType::Int32);
+    let err = atlas
+        .create_dataset("another")
+        .await
+        .unwrap()
+        .define_array::<String>("x", vec!["i".into()], vec![2], None, None)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, atlas::Error::TypeMismatch { .. }), "got {err:?}");
+}
+
+/// `open_with_config` carries the policy into an existing collection.
+#[tokio::test]
+async fn open_with_config_sets_type_mismatch_policy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    {
+        let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+            .await
+            .unwrap();
+        atlas
+            .create_dataset("a")
+            .await
+            .unwrap()
+            .define_array::<i32>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        atlas.flush().await.unwrap();
+    }
+
+    // Plain open → default Warn → the mismatch is accepted.
+    {
+        let mut atlas = Atlas::open(store.clone(), prefix.clone()).await.unwrap();
+        atlas
+            .create_dataset("warn_ds")
+            .await
+            .unwrap()
+            .define_array::<String>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+    }
+
+    // open_with_config(Error) → the same mismatch is rejected.
+    {
+        let config = StoreConfig {
+            on_type_mismatch: TypeMismatchPolicy::Error,
+            ..Default::default()
+        };
+        let mut atlas = Atlas::open_with_config(store, prefix, config).await.unwrap();
+        let err = atlas
+            .create_dataset("err_ds")
+            .await
+            .unwrap()
+            .define_array::<String>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, atlas::Error::TypeMismatch { .. }), "got {err:?}");
     }
 }
