@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use atlas::{Atlas, Codec, DType, MetaFormat, StoreConfig, TimestampNs};
+use atlas::{Atlas, Codec, DType, MetaFormat, StoreConfig, TimestampNs, TypeMismatchPolicy};
 use numpy::{IntoPyArray, PyArray};
 use object_store::path::Path as ObjStorePath;
 use pyo3::exceptions::{PyKeyError, PyNotImplementedError, PyValueError};
@@ -51,6 +51,18 @@ fn parse_meta_format(s: &str) -> PyResult<MetaFormat> {
     })
 }
 
+fn parse_type_mismatch_policy(s: &str) -> PyResult<TypeMismatchPolicy> {
+    Ok(match s.to_ascii_lowercase().as_str() {
+        "warn" | "warning" => TypeMismatchPolicy::Warn,
+        "error" | "raise" | "strict" => TypeMismatchPolicy::Error,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "unknown on_type_mismatch: {other:?} (expected 'warn' or 'error')"
+            )))
+        }
+    })
+}
+
 #[pyclass(name = "Atlas", module = "atlas._atlas")]
 pub struct PyAtlas {
     pub(crate) inner: Atlas,
@@ -68,19 +80,21 @@ impl PyAtlas {
     /// configuration are entirely obstore's responsibility — atlas
     /// receives an opaque `Arc<dyn ObjectStore>` and writes through it.
     #[staticmethod]
-    #[pyo3(signature = (source, codec="zstd", meta_format="json", meta_compression="none"))]
+    #[pyo3(signature = (source, codec="zstd", meta_format="json", meta_compression="none", on_type_mismatch="warn"))]
     fn create(
         py: Python<'_>,
         source: AtlasSource,
         codec: &str,
         meta_format: &str,
         meta_compression: &str,
+        on_type_mismatch: &str,
     ) -> PyResult<Self> {
         let codec = parse_codec(codec)?;
         let meta_format = parse_meta_format(meta_format)?;
         let meta_compression = parse_codec(meta_compression)?;
         let config = StoreConfig {
             codec,
+            on_type_mismatch: parse_type_mismatch_policy(on_type_mismatch)?,
             meta_format,
             meta_compression,
         };
@@ -105,16 +119,31 @@ impl PyAtlas {
     /// filesystem path or an obstore-constructed store handle. Codec,
     /// metadata format and metadata compression are auto-detected from
     /// the on-disk files in both cases.
+    ///
+    /// `on_type_mismatch` ("warn" | "error") sets the per-session policy for a
+    /// dataset whose type can't merge with the collection's existing type for
+    /// that array/attribute.
     #[staticmethod]
-    fn open(py: Python<'_>, source: AtlasSource) -> PyResult<Self> {
+    #[pyo3(signature = (source, on_type_mismatch="warn"))]
+    fn open(py: Python<'_>, source: AtlasSource, on_type_mismatch: &str) -> PyResult<Self> {
+        let config = StoreConfig {
+            on_type_mismatch: parse_type_mismatch_policy(on_type_mismatch)?,
+            ..Default::default()
+        };
         let inner = match source {
             AtlasSource::Path(path) => py
-                .detach(|| runtime().block_on(Atlas::open_path(path)))
+                .detach(|| runtime().block_on(Atlas::open_path_with_config(path, config)))
                 .map_err(to_py_err)?,
             AtlasSource::ObjectStore(store) => {
                 let store = store.into_dyn();
-                py.detach(|| runtime().block_on(Atlas::open(store, ObjStorePath::from(""))))
-                    .map_err(to_py_err)?
+                py.detach(|| {
+                    runtime().block_on(Atlas::open_with_config(
+                        store,
+                        ObjStorePath::from(""),
+                        config,
+                    ))
+                })
+                .map_err(to_py_err)?
             }
         };
         Ok(Self { inner })

@@ -5,12 +5,12 @@ use indexmap::IndexMap;
 use ndarray::{ArcArray, ArrayView, IxDyn};
 use object_store::ObjectStore;
 use parking_lot::{Mutex, RwLock};
-use tracing::{debug, instrument, trace};
+use tracing::{debug, instrument, trace, warn};
 
 use crate::{
     Error, Result,
     array::AtlasArray,
-    config::Codec,
+    config::{Codec, TypeMismatchPolicy},
     meta::{DatasetSchema, StoreMeta},
     schema::{ArraySchema, Attr, attr_dtype, widen_dtype},
 };
@@ -18,6 +18,13 @@ use crate::{
 /// Merge the type of `array`/attribute across every dataset **except**
 /// `exclude`, so a (re)insert can be checked against the rest of the
 /// collection. `pick` extracts the relevant type from a dataset's schema.
+///
+/// Folds exactly like [`crate::meta::compute_merged`]: compatible types widen,
+/// and a type that can't merge leaves the accumulator alone so the
+/// **first-seen** type wins. Keeping these two in step matters — once a
+/// mismatching dataset is stored (under `TypeMismatchPolicy::Warn`), a
+/// last-wins fold here would silently adopt the odd type out and stop
+/// reporting further mismatches against it.
 fn merged_other<F>(meta: &StoreMeta, exclude: &str, mut pick: F) -> Option<DType>
 where
     F: FnMut(&DatasetSchema) -> Option<DType>,
@@ -30,25 +37,49 @@ where
         if let Some(t) = pick(schema) {
             acc = Some(match acc {
                 None => t,
-                Some(a) => widen_dtype(&a, &t).unwrap_or(t),
+                Some(a) => widen_dtype(&a, &t).unwrap_or(a),
             });
         }
     }
     acc
 }
 
-/// Error unless `new` widens with the already-recorded `existing` type.
-fn ensure_widenable(name: &str, existing: Option<DType>, new: &DType) -> Result<()> {
-    if let Some(m) = existing {
-        if widen_dtype(&m, new).is_none() {
-            return Err(Error::TypeMismatch {
-                name: name.to_string(),
-                existing: format!("{m:?}"),
-                new: format!("{new:?}"),
-            });
+/// Check `new` against the type the collection already records.
+///
+/// If the two widen (numeric ↔ numeric, string ↔ timestamp, element-wise for
+/// lists) this is a no-op and the merged schema will widen to cover both. If
+/// they don't, the value is still stored under this dataset's own type and the
+/// merged schema keeps the first-seen type — [`TypeMismatchPolicy`] only
+/// decides whether that is reported as a warning or an error.
+fn check_type_alignment(
+    policy: TypeMismatchPolicy,
+    kind: &str,
+    name: &str,
+    existing: Option<DType>,
+    new: &DType,
+) -> Result<()> {
+    let Some(m) = existing else { return Ok(()) };
+    if widen_dtype(&m, new).is_some() {
+        return Ok(());
+    }
+    match policy {
+        TypeMismatchPolicy::Error => Err(Error::TypeMismatch {
+            name: name.to_string(),
+            existing: format!("{m:?}"),
+            new: format!("{new:?}"),
+        }),
+        TypeMismatchPolicy::Warn => {
+            warn!(
+                kind,
+                name,
+                existing = ?m,
+                new = ?new,
+                "type mismatch: stored under this dataset's own type, but the merged \
+                 schema keeps the first-seen type"
+            );
+            Ok(())
         }
     }
-    Ok(())
 }
 
 /// Physical array-file name that holds dataset-level (global) attributes. One
@@ -167,6 +198,8 @@ pub struct DatasetView {
     /// Shared buffer of attribute writes not yet flushed to the `.af` files.
     pending_attrs: Arc<Mutex<PendingAttrs>>,
     codec: Codec,
+    /// How to report a type that can't merge with the collection's existing type.
+    on_type_mismatch: TypeMismatchPolicy,
 }
 
 impl DatasetView {
@@ -177,6 +210,7 @@ impl DatasetView {
         atlas_meta: Arc<Mutex<StoreMeta>>,
         pending_attrs: Arc<Mutex<PendingAttrs>>,
         codec: Codec,
+        on_type_mismatch: TypeMismatchPolicy,
     ) -> Self {
         Self {
             store,
@@ -185,6 +219,7 @@ impl DatasetView {
             atlas_meta,
             pending_attrs,
             codec,
+            on_type_mismatch,
         }
     }
 
@@ -229,7 +264,7 @@ impl DatasetView {
             let existing = merged_other(&meta, &self.name, |s| {
                 s.global_attrs.get(key).map(|d| d.0.clone())
             });
-            ensure_widenable(key, existing, &ty)?;
+            check_type_alignment(self.on_type_mismatch, "attribute", key, existing, &ty)?;
             meta.datasets
                 .entry(self.name.clone())
                 .or_default()
@@ -271,7 +306,7 @@ impl DatasetView {
             let existing = merged_other(&meta, &self.name, |s| {
                 s.array_attrs.get(array).and_then(|m| m.get(key)).map(|d| d.0.clone())
             });
-            ensure_widenable(key, existing, &ty)?;
+            check_type_alignment(self.on_type_mismatch, "array attribute", key, existing, &ty)?;
             meta.datasets
                 .entry(self.name.clone())
                 .or_default()
@@ -354,7 +389,7 @@ impl DatasetView {
             let existing = merged_other(&meta, &self.name, |s| {
                 s.arrays.get(array).map(|a| a.dtype.clone())
             });
-            ensure_widenable(array, existing, &new_dtype)?;
+            check_type_alignment(self.on_type_mismatch, "array", array, existing, &new_dtype)?;
         }
 
         let handle = self.cache.get_or_insert(&self.store, array, &self.codec);
@@ -578,6 +613,7 @@ pub(crate) async fn open_dataset_view(
     pending_attrs: Arc<Mutex<PendingAttrs>>,
     name: &str,
     codec: Codec,
+    on_type_mismatch: TypeMismatchPolicy,
 ) -> Result<DatasetView> {
     {
         let meta = atlas_meta.lock();
@@ -592,6 +628,7 @@ pub(crate) async fn open_dataset_view(
         atlas_meta,
         pending_attrs,
         codec,
+        on_type_mismatch,
     ))
 }
 
@@ -626,6 +663,7 @@ mod tests {
             shared_meta_with(name),
             Arc::new(Mutex::new(PendingAttrs::default())),
             Codec::default(),
+            TypeMismatchPolicy::default(),
         )
     }
 
@@ -1013,6 +1051,7 @@ mod tests {
                 meta.clone(),
                 pending.clone(),
                 Codec::default(),
+                TypeMismatchPolicy::default(),
             );
             view.define_array::<f32>("temp", vec!["x".into()], vec![2], None, None)
                 .await
@@ -1047,6 +1086,7 @@ mod tests {
             meta,
             Arc::new(Mutex::new(PendingAttrs::default())),
             Codec::default(),
+            TypeMismatchPolicy::default(),
         );
         assert_eq!(
             view.get_attribute("region").await.unwrap(),
@@ -1079,6 +1119,7 @@ mod tests {
             shared.clone(),
             pending.clone(),
             Codec::default(),
+            TypeMismatchPolicy::default(),
         );
         view_a
             .define_array::<f32>("arr", vec!["x".into()], vec![2], None, None)
@@ -1092,6 +1133,7 @@ mod tests {
             shared.clone(),
             pending.clone(),
             Codec::default(),
+            TypeMismatchPolicy::default(),
         );
         view_b
             .define_array::<f32>("arr", vec!["x".into()], vec![2], None, None)
