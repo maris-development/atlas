@@ -1045,6 +1045,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#atlas.Atlas.merged_schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        merged_schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#atlas.Atlas.open" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1347,6 +1358,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#atlas.Atlas.merged_schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        merged_schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#atlas.Atlas.open" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1630,7 +1652,7 @@ none).</p>
   </span>
 
 </h3>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">AtlasSource</span><span class="p">,</span> <span class="n">codec</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;zstd&#39;</span><span class="p">,</span> <span class="n">meta_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;json&#39;</span><span class="p">,</span> <span class="n">meta_compression</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;none&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atlas</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">AtlasSource</span><span class="p">,</span> <span class="n">codec</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;zstd&#39;</span><span class="p">,</span> <span class="n">meta_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;json&#39;</span><span class="p">,</span> <span class="n">meta_compression</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;none&#39;</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;warn&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atlas</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents ">
@@ -1774,6 +1796,33 @@ disk.</p>
 <div class="doc doc-object doc-function">
 
 
+<h3 id="atlas.Atlas.merged_schema" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">merged_schema</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-method descriptor"><code>method descriptor</code></small>
+  </span>
+
+</h3>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">merged_schema</span><span class="p">()</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span>
+</span></code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The collection-wide merged schema: every unique array (widened dtype +
+dims + per-variable attribute types) and every global attribute type.
+Returns <code>{"arrays": {name: {"dtype", "dimension_names", "attributes"}},
+"global_attributes": {key: dtype}}</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="atlas.Atlas.open" class="doc doc-heading">
             <span class="doc doc-object-name doc-function-name">open</span>
 
@@ -1783,7 +1832,7 @@ disk.</p>
   </span>
 
 </h3>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">open</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">AtlasSource</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atlas</span>
+<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">open</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">AtlasSource</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;warn&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atlas</span>
 </span></code></pre></div>
 
     <div class="doc doc-contents ">
@@ -1793,6 +1842,9 @@ disk.</p>
 filesystem path or an obstore-constructed store handle. Codec,
 metadata format and metadata compression are auto-detected from
 the on-disk files in both cases.</p>
+<p><code>on_type_mismatch</code> ("warn" | "error") sets the per-session policy for a
+dataset whose type can't merge with the collection's existing type for
+that array/attribute.</p>
 
 
     </div>

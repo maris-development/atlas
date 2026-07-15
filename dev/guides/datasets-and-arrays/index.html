@@ -565,6 +565,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#merged-schema-and-type-widening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merged schema and type widening
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1163,6 +1174,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#merged-schema-and-type-widening" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Merged schema and type widening
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1187,18 +1209,24 @@
 <h2 id="mental-model">Mental model</h2>
 <p>An <a href="../../reference/atlas/"><code>Atlas</code></a> is a directory-backed handle. It owns:</p>
 <ol>
-<li>An in-memory <strong><code>StoreMeta</code></strong> — every dataset, every array schema, every
-   attribute. Loaded once at <code>open</code>/<code>create</code>, mutated by every write,
-   persisted on <code>flush()</code>.</li>
+<li>An in-memory <strong><code>StoreMeta</code></strong> — the collection's schema: every dataset and
+   every array schema, plus the attribute-key namespace (which global and
+   per-variable attribute keys exist). Distinct dataset schemas are interned,
+   so thousands of identical schemas cost one copy. Loaded once at
+   <code>open</code>/<code>create</code>, mutated by every schema write, persisted to <code>atlas.json</code>
+   on <code>flush()</code>.</li>
 <li>A set of <strong>array file caches</strong> — one buffer per array name across the
-   whole store. Pending writes accumulate here until <code>flush()</code>.</li>
+   whole store. Pending array writes accumulate here until <code>flush()</code>.</li>
+<li>A <strong>pending-attribute buffer</strong> — attribute <em>values</em> set via <code>set_attribute</code>
+   / <code>set_array_attribute</code>, drained into the <code>.af</code> files on <code>flush()</code>.</li>
 </ol>
 <p>A <a href="../../reference/dataset-view/"><code>DatasetView</code></a> is a typed handle into a
 single logical dataset. It exposes the per-dataset array schemas, the
-per-array statistics, and the per-dataset attribute dict. Mutations through
-the view (<code>define_array</code>, <code>write_array</code>, <code>set_attribute</code>, …) update the
-parent atlas's in-memory state; nothing reaches disk until you flush the
-<em>atlas</em>.</p>
+per-array statistics, dataset-level (global) attributes, and per-variable
+attributes. Mutations through the view (<code>define_array</code>, <code>write_array</code>,
+<code>set_attribute</code>, <code>set_array_attribute</code>, …) update the parent atlas's in-memory
+state; attribute <em>values</em> live in the <code>.af</code> files, and nothing reaches disk
+until you flush the <em>atlas</em>.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Atlas ── StoreMeta (in-memory) ─┬─ DatasetView &quot;jan_2024&quot;
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>                                ├─ DatasetView &quot;feb_2024&quot;
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>                                └─ DatasetView ...
@@ -1296,6 +1324,34 @@ dataset — useful for "does this dataset declare it?" checks without raising.</
 </span></code></pre></div>
 <p>The array's bytes inside the shared physical file are tombstoned; reclaim
 the space with <a href="../durability/"><code>atlas.compact()</code></a>.</p>
+<h2 id="merged-schema-and-type-widening">Merged schema and type widening</h2>
+<p><code>atlas.json</code> also carries a collection-wide <strong>merged schema</strong> — every unique
+array (with its dtype, dimensions, and per-variable attribute types) and every
+global attribute type, folded across all datasets. Read it with
+<code>atlas.merged_schema()</code>:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">merged</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">merged_schema</span><span class="p">()</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;arrays&quot;</span><span class="p">][</span><span class="s2">&quot;temperature&quot;</span><span class="p">][</span><span class="s2">&quot;dtype&quot;</span><span class="p">]</span>        <span class="c1"># widened dtype across datasets</span>
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;arrays&quot;</span><span class="p">][</span><span class="s2">&quot;temperature&quot;</span><span class="p">][</span><span class="s2">&quot;attributes&quot;</span><span class="p">]</span>   <span class="c1"># {attr_key: dtype}</span>
+</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;global_attributes&quot;</span><span class="p">]</span>                     <span class="c1"># {attr_key: dtype}</span>
+</span></code></pre></div>
+<p>When the same array name or attribute key appears in multiple datasets with
+different types, the merged type is <strong>widened</strong> — but only within numeric types
+(<code>int16</code> ∪ <code>int32</code> → <code>int32</code>, <code>int32</code> ∪ <code>float32</code> → <code>float64</code>) or between
+<code>string</code> and <code>timestamp</code> (→ <code>string</code>).</p>
+<p>Anything else can't merge (e.g. an <code>int32</code> array in one dataset and a <code>string</code>
+array under the same name in another). The dataset is <strong>still stored</strong> under its
+own type and reads back normally; the merged schema just keeps the
+<strong>first-seen</strong> type. <code>on_type_mismatch</code> decides how that's reported:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># &quot;warn&quot; (default): stored, logs a warning, merged keeps the first type</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># &quot;error&quot;: the mismatching define_array / set_attribute raises ValueError</span>
+</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="o">=</span><span class="s2">&quot;error&quot;</span><span class="p">)</span>
+</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="o">=</span><span class="s2">&quot;error&quot;</span><span class="p">)</span>
+</span></code></pre></div>
+<p>It's a per-session choice — it isn't stored in <code>atlas.json</code>, so pass it each
+time you open the collection.</p>
 
 
 

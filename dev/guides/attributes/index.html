@@ -573,10 +573,32 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#setting-and-getting" class="md-nav__link">
+  <a href="#dataset-level-global-attributes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Setting and getting
+        Dataset-level (global) attributes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-variable-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-variable attributes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durability
       
     </span>
   </a>
@@ -621,17 +643,6 @@
     <span class="md-ellipsis">
       
         JSON-encoded "complex" attributes
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-attributes-cant-do" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What attributes can't do
       
     </span>
   </a>
@@ -1076,10 +1087,32 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#setting-and-getting" class="md-nav__link">
+  <a href="#dataset-level-global-attributes" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Setting and getting
+        Dataset-level (global) attributes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-variable-attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-variable attributes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#durability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Durability
       
     </span>
   </a>
@@ -1130,17 +1163,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#what-attributes-cant-do" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What attributes can't do
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1162,11 +1184,14 @@
 
 
 <h1 id="attributes">Attributes</h1>
-<p>Each <a href="../../reference/dataset-view/"><code>DatasetView</code></a> carries a typed
-attribute dict. Attributes are stored alongside the dataset's array
-schemas inside <code>atlas.json</code> (or <code>atlas.msgpack</code>) — they're cheap to read
-and don't load any array bytes.</p>
-<h2 id="setting-and-getting">Setting and getting</h2>
+<p>Each <a href="../../reference/dataset-view/"><code>DatasetView</code></a> carries typed attributes at
+two levels: <strong>dataset-level</strong> (global) attributes and <strong>per-variable</strong>
+attributes on individual arrays. Attribute <em>values</em> are stored in the <code>.af</code>
+files — global values in a reserved <code>_global</code> file, per-variable values on the
+variable's own file. Only the attribute <em>key names</em> are recorded in
+<code>atlas.json</code> (as part of the schema), so listing which attributes exist is
+cheap and doesn't load any array bytes.</p>
+<h2 id="dataset-level-global-attributes">Dataset-level (global) attributes</h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">create_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;month&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>            <span class="c1"># inferred int</span>
@@ -1177,8 +1202,24 @@ and don't load any array bytes.</p>
 </span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="n">ds</span><span class="o">.</span><span class="n">get_attribute</span><span class="p">(</span><span class="s2">&quot;missing&quot;</span><span class="p">)</span>             <span class="c1"># -&gt; None</span>
 </span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="n">ds</span><span class="o">.</span><span class="n">attributes</span><span class="p">()</span>                         <span class="c1"># -&gt; {&quot;month&quot;: 1, &quot;station&quot;: &quot;KNMI&quot;, &quot;calibrated&quot;: True}</span>
 </span></code></pre></div>
+<h2 id="per-variable-attributes">Per-variable attributes</h2>
+<p>Attributes can also attach to a specific array (e.g. <code>units</code> on <code>temperature</code>):</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">,</span> <span class="s2">&quot;lon&quot;</span><span class="p">],</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_array_attribute</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="s2">&quot;units&quot;</span><span class="p">,</span> <span class="s2">&quot;degC&quot;</span><span class="p">)</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_array_attribute</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="s2">&quot;valid_range&quot;</span><span class="p">,</span> <span class="p">[</span><span class="o">-</span><span class="mf">40.0</span><span class="p">,</span> <span class="mf">60.0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;f64&quot;</span><span class="p">)</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">ds</span><span class="o">.</span><span class="n">get_array_attribute</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="s2">&quot;units&quot;</span><span class="p">)</span>   <span class="c1"># -&gt; &quot;degC&quot;</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_attributes</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>               <span class="c1"># -&gt; {&quot;units&quot;: &quot;degC&quot;, &quot;valid_range&quot;: [...]}</span>
+</span></code></pre></div>
+<p><code>set_array_attribute</code> raises <code>KeyError</code> if the array isn't defined in the
+dataset.</p>
+<h2 id="durability">Durability</h2>
+<p>Attribute writes are buffered in memory and only reach disk on
+<a href="../durability/"><code>atlas.flush()</code></a> (or leaving a <code>with atlas:</code> block), together
+with the array data. The reserved <code>_global/data.af</code> file is created lazily —
+only once a dataset actually sets a global attribute.</p>
 <h2 id="the-on-disk-type-system">The on-disk type system</h2>
-<p>Atlas attributes are stored as one of <strong>five</strong> wire types:</p>
+<p>Atlas's <code>Attr</code> type mirrors the underlying <code>array-format</code> <code>AttributeValue</code>:</p>
 <table>
 <thead>
 <tr>
@@ -1192,11 +1233,15 @@ and don't load any array bytes.</p>
 <td><code>bool</code></td>
 </tr>
 <tr>
-<td><code>int64</code></td>
+<td><code>int8</code> / <code>int16</code> / <code>int32</code> / <code>int64</code></td>
 <td><code>int</code></td>
 </tr>
 <tr>
-<td><code>float64</code></td>
+<td><code>uint8</code> / <code>uint16</code> / <code>uint32</code> / <code>uint64</code></td>
+<td><code>int</code></td>
+</tr>
+<tr>
+<td><code>float32</code> / <code>float64</code></td>
 <td><code>float</code></td>
 </tr>
 <tr>
@@ -1204,69 +1249,59 @@ and don't load any array bytes.</p>
 <td><code>str</code></td>
 </tr>
 <tr>
+<td><code>binary</code></td>
+<td><code>bytes</code></td>
+</tr>
+<tr>
 <td><code>timestamp_nanoseconds</code></td>
-<td><code>numpy.datetime64[ns]</code></td>
+<td><code>int</code> (nanoseconds; stored as an RFC 3339 string)</td>
+</tr>
+<tr>
+<td>any of the above as a list</td>
+<td><code>list</code></td>
 </tr>
 </tbody>
 </table>
 <p>Type is inferred from the Python value by default — <code>int</code> → <code>int64</code>,
-<code>float</code> → <code>float64</code>, <code>str</code> → <code>string</code>, <code>bool</code> → <code>bool</code>. Numpy scalars are
-unwrapped first (<code>np.int32(5)</code> is stored as <code>int64</code>).</p>
+<code>float</code> → <code>float64</code>, <code>str</code> → <code>string</code>, <code>bytes</code> → <code>binary</code>, <code>bool</code> → <code>bool</code>.</p>
 <h2 id="overriding-inferred-types">Overriding inferred types</h2>
-<p>Pass <code>dtype=</code> to narrow or force a specific type:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;sensor_id&quot;</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;int8&quot;</span><span class="p">)</span>          <span class="c1"># range-checked → int64 on disk</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;ratio&quot;</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">)</span>         <span class="c1"># widened → float64 on disk</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;observed_at&quot;</span><span class="p">,</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>                 <span class="n">np</span><span class="o">.</span><span class="n">datetime64</span><span class="p">(</span><span class="s2">&quot;2024-01-15T10:00&quot;</span><span class="p">,</span> <span class="s2">&quot;ns&quot;</span><span class="p">),</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>                 <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;timestamp_nanoseconds&quot;</span><span class="p">)</span>
+<p>Pass <code>dtype=</code> to narrow or force a specific type (works on both
+<code>set_attribute</code> and <code>set_array_attribute</code>):</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;sensor_id&quot;</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;int8&quot;</span><span class="p">)</span>          <span class="c1"># stored as int8, range-checked</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;ratio&quot;</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">)</span>         <span class="c1"># stored as float32</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;observed_at&quot;</span><span class="p">,</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>                 <span class="n">np</span><span class="o">.</span><span class="n">datetime64</span><span class="p">(</span><span class="s2">&quot;2024-01-15T10:00&quot;</span><span class="p">,</span> <span class="s2">&quot;ns&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;int64&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">item</span><span class="p">(),</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>                 <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;timestamp_nanoseconds&quot;</span><span class="p">)</span>
 </span></code></pre></div>
-<p>Important caveats:</p>
-<ul>
-<li><strong>All integer hints are coerced to <code>int64</code></strong> on disk. <code>dtype="int8"</code>
-  range-checks the value but doesn't shrink the storage representation.</li>
-<li><strong>All float hints are coerced to <code>float64</code></strong> on disk. <code>dtype="float32"</code>
-  is accepted but doesn't change the bytes.</li>
-<li>The narrower hints exist so you can express <em>intent</em> and get runtime
-  validation; the storage representation is always the wider type.</li>
-</ul>
+<p>Unlike earlier versions, width hints now preserve the storage type: <code>dtype="int8"</code>
+stores an 8-bit integer, not a widened <code>int64</code>. A <code>timestamp_nanoseconds</code>
+attribute is stored as an RFC 3339 string and restored to a timestamp on read.</p>
 <h2 id="per-variable-xarray-attributes">Per-variable xarray attributes</h2>
-<p>When you write an <code>xr.Dataset</code> via <code>atlas.add_xarray_dataset(ds, name)</code>,
-per-variable attributes are <strong>flattened</strong> as <code>{var}.{attr}</code> and stored
-alongside the dataset's own <code>attrs</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">xr</span><span class="o">.</span><span class="n">Dataset</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="n">data_vars</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="n">xr</span><span class="o">.</span><span class="n">DataArray</span><span class="p">(</span><span class="n">arr</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">,</span> <span class="s2">&quot;lon&quot;</span><span class="p">],</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>                                            <span class="n">attrs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;C&quot;</span><span class="p">})},</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">attrs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;station&quot;</span><span class="p">:</span> <span class="s2">&quot;KNMI&quot;</span><span class="p">},</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">)</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># In atlas:</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">view</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="n">view</span><span class="o">.</span><span class="n">attributes</span><span class="p">()</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="c1"># {&quot;station&quot;: &quot;KNMI&quot;, &quot;temperature.units&quot;: &quot;C&quot;}</span>
+<p>When you write an <code>xr.Dataset</code> via <code>atlas.add_xarray_dataset(ds, name)</code>, each
+variable's <code>attrs</code> are stored as <strong>real per-variable attributes</strong> on that
+variable's array, and the dataset's own <code>attrs</code> become dataset-level
+attributes:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">ds</span> <span class="o">=</span> <span class="n">xr</span><span class="o">.</span><span class="n">Dataset</span><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">data_vars</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="n">xr</span><span class="o">.</span><span class="n">DataArray</span><span class="p">(</span><span class="n">arr</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">,</span> <span class="s2">&quot;lon&quot;</span><span class="p">],</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>                                            <span class="n">attrs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;units&quot;</span><span class="p">:</span> <span class="s2">&quot;C&quot;</span><span class="p">})},</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">attrs</span><span class="o">=</span><span class="p">{</span><span class="s2">&quot;station&quot;</span><span class="p">:</span> <span class="s2">&quot;KNMI&quot;</span><span class="p">},</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="p">)</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="n">atlas</span><span class="o">.</span><span class="n">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">,</span> <span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">view</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="n">view</span><span class="o">.</span><span class="n">attributes</span><span class="p">()</span>                        <span class="c1"># {&quot;station&quot;: &quot;KNMI&quot;}</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">view</span><span class="o">.</span><span class="n">array_attributes</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>     <span class="c1"># {&quot;units&quot;: &quot;C&quot;}</span>
 </span></code></pre></div>
-<p>On read, <code>atlas.open_as_xarray_dataset("jan_2024")</code> reverses the flattening so the
-per-variable attrs end up back on the right <code>DataArray</code>. The dataset-level
-attrs come through directly.</p>
+<p>On read, <code>atlas.open_as_xarray_dataset("jan_2024")</code> puts each variable's attrs
+back on the right <code>DataArray</code> and the global attrs back on the Dataset.</p>
 <p>See <a href="../xarray/">xarray integration</a> for the full storage convention.</p>
 <h2 id="json-encoded-complex-attributes">JSON-encoded "complex" attributes</h2>
-<p>xarray attribute values are sometimes lists, ndarrays, or nested dicts —
-none of which fit into atlas's five on-disk types. The xarray bridge handles
-this by JSON-encoding the value and prefixing the resulting string with
-<code>json:</code>. On read the prefix is detected and decoded transparently. You
-generally don't need to think about this, but it's why some attribute
-values come back as strings starting with <code>json:</code> if you read them through
-the raw <code>DatasetView.attributes()</code> API.</p>
-<h2 id="what-attributes-cant-do">What attributes can't do</h2>
-<ul>
-<li>They're per-dataset, not per-array. Per-variable attrs in xarray
-  round-trip via the <code>{var}.{attr}</code> flattening, but the raw <code>set_attribute</code>
-  / <code>get_attribute</code> API has no array key. Use the array name as a prefix
-  if you need that.</li>
-<li>There's no list-valued attribute type. Use a JSON-encoded string
-  (<code>set_attribute("tags", "json:" + json.dumps([...]))</code>) or, better, the
-  xarray bridge which handles this automatically.</li>
-</ul>
+<p>xarray attribute values are sometimes nested dicts or other structures that
+don't map to atlas's on-disk types. The xarray bridge JSON-encodes those and
+prefixes the string with <code>json:</code>, decoding transparently on read. You generally
+don't need to think about this, but it's why some values come back as strings
+starting with <code>json:</code> if you read them through the raw attribute API. Simple
+lists of scalars are stored natively as typed-list attributes.</p>
 
 
 
