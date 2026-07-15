@@ -92,10 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ds.write_array("time", vec![0], time.view()).await?;
 
         // --- per-dataset attributes ---
-        ds.set_attribute("month", Attr::Int64(1));
-        ds.set_attribute("year", Attr::Int64(2024));
-        ds.set_attribute("station", Attr::String("KNMI".into()));
-        ds.set_attribute("has_qc", Attr::Bool(true));
+        ds.set_attribute("month", Attr::Int64(1))?;
+        ds.set_attribute("year", Attr::Int64(2024))?;
+        ds.set_attribute("station", Attr::String("KNMI".into()))?;
+        ds.set_attribute("has_qc", Attr::Bool(true))?;
     }
     s.flush().await?;
     println!("jan_2024: flushed");
@@ -139,8 +139,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ds.write_array("humidity", vec![0, 0], humidity.view())
             .await?;
 
-        ds.set_attribute("month", Attr::Int64(2));
-        ds.set_attribute("year", Attr::Int64(2024));
+        ds.set_attribute("month", Attr::Int64(2))?;
+        ds.set_attribute("year", Attr::Int64(2024))?;
     }
     s.flush().await?;
     println!("feb_2024: flushed");
@@ -156,9 +156,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let wind = Array1::from_iter((0..NTIME).map(|i| 3.0 + (i as f64) * 0.1)).into_dyn();
         ds.write_array("wind_speed", vec![0], wind.view()).await?;
 
-        ds.set_attribute("lat", Attr::Float64(52.1));
-        ds.set_attribute("lon", Attr::Float64(5.18));
-        ds.set_attribute("name", Attr::String("De Bilt".into()));
+        ds.set_attribute("lat", Attr::Float64(52.1))?;
+        ds.set_attribute("lon", Attr::Float64(5.18))?;
+        ds.set_attribute("name", Attr::String("De Bilt".into()))?;
     }
     s.flush().await?;
     println!("station_obs: flushed");
@@ -178,18 +178,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Read jan_2024 ---
     let ds_jan = s2.open_dataset("jan_2024").await?;
-    let meta = ds_jan.meta();
 
     println!("\njan_2024 attributes:");
-    for (k, v) in &meta.attributes {
+    for (k, v) in &ds_jan.attributes().await? {
         println!("  {k} = {v:?}");
     }
 
     println!("\njan_2024 array schemas:");
-    let mut array_names: Vec<&str> = meta.arrays.keys().map(|s| s.as_str()).collect();
+    let ds_schema = ds_jan.schema();
+    let mut array_names: Vec<&str> = ds_schema.arrays.keys().map(|s| s.as_str()).collect();
     array_names.sort();
     for name in &array_names {
-        let schema = &meta.arrays[*name];
+        let schema = &ds_schema.arrays[*name];
         println!(
             "  {name}: dtype={:?}  shape={:?}  chunk_shape={:?}  dims={:?}  codec={:?}",
             schema.dtype, schema.shape, schema.chunk_shape, schema.dimension_names, schema.codec
@@ -253,7 +253,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // --- Read station_obs ---
     let ds_obs = s2.open_dataset("station_obs").await?;
     println!("\nstation_obs attributes:");
-    for (k, v) in &ds_obs.meta().attributes {
+    for (k, v) in &ds_obs.attributes().await? {
         println!("  {k} = {v:?}");
     }
     let wind = ds_obs
@@ -283,9 +283,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Verify that schema dtype matches what we defined
-    assert_eq!(meta.arrays["temperature"].dtype, DType::Float32);
-    assert_eq!(meta.arrays["pressure"].dtype, DType::Float64);
-    assert_eq!(meta.arrays["time"].dtype, DType::Int64);
+    assert_eq!(ds_schema.arrays["temperature"].dtype, DType::Float32);
+    assert_eq!(ds_schema.arrays["pressure"].dtype, DType::Float64);
+    assert_eq!(ds_schema.arrays["time"].dtype, DType::Int64);
     println!("dtype assertions passed ✓");
 
     // ── Statistics ────────────────────────────────────────────────────────────

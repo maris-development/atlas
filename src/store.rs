@@ -8,8 +8,8 @@ use tracing::{debug, info, instrument};
 use crate::{
     Error, Result,
     config::{Codec, MetaFormat, StoreConfig},
-    dataset::{ArrayCache, DatasetView, open_dataset_view},
-    meta::{StoreMeta, load_meta, save_meta},
+    dataset::{ArrayCache, DatasetView, GLOBAL_ATTRS_ARRAY, PendingAttrs, open_dataset_view},
+    meta::{STORE_FORMAT_VERSION, StoreMeta, load_meta, save_meta},
 };
 
 /// Handle to an opened or newly created atlas store.
@@ -25,6 +25,9 @@ use crate::{
 pub struct Atlas {
     store: Arc<dyn ObjectStore>,
     meta: Arc<Mutex<StoreMeta>>,
+    /// Attribute writes buffered until [`Atlas::flush`], keeping mutations
+    /// off-disk and attribute setters non-blocking.
+    pending_attrs: Arc<Mutex<PendingAttrs>>,
     cache: Arc<ArrayCache>,
     codec: Codec,
     meta_format: MetaFormat,
@@ -51,6 +54,7 @@ impl Atlas {
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
+            pending_attrs: Arc::new(Mutex::new(PendingAttrs::default())),
             cache: default_cache(),
             codec,
             meta_format,
@@ -62,12 +66,17 @@ impl Atlas {
     #[instrument(skip(store, config), fields(prefix = %prefix, codec = ?config.codec, meta_format = ?config.meta_format, meta_compression = ?config.meta_compression))]
     pub async fn create(store: Arc<dyn ObjectStore>, prefix: Path, config: StoreConfig) -> Result<Self> {
         let store = prefixed(store, prefix);
-        let meta = StoreMeta { version: 1, codec: config.codec, ..Default::default() };
+        let meta = StoreMeta {
+            version: STORE_FORMAT_VERSION,
+            codec: config.codec,
+            ..Default::default()
+        };
         save_meta(&store, &meta, config.meta_format, config.meta_compression).await?;
         info!("created atlas store");
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
+            pending_attrs: Arc::new(Mutex::new(PendingAttrs::default())),
             cache: default_cache(),
             codec: config.codec,
             meta_format: config.meta_format,
@@ -143,6 +152,7 @@ impl Atlas {
             self.cache.clone(),
             name.to_string(),
             self.meta.clone(),
+            self.pending_attrs.clone(),
             self.codec.clone(),
         ))
     }
@@ -156,6 +166,7 @@ impl Atlas {
             self.store.clone(),
             self.cache.clone(),
             self.meta.clone(),
+            self.pending_attrs.clone(),
             name,
             self.codec.clone(),
         )
@@ -176,6 +187,8 @@ impl Atlas {
                 .shift_remove(name)
                 .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?
         };
+        // Drop any buffered (not-yet-flushed) attribute writes for this dataset.
+        self.pending_attrs.lock().remove_dataset(name);
         debug!(arrays = dataset_meta.arrays.len(), "deleting dataset");
         for (array_name, schema) in &dataset_meta.arrays {
             let handle = self
@@ -185,6 +198,18 @@ impl Atlas {
             let mut guard = arc.write().await;
             guard.delete(name)?;
             // No flush here; persistence happens on Atlas::flush().
+        }
+        // Tombstone the dataset's entry in the global-attributes file, if it
+        // was ever created. `get_existing` never creates the file, so a store
+        // that never set a global attribute stays free of `_global/data.af`.
+        let global = self
+            .cache
+            .get_or_insert(&self.store, GLOBAL_ATTRS_ARRAY, &self.codec);
+        if let Some(arc) = global.get_existing().await? {
+            let mut guard = arc.write().await;
+            if guard.get_array(name).is_ok() {
+                guard.delete(name)?;
+            }
         }
         Ok(())
     }
@@ -217,6 +242,15 @@ impl Atlas {
             .collect();
         arrays.sort();
         arrays
+    }
+
+    /// The collection-wide **merged schema**: every unique array (with its
+    /// dtype widened across datasets and its named dimensions) and every unique
+    /// attribute key with its widened type. This is the same summary written
+    /// into `atlas.json`; it is descriptive only — reads always use each
+    /// dataset's own schema. Computed from the in-memory metadata, no disk I/O.
+    pub fn merged_schema(&self) -> crate::MergedSchema {
+        crate::meta::compute_merged(&self.meta.lock().datasets)
     }
 
     /// Returns the dtype of `array` if any dataset in this store declares it.
@@ -460,7 +494,11 @@ impl Atlas {
     /// on flush).
     #[instrument(skip(self))]
     pub async fn flush(&mut self) -> Result<()> {
-        let snapshot = self.force_init_all_known_arrays().await?;
+        // Apply buffered attribute writes into the array files (creating the
+        // `_global` file on demand), then commit every touched file.
+        self.drain_pending_attrs().await?;
+        self.force_init_all_known_arrays().await?;
+        let snapshot = self.all_initialized_files();
         let files = snapshot.len();
         debug!(files, "flushing array files");
         for arc in snapshot {
@@ -474,17 +512,73 @@ impl Atlas {
     }
 
     /// Compact every known array file in place (reclaims tombstoned space).
-    /// Force-initializes every array referenced in meta.
+    /// Drains buffered attributes and commits them first, then force-initializes
+    /// every array referenced in meta.
     #[instrument(skip(self))]
     pub async fn compact(&mut self) -> Result<()> {
-        let snapshot = self.force_init_all_known_arrays().await?;
+        self.drain_pending_attrs().await?;
+        self.force_init_all_known_arrays().await?;
+        let snapshot = self.all_initialized_files();
         let files = snapshot.len();
         debug!(files, "compacting array files");
         for arc in snapshot {
-            arc.write().await.compact().await?;
+            let mut guard = arc.write().await;
+            // Commit any pending (incl. just-drained attributes) so the compact
+            // merges them into the new base.
+            guard.flush().await?;
+            guard.compact().await?;
         }
         info!(files, "compacted atlas store");
         Ok(())
+    }
+
+    /// Drain the buffered attribute writes into their `.af` files. For each
+    /// `(file, dataset)` this ensures the dataset's entry exists (defining an
+    /// empty-shape scalar in the `_global` file when needed) and sets every
+    /// buffered attribute. The changes land in each file's pending layer and
+    /// are committed by the subsequent flush/compact.
+    async fn drain_pending_attrs(&self) -> Result<()> {
+        let drained = self.pending_attrs.lock().drain_all();
+        for ((file, dataset), attrs) in drained {
+            let codec = self.file_codec(&file);
+            let handle = self.cache.get_or_insert(&self.store, &file, &codec);
+            let arc = handle.get().await?;
+            let mut guard = arc.write().await;
+            // The `_global` file has no data arrays defined up front — create a
+            // scalar placeholder entry for this dataset if it's missing.
+            if guard.get_array(&dataset).is_err() {
+                guard.define_array::<u8>(dataset.clone(), vec![], vec![], None, None)?;
+            }
+            for (key, value) in attrs {
+                guard.set_attribute(&dataset, &key, value.into())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Codec to open a physical file with: the store default for the global
+    /// attributes file, otherwise the array's recorded codec (any dataset that
+    /// declares it), falling back to the store codec.
+    fn file_codec(&self, file: &str) -> Codec {
+        if file == GLOBAL_ATTRS_ARRAY {
+            return self.codec.clone();
+        }
+        let meta = self.meta.lock();
+        meta.datasets
+            .values()
+            .find_map(|d| d.arrays.get(file).map(|s| s.codec.clone()))
+            .unwrap_or_else(|| self.codec.clone())
+    }
+
+    /// Every array file currently initialized in the cache (including
+    /// `_global` and any read-opened file), deduped by handle.
+    fn all_initialized_files(&self) -> Vec<Arc<tokio::sync::RwLock<array_format::ArrayFile>>> {
+        self.cache
+            .files
+            .read()
+            .values()
+            .filter_map(|a| a.try_get())
+            .collect()
     }
 
     /// Ensures every array referenced by any dataset in meta has an

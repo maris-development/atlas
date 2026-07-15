@@ -147,8 +147,8 @@ picklable, so call `.compute()` before handing off to distributed/multiprocessin
 | Item | How it's stored |
 | --- | --- |
 | Each coord / data variable | A separate array, with `dims` mapped 1:1. |
-| Dataset attrs | Dataset attributes, plain keys. |
-| Per-variable attrs | Flattened as `{var}.{attr}` at the dataset attr level. |
+| Dataset attrs | Dataset-level (global) attributes, plain keys. |
+| Per-variable attrs | Real per-variable attributes on each variable's array. |
 | Per-variable `_FillValue` | Consumed by `define_array` as a typed fill value (source `Dataset.attrs` is not mutated). See [Missing data](#missing-data). |
 | Coord vs data_var distinction | JSON list in the internal `_pyatlas_coords` attr. |
 | Non-scalar attr values (list, ndarray) | JSON-encoded string with a `json:` prefix marker. |
@@ -229,8 +229,10 @@ handle instead of a local path. The path-based local-filesystem API works withou
 | `delete_array(name)` | Tombstone the array within this dataset. |
 | `array_meta(name) -> dict \| None` | `{"dtype", "shape", "chunk_shape", "dimension_names"}`. |
 | `array_stats(name) -> dict \| None` | `{"row_count", "null_count", "min", "max"}` — populated after `flush()`. |
-| `set_attribute(key, value, dtype=None)` | Type inferred from the Python value; pass `dtype` to override (e.g. `"int8"`, `"float32"`, `"timestamp_nanoseconds"`). On disk: bool, int64, float64, string, timestamp_nanoseconds. |
-| `get_attribute(key)` / `attributes()` | Single attribute or dict of all. |
+| `set_attribute(key, value, dtype=None)` | Set a dataset-level (global) attribute. Type inferred from the Python value; pass `dtype` to override (e.g. `"int8"`, `"float32"`, `"timestamp_nanoseconds"`). Values are stored in the `_global` `.af` file. |
+| `get_attribute(key)` / `attributes()` | Single global attribute or dict of all. |
+| `set_array_attribute(array, key, value, dtype=None)` | Set a per-variable attribute on `array` (e.g. `units`); `KeyError` if the array isn't defined. |
+| `get_array_attribute(array, key)` / `array_attributes(array)` | Single per-variable attribute or dict of all, for `array`. |
 
 `DatasetView` does **not** expose its own `flush` / `compact` — both go through the parent `Atlas`.
 

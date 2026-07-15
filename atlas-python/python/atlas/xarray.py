@@ -320,8 +320,9 @@ def _write_xarray_to_view(
     """Populate an empty `DatasetView` with the contents of an xarray Dataset.
 
     Writes every coordinate and data variable as an atlas array, the
-    coordinate names as ``_pyatlas_coords`` (JSON list), all dataset attrs,
-    and all per-variable attrs flattened as ``{var}.{attr}``.
+    coordinate names as ``_pyatlas_coords`` (JSON list), all dataset attrs
+    (as dataset-global attributes), and each variable's attrs as real
+    per-variable attributes on that variable's array.
     """
     coord_names = [str(n) for n in ds.coords.keys()]
 
@@ -398,10 +399,11 @@ def _write_xarray_to_view(
                 stacklevel=2,
             )
 
-        # Per-variable attrs → flattened as `{var}.{attr}` (sans `_FillValue`).
+        # Per-variable attrs → stored as real per-array attributes on the
+        # variable's own `.af` file (sans `_FillValue`).
         for attr_key, attr_val in var_attrs.items():
             encoded = _encode_attr_value(attr_val)
-            view.set_attribute(_sanitize_str(f"{var_name}.{attr_key}"), encoded)
+            view.set_array_attribute(var_name, _sanitize_str(str(attr_key)), encoded)
 
     # Dataset-level attrs
     for attr_key, attr_val in ds.attrs.items():
@@ -496,7 +498,6 @@ def _view_to_xarray(view: "DatasetView", force_lazy: bool = False) -> "xr.Datase
     import xarray as xr
 
     array_names = list(view.list_arrays())
-    array_name_set = set(array_names)
 
     # Coord/var assignment
     coords_marker = view.get_attribute(_COORDS_ATTR)
@@ -544,19 +545,20 @@ def _view_to_xarray(view: "DatasetView", force_lazy: bool = False) -> "xr.Datase
         else:
             data_vars[name] = entry
 
-    # Split dataset attrs vs flattened per-var attrs
+    # Dataset-level attrs come from the reserved `_global` file (minus the
+    # internal coord marker); each variable's attrs come from its own array.
     raw_attrs = dict(view.attributes())
     raw_attrs.pop(_COORDS_ATTR, None)
+    dataset_attrs: dict[str, Any] = {
+        key: _decode_attr_value(value) for key, value in raw_attrs.items()
+    }
 
-    dataset_attrs: dict[str, Any] = {}
-    per_var_attrs: dict[str, dict[str, Any]] = {n: {} for n in array_names}
-    for key, value in raw_attrs.items():
-        if "." in key:
-            var, rest = key.split(".", 1)
-            if var in array_name_set:
-                per_var_attrs[var][rest] = _decode_attr_value(value)
-                continue
-        dataset_attrs[key] = _decode_attr_value(value)
+    per_var_attrs: dict[str, dict[str, Any]] = {}
+    for name in array_names:
+        per_var_attrs[name] = {
+            key: _decode_attr_value(value)
+            for key, value in dict(view.array_attributes(name)).items()
+        }
 
     # Restore _FillValue for any array that was defined with one. The default
     # NaN (float) / NaT (datetime) / "" (string) sentinels are skipped: they're

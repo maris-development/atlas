@@ -21,26 +21,30 @@ A directory-based store for thousands of named datasets, each holding N-dimensio
 
 `atlas` is designed for workloads where you have a large collection of similarly-shaped datasets — such as one dataset per time step, sensor station, or simulation run — and you want to query a single variable (e.g. `temperature`) across all of them efficiently.
 
-Each dataset is a named group of N-dimensional arrays with typed per-dataset attributes. Datasets that share an array name (e.g. every `jan_2024`, `feb_2024`, … all have `temperature`) are stored together in the same physical file, keyed by dataset name inside the file.
+Each dataset is a named group of N-dimensional arrays with typed attributes — both dataset-level (global) attributes and per-variable attributes. Datasets that share an array name (e.g. every `jan_2024`, `feb_2024`, … all have `temperature`) are stored together in the same physical file, keyed by dataset name inside the file.
 
 ```text
 my_store/
-├── atlas.json               ← dataset registry and per-dataset attributes (JSON)
+├── atlas.json               ← interned per-dataset schema + attribute-key namespace (JSON)
+├── _global/
+│   └── data.af         ← dataset-level (global) attribute values, one entry per dataset
 ├── temperature/
-│   └── data.af         ← one ArrayFile holding temperature for every dataset
+│   └── data.af         ← one ArrayFile: temperature + its per-variable attributes, per dataset
 ├── pressure/
 │   └── data.af
 └── time/
     └── data.af
 ```
 
+`atlas.json` holds only the **schema** of the collection. Attribute **values** live in the `.af` files: per-variable attributes on the variable's own file, and dataset-level attributes in the reserved `_global` file.
+
 ---
 
 ## Durability model
 
-`atlas.json` is read **once** when the store is opened or created. Every subsequent mutation — `create_dataset`, `define_array`, `set_attribute`, `delete_array`, `delete_dataset` — only touches the in-memory `StoreMeta`; writes to `ArrayFile`s buffer inside the per-array in-memory layer. **Nothing reaches disk until `Atlas::flush()` (or `Atlas::close()`).** Dropping an `Atlas` without flushing abandons every pending in-memory write.
+`atlas.json` is read **once** when the store is opened or created. Every subsequent mutation — `create_dataset`, `define_array`, `set_attribute`, `set_array_attribute`, `delete_array`, `delete_dataset` — only touches in-memory state; array writes buffer inside the per-array in-memory layer and attribute writes buffer in a pending-attribute map. **Nothing reaches disk until `Atlas::flush()` (or `Atlas::close()`).** Dropping an `Atlas` without flushing abandons every pending in-memory write.
 
-A single `Atlas::flush()` walks every cached `ArrayFile` (writing deltas + stats) and then serialises the in-memory `StoreMeta` to `atlas.json`. This gives one durability boundary for the whole store: N datasets ⇒ one delta file per touched array name (not one per dataset) and one `atlas.json` rewrite (not N).
+A single `Atlas::flush()` drains the buffered attributes into their `.af` files, walks every cached `ArrayFile` (writing deltas + stats), and then serialises the in-memory schema to `atlas.json`. This gives one durability boundary for the whole store: N datasets ⇒ one delta file per touched array name (not one per dataset) and one `atlas.json` rewrite (not N).
 
 `DatasetView` is a borrowed handle into the atlas's shared meta — it has no `flush()` of its own.
 
@@ -50,14 +54,16 @@ A single `Atlas::flush()` walks every cached `ArrayFile` (writing deltas + stats
 
 ### `atlas.json`
 
-The registry is a plain JSON file written on `Atlas::flush()` / `Atlas::close()`. It stores:
+The schema is a plain JSON file written on `Atlas::flush()` / `Atlas::close()`. It stores:
 
-- **Store version** — for future format upgrades.
-- **Dataset names** — the complete list of datasets in the store.
-- **Per-dataset attributes** — typed key-value pairs serialized as plain JSON values: bool, 64-bit integer, 64-bit float, UTF-8 string, or an RFC 3339 nanosecond-precision timestamp string (e.g. `"2023-11-15T07:33:20.123456789Z"`). Atlas's `Attr` enum has five variants (`Bool`/`Int64`/`Float64`/`String`/`TimestampNanoseconds`); there are no narrow integer/float types on disk.
-- **Array schemas** — per array: dtype, shape, chunk shape, named dimensions, and the codec used when the array was first written.
+- **Store version** — for format upgrades. The current version is `2`; stores written by an older atlas are rejected on open (re-export to upgrade).
+- **Interned schema pool** — each *distinct* per-dataset schema is stored once and referenced by index. A dataset's schema is its array schemas (per array: dtype, shape, chunk shape, named dimensions, codec) plus its **attribute-key namespace** (the names of its global and per-variable attribute keys). A collection of thousands of homogeneous datasets stores its schema a single time.
+- **Dataset registry** — a map of dataset name → schema-pool index.
+- **Merged schema** — a collection-wide summary listing every unique array (with its dtype widened across all datasets, its dimensions, and its per-variable attribute types) and every global attribute type. Descriptive only — reads always use each dataset's own schema — but handy for tools that want one view of "what's in here." Also exposed programmatically via `Atlas::merged_schema()`.
 
-Because `atlas.json` is human-readable and self-describing, you can inspect or audit the store contents with any JSON tool without needing the library.
+When the same array name (or attribute key) appears in more than one dataset with different types, the merged type is **widened**. Widening is allowed only within numeric types (e.g. `int16` ∪ `int32` → `int32`; `int32` ∪ `float32` → `float64`) or between `string` and `timestamp` (→ `string`). Any other combination — e.g. an `int32` array in one dataset and a `string` array under the same name in another — is a collision: `define_array` / `set_attribute` reject it with a type-mismatch error.
+
+Attribute **values** are **not** in `atlas.json` — only their key names are (as part of the schema). Values live in the `.af` files and are read via the `array-format` attribute API. Because `atlas.json` is human-readable and self-describing, you can still inspect or audit the collection's schema with any JSON tool without needing the library.
 
 ### `<array_name>/data.af`
 
@@ -67,6 +73,7 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 - **Chunked layout** — arrays are split into chunks of a user-specified shape, so partial reads and writes touch only the relevant blocks.
 - **Configurable compression** — each block is compressed with the codec set when the store was created (default: Zstd; also LZ4 and uncompressed). The codec is persisted in `atlas.json` and restored automatically on `open` — no need to pass it again. Block target size is 8 MiB.
 - **Per-array fill value** — `define_array` accepts an optional `FillValue` (one of `Bool`/`Int`/`UInt`/`Float`/`String`). Unwritten cells read back as the fill value, and any *written* cell equal to it is counted as a null in the persisted stats (see below). Fill values are stored in the per-array footer; `atlas.json` is not extended.
+- **Attribute values** — per-variable attributes (e.g. `units`) are stored in the footer of the variable's own `data.af`, keyed by dataset. Dataset-level (global) attributes live the same way in the reserved `_global/data.af`. Atlas's `Attr` type mirrors `array-format`'s `AttributeValue` (bool, sized ints/uints, `f32`/`f64`, string, binary, and typed lists) plus a nanosecond timestamp variant stored as an RFC 3339 string.
 - **Persisted statistics** — on `Atlas::flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Cells equal to the array's fill value are tallied in `null_count` and excluded from `min`/`max` (NaN fills match NaN cells by bit pattern). Statistics survive store reopening.
 - **In-memory caches** — a 256 MiB decoded block cache and a 64 MiB raw I/O cache sit in front of the object store for repeated reads.
 

@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
         let elev = Array2::<f64>::from_elem([4, 4], 100.0_f64).into_dyn();
         ds.write_array("elevation", vec![0, 0], elev.view()).await?;
-        ds.set_attribute("region", Attr::String("north".into()));
+        ds.set_attribute("region", Attr::String("north".into()))?;
     }
     s.flush().await?;
 
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
         let data = Array2::<f32>::from_elem([4, 4], 2.0_f32).into_dyn();
         ds.write_array("grid", vec![0, 0], data.view()).await?;
-        ds.set_attribute("region", Attr::String("south".into()));
+        ds.set_attribute("region", Attr::String("south".into()))?;
     }
     s.flush().await?;
 
@@ -196,7 +196,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let north5 = s2.open_dataset("north").await?;
     assert_eq!(
-        north5.get_attribute("region"),
+        north5.get_attribute("region").await?,
         Some(Attr::String("north".into()))
     );
 
@@ -207,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(final_grid[[0, 0]], 1.0_f32);
 
     println!("Only 'north' survives, grid and attributes intact ✓");
-    println!("region = {:?}", north5.get_attribute("region").unwrap());
+    println!("region = {:?}", north5.get_attribute("region").await?.unwrap());
 
     Ok(())
 }

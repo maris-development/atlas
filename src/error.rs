@@ -26,6 +26,21 @@ pub enum Error {
     /// cannot contain `/`, `..`, or `.`, and cannot start with `_`.
     #[error("invalid name '{0}': must be non-empty, no '/', no '..', no leading '_'")]
     InvalidName(String),
+    /// Two datasets declare the same array name (or attribute key) with
+    /// incompatible types. Widening is only allowed within numeric types or
+    /// between string and timestamp; anything else collides.
+    #[error(
+        "type mismatch for {name}: existing type {existing} cannot merge with {new} \
+         (widening is only allowed within numeric types or between string and timestamp)"
+    )]
+    TypeMismatch {
+        /// Array name or attribute key that collided.
+        name: String,
+        /// The already-recorded (merged) type.
+        existing: String,
+        /// The incompatible new type being inserted.
+        new: String,
+    },
     /// Underlying `array-format` failure — see the wrapped error for the
     /// specific block/codec/storage problem.
     #[error("array format error: {0}")]
@@ -33,6 +48,19 @@ pub enum Error {
     /// Local filesystem I/O failure (used by `create_path` / `open_path`).
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// The store's metadata declares a format version this build of atlas
+    /// cannot read. Stores written by an older atlas (which inlined
+    /// per-dataset attributes and duplicated schemas) must be re-exported.
+    #[error(
+        "unsupported store format version {found}; this atlas reads version {expected} \
+         (store written by an older atlas — re-export it to upgrade)"
+    )]
+    UnsupportedVersion {
+        /// Version found in the on-disk metadata.
+        found: u32,
+        /// Version this build expects.
+        expected: u32,
+    },
     /// Failed to parse the JSON form of the store metadata.
     #[error("metadata error: {0}")]
     Meta(#[from] serde_json::Error),
