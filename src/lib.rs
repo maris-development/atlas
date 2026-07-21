@@ -89,6 +89,7 @@ mod config;
 mod dataset;
 mod error;
 mod meta;
+mod pruning;
 mod schema;
 mod store;
 
@@ -96,6 +97,7 @@ pub use config::{Codec, MetaFormat, StoreConfig, TypeMismatchPolicy};
 pub use dataset::DatasetView;
 pub use error::{Error, Result};
 pub use meta::{DatasetSchema, MergedArray, MergedSchema};
+pub use pruning::{Bitmap, ColumnKey, ColumnSummary, PruningIndex, StatColumn, StatVal};
 pub use store::Atlas;
 
 pub use array_format::{

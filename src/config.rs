@@ -107,11 +107,25 @@ pub struct StoreConfig {
     /// (`atlas.json` / `atlas.msgpack`). Only consulted by `create`; `open`
     /// detects compression from the filename suffix on disk.
     pub meta_compression: Codec,
+    /// Compression applied to each column block of the pruning index. Defaults
+    /// to [`Codec::Zstd`].
+    ///
+    /// Unlike `meta_compression`, this defaults to compressed: the index is
+    /// only ever machine-read, so the human-readable argument for leaving
+    /// `atlas.json` uncompressed doesn't apply. Blocks are compressed
+    /// individually, so ranged single-column reads keep working whatever this
+    /// is set to, and the index footer records the codec used — a reader
+    /// adapts without being told.
+    ///
+    /// Per-session like `on_type_mismatch`: it governs what a flush *writes*,
+    /// and is not persisted outside the index itself.
+    pub pruning_compression: Codec,
 }
 
 // Manual Default — `meta_compression` defaults to `Uncompressed`, not
 // `Codec::default()` (which is `Zstd`), so new stores keep the legacy
 // `atlas.json` / `atlas.msgpack` filenames unless the caller opts in.
+// `pruning_compression` does default to `Zstd`; see its docs.
 impl Default for StoreConfig {
     fn default() -> Self {
         Self {
@@ -119,6 +133,7 @@ impl Default for StoreConfig {
             on_type_mismatch: TypeMismatchPolicy::default(),
             meta_format: MetaFormat::default(),
             meta_compression: Codec::Uncompressed,
+            pruning_compression: Codec::Zstd,
         }
     }
 }

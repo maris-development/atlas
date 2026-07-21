@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use atlas::{Atlas, Attr, DType, StatValue, StoreConfig, TypeMismatchPolicy};
+use atlas::{Atlas, Attr, ColumnKey, DType, StatVal, StatValue, StoreConfig, TypeMismatchPolicy};
 use ndarray::ArrayD;
 use object_store::{local::LocalFileSystem, path::Path};
 
@@ -743,4 +743,471 @@ async fn array_stats_unknown_array_returns_none() {
     let mut atlas = Atlas::create(store, prefix, StoreConfig::default()).await.unwrap();
     let ds = atlas.create_dataset("ds").await.unwrap();
     assert!(ds.array_stats("ghost").await.is_none());
+}
+
+/// A dataset's row ordinal must survive the deletion of an earlier dataset —
+/// including across a save/load cycle.
+///
+/// This is the invariant the pruning index rests on: rows are addressed
+/// positionally, so if `to_wire` dropped tombstones, every dataset after the
+/// first deletion would shift up one on reload and every row would silently
+/// point at the wrong dataset. That failure is invisible in memory and only
+/// appears after a reopen, which is why this test round-trips.
+#[tokio::test]
+async fn dataset_ordinals_survive_deletion_and_reload() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+        .await
+        .unwrap();
+
+    for name in ["a", "b", "c"] {
+        atlas
+            .create_dataset(name)
+            .await
+            .unwrap()
+            .define_array::<i32>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+    }
+    assert_eq!(atlas.dataset_row("a"), Some(0));
+    assert_eq!(atlas.dataset_row("b"), Some(1));
+    assert_eq!(atlas.dataset_row("c"), Some(2));
+
+    atlas.delete_dataset("b").await.unwrap();
+    atlas.flush().await.unwrap();
+
+    // In memory: c must not have slid down into b's slot.
+    assert_eq!(atlas.dataset_row("a"), Some(0));
+    assert_eq!(atlas.dataset_row("b"), None, "deleted");
+    assert_eq!(atlas.dataset_row("c"), Some(2), "c must keep its ordinal");
+    assert_eq!(atlas.row_slots(), 3, "the dead slot is retained");
+    assert_eq!(atlas.list_datasets(), vec!["a".to_string(), "c".to_string()]);
+
+    // ...and the same after a reload, which is where dropping tombstones on
+    // write would show up.
+    let mut reopened = Atlas::open(store.clone(), prefix.clone()).await.unwrap();
+    assert_eq!(reopened.dataset_row("a"), Some(0));
+    assert_eq!(reopened.dataset_row("c"), Some(2), "ordinal shifted on reload");
+    assert_eq!(reopened.row_slots(), 3);
+    assert!(!reopened.dataset_exists("b"));
+
+    // A new dataset appends after the dead slot rather than filling it.
+    reopened.create_dataset("d").await.unwrap();
+    assert_eq!(reopened.dataset_row("d"), Some(3));
+}
+
+/// Re-creating a deleted name revives its slot instead of erroring, and starts
+/// from a clean schema rather than inheriting the previous occupant's.
+#[tokio::test]
+async fn recreating_a_deleted_dataset_revives_its_slot() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    atlas
+        .create_dataset("recycled")
+        .await
+        .unwrap()
+        .define_array::<i32>("old_array", vec!["i".into()], vec![2], None, None)
+        .await
+        .unwrap();
+    atlas.create_dataset("after").await.unwrap();
+    atlas.flush().await.unwrap();
+
+    atlas.delete_dataset("recycled").await.unwrap();
+    let mut revived = atlas.create_dataset("recycled").await.unwrap();
+
+    assert_eq!(atlas.dataset_row("recycled"), Some(0), "slot reused");
+    assert_eq!(atlas.dataset_row("after"), Some(1), "neighbour undisturbed");
+    assert_eq!(atlas.row_slots(), 2, "no new slot allocated");
+    assert!(
+        revived.list_arrays().is_empty(),
+        "revived dataset must not inherit the old schema"
+    );
+
+    // The name is usable again for real.
+    revived
+        .define_array::<f64>("new_array", vec!["i".into()], vec![2], None, None)
+        .await
+        .unwrap();
+    assert_eq!(revived.list_arrays(), vec!["new_array".to_string()]);
+}
+
+/// `compact` is the one operation that renumbers: it drops dead slots and
+/// closes the holes.
+#[tokio::test]
+async fn compact_drops_tombstones_and_renumbers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+        .await
+        .unwrap();
+
+    for name in ["a", "b", "c"] {
+        atlas
+            .create_dataset(name)
+            .await
+            .unwrap()
+            .define_array::<i32>("x", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+    atlas.delete_dataset("a").await.unwrap();
+    atlas.flush().await.unwrap();
+    assert_eq!(atlas.row_slots(), 3);
+
+    atlas.compact().await.unwrap();
+    assert_eq!(atlas.row_slots(), 2, "dead slot reclaimed");
+    assert_eq!(atlas.dataset_row("b"), Some(0), "renumbered");
+    assert_eq!(atlas.dataset_row("c"), Some(1));
+
+    // And the renumbering is what a reader sees afterwards.
+    let reopened = Atlas::open(store, prefix).await.unwrap();
+    assert_eq!(reopened.row_slots(), 2);
+    assert_eq!(reopened.dataset_row("b"), Some(0));
+    assert_eq!(reopened.dataset_row("c"), Some(1));
+}
+
+/// A tombstoned dataset must not contribute to the collection-wide views.
+#[tokio::test]
+async fn tombstones_are_excluded_from_merged_views() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    atlas
+        .create_dataset("keep")
+        .await
+        .unwrap()
+        .define_array::<i32>("shared", vec!["i".into()], vec![2], None, None)
+        .await
+        .unwrap();
+    {
+        let mut doomed = atlas.create_dataset("doomed").await.unwrap();
+        doomed
+            .define_array::<f64>("only_here", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        doomed.set_attribute("gone_key", Attr::Int64(1)).unwrap();
+    }
+    atlas.flush().await.unwrap();
+    assert!(atlas.list_arrays().contains(&"only_here".to_string()));
+
+    atlas.delete_dataset("doomed").await.unwrap();
+
+    assert!(
+        !atlas.list_arrays().contains(&"only_here".to_string()),
+        "a dead dataset's arrays must leave list_arrays"
+    );
+    let merged = atlas.merged_schema();
+    assert!(!merged.arrays.contains_key("only_here"));
+    assert!(!merged.global_attributes.contains_key("gone_key"));
+    assert!(merged.arrays.contains_key("shared"), "live array retained");
+    assert!(atlas.array_dtype("only_here").is_none());
+}
+
+/// The pruning index is a flattened column over the whole collection: one row
+/// per dataset in ordinal order, with explicit gaps where a dataset doesn't
+/// declare the array.
+#[tokio::test]
+async fn pruning_index_flattens_with_nulls() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    // ds0 and ds2 declare "temp"; ds1 does not — row 1 must be a hole.
+    for (name, values) in [
+        ("ds0", Some(vec![1i32, 5])),
+        ("ds1", None),
+        ("ds2", Some(vec![-4i32, 2])),
+    ] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.set_attribute("cruise", Attr::String(format!("C-{name}")))
+            .unwrap();
+        if let Some(values) = values {
+            ds.define_array::<i32>("temp", vec!["i".into()], vec![2], None, None)
+                .await
+                .unwrap();
+            ds.write_array(
+                "temp",
+                vec![0],
+                ndarray::Array::from_vec(values).into_dyn().view(),
+            )
+            .await
+            .unwrap();
+        }
+    }
+    atlas.flush().await.unwrap();
+
+    let key = ColumnKey::array("temp");
+    let index = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+    assert_eq!(index.rows(), 3, "one row per dataset");
+
+    let column = index.column(&key).expect("temp column");
+    assert!(column.present.get(0));
+    assert!(
+        !column.present.get(1),
+        "ds1 has no temp — must be an explicit gap"
+    );
+    assert!(column.present.get(2));
+
+    assert_eq!(column.min[0], Some(StatVal::Int(1)));
+    assert_eq!(column.max[0], Some(StatVal::Int(5)));
+    assert_eq!(column.min[2], Some(StatVal::Int(-4)));
+    assert_eq!(column.max[2], Some(StatVal::Int(2)));
+    assert_eq!(column.min[1], None, "the gap carries no statistics");
+
+    // Row positions line up with dataset_row, which is what lets a caller join
+    // the flattened table back to dataset names.
+    assert_eq!(atlas.dataset_row("ds2"), Some(2));
+}
+
+/// Deleting a dataset masks its row rather than removing it, so every other
+/// dataset's row stays where it was.
+#[tokio::test]
+async fn pruning_index_masks_deleted_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    for (name, values) in [
+        ("a", vec![1i32, 2]),
+        ("b", vec![100i32, 200]),
+        ("c", vec![3i32, 4]),
+    ] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.define_array::<i32>("v", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        ds.write_array(
+            "v",
+            vec![0],
+            ndarray::Array::from_vec(values).into_dyn().view(),
+        )
+        .await
+        .unwrap();
+    }
+    atlas.flush().await.unwrap();
+    atlas.delete_dataset("b").await.unwrap();
+    atlas.flush().await.unwrap();
+
+    let key = ColumnKey::array("v");
+    let index = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+    let mask = atlas.live_mask();
+
+    assert_eq!(index.rows(), 3, "the dead row keeps its slot");
+    assert_eq!(mask, vec![true, false, true]);
+
+    let column = index.column(&key).unwrap();
+    assert_eq!(
+        column.max[2],
+        Some(StatVal::Int(4)),
+        "c must not have shifted into b's row"
+    );
+
+    // A scan that honours the mask must not see the deleted dataset's outlier.
+    let live_max = (0..index.rows())
+        .filter(|i| mask[*i] && column.stats_valid.get(*i))
+        .filter_map(|i| match column.max[i] {
+            Some(StatVal::Int(v)) => Some(v),
+            _ => None,
+        })
+        .max();
+    assert_eq!(live_max, Some(4), "b's 200 must be masked out");
+}
+
+/// Reading two columns must materialize only those two — the property the
+/// column-addressed layout exists for.
+#[tokio::test]
+async fn pruning_index_reads_only_requested_columns() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    for d in 0..20 {
+        let mut ds = atlas.create_dataset(&format!("ds{d}")).await.unwrap();
+        for a in 0..20 {
+            let name = format!("arr{a}");
+            ds.define_array::<i64>(&name, vec!["i".into()], vec![4], None, None)
+                .await
+                .unwrap();
+            ds.write_array(
+                &name,
+                vec![0],
+                ndarray::Array::from_vec(vec![d as i64, a as i64, 7, 9])
+                    .into_dyn()
+                    .view(),
+            )
+            .await
+            .unwrap();
+        }
+    }
+    atlas.flush().await.unwrap();
+
+    // Summaries come from the footer alone — no column blocks fetched at all.
+    let summaries = atlas.column_summaries().await.unwrap();
+    assert_eq!(summaries.len(), 20, "every column described in the footer");
+    let (_, arr3_summary) = summaries
+        .iter()
+        .find(|(k, _)| k == &ColumnKey::array("arr3"))
+        .unwrap();
+    assert_eq!(arr3_summary.present_count, 20);
+
+    let wanted = vec![ColumnKey::array("arr3"), ColumnKey::array("arr17")];
+    let index = atlas.pruning_index(&wanted).await.unwrap();
+
+    assert_eq!(index.rows(), 20, "full row space even for a partial read");
+    assert_eq!(
+        index.column_keys().len(),
+        2,
+        "only the requested columns are materialized"
+    );
+    assert!(index.column(&ColumnKey::array("arr3")).is_some());
+    assert!(
+        index.column(&ColumnKey::array("arr0")).is_none(),
+        "a column that wasn't asked for must not be loaded"
+    );
+}
+
+/// Every value in the index must agree with the per-dataset stats API it
+/// summarizes — including where the holes are.
+#[tokio::test]
+async fn pruning_index_matches_per_dataset_stats() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    for d in 0..6 {
+        let mut ds = atlas.create_dataset(&format!("ds{d}")).await.unwrap();
+        // Every other dataset skips the array, exercising the gaps.
+        if d % 2 == 0 {
+            ds.define_array::<f64>("depth", vec!["i".into()], vec![3], None, None)
+                .await
+                .unwrap();
+            ds.write_array(
+                "depth",
+                vec![0],
+                ndarray::Array::from_vec(vec![d as f64, d as f64 * 2.0, -1.5])
+                    .into_dyn()
+                    .view(),
+            )
+            .await
+            .unwrap();
+        }
+    }
+    atlas.flush().await.unwrap();
+
+    let key = ColumnKey::array("depth");
+    let index = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+    let column = index.column(&key).unwrap();
+
+    for d in 0..6 {
+        let name = format!("ds{d}");
+        let row = atlas.dataset_row(&name).unwrap();
+        let per_dataset = atlas
+            .open_dataset(&name)
+            .await
+            .unwrap()
+            .array_stats("depth")
+            .await;
+        match per_dataset {
+            Some(stats) => {
+                assert!(column.present.get(row), "{name} declares depth");
+                assert_eq!(column.row_count[row], stats.row_count, "{name} row_count");
+                assert_eq!(column.null_count[row], stats.null_count, "{name} null_count");
+                let expected_min = match stats.min {
+                    Some(StatValue::Float(f)) => Some(StatVal::Float(f)),
+                    _ => None,
+                };
+                assert_eq!(column.min[row], expected_min, "{name} min");
+            }
+            None => assert!(!column.present.get(row), "{name} has no depth"),
+        }
+    }
+}
+
+/// Proof that a column read is genuinely selective: corrupt one column's bytes
+/// on disk, and reading a *different* column must still succeed.
+///
+/// A whole-file read would decode the damaged block and fail, so this fails
+/// loudly if `pruning_index` ever regresses to loading everything.
+#[tokio::test]
+async fn reading_one_column_does_not_touch_another() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    for d in 0..8 {
+        let mut ds = atlas.create_dataset(&format!("ds{d}")).await.unwrap();
+        for a in 0..8 {
+            let name = format!("arr{a}");
+            ds.define_array::<i64>(&name, vec!["i".into()], vec![4], None, None)
+                .await
+                .unwrap();
+            ds.write_array(
+                &name,
+                vec![0],
+                ndarray::Array::from_vec(vec![d as i64, a as i64, 11, 13])
+                    .into_dyn()
+                    .view(),
+            )
+            .await
+            .unwrap();
+        }
+    }
+    atlas.flush().await.unwrap();
+
+    let idx_path = tmp.path().join("pruning.idx");
+    let original = std::fs::read(&idx_path).unwrap();
+
+    // Find where arr0's block sits by reading it cleanly first, then scribble
+    // over the front of the file — arr0 is the first column written, so its
+    // block starts right after the 8-byte header.
+    let first = atlas
+        .pruning_index(&[ColumnKey::array("arr0")])
+        .await
+        .unwrap();
+    assert!(first.column(&ColumnKey::array("arr0")).is_some());
+
+    let mut damaged = original.clone();
+    for byte in damaged.iter_mut().skip(8).take(64) {
+        *byte ^= 0xff;
+    }
+    std::fs::write(&idx_path, &damaged).unwrap();
+
+    // A later column is still readable, because its bytes were never fetched.
+    let late = atlas
+        .pruning_index(&[ColumnKey::array("arr7")])
+        .await
+        .unwrap();
+    let column = late
+        .column(&ColumnKey::array("arr7"))
+        .expect("a column beyond the damage must still load");
+    assert_eq!(column.present.count_set(), 8);
+
+    // ...and the damaged column itself does fail, confirming the corruption
+    // was real rather than landing in padding.
+    assert!(
+        atlas
+            .pruning_index(&[ColumnKey::array("arr0")])
+            .await
+            .is_err(),
+        "the corrupted column must fail to decode"
+    );
 }

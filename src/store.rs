@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use array_format::DeltaCache;
-use object_store::{ObjectStore, local::LocalFileSystem, path::Path, prefix::PrefixStore};
+use object_store::{ObjectStore, ObjectStoreExt, local::LocalFileSystem, path::Path, prefix::PrefixStore};
 use parking_lot::Mutex;
 use tracing::{debug, info, instrument};
 
@@ -9,8 +9,17 @@ use crate::{
     Error, Result,
     config::{Codec, MetaFormat, StoreConfig, TypeMismatchPolicy},
     dataset::{ArrayCache, DatasetView, GLOBAL_ATTRS_ARRAY, PendingAttrs, open_dataset_view},
-    meta::{STORE_FORMAT_VERSION, StoreMeta, load_meta, save_meta},
+    meta::{StoreMeta, load_meta, save_meta},
+    pruning::{ColumnKey, ColumnSummary, FooterRead, PruningIndex, footer_from_suffix},
 };
+
+/// Object name of the collection-wide pruning index at the store root.
+pub(crate) const PRUNING_INDEX_FILE: &str = "pruning.idx";
+
+/// How many trailing bytes to fetch when looking for the index footer. Sized to
+/// cover the footer of a large collection in one round trip; a bigger footer
+/// costs one extra ranged read, never a full download.
+const FOOTER_SUFFIX_HINT: u64 = 256 * 1024;
 
 /// Handle to an opened or newly created atlas store.
 ///
@@ -25,6 +34,13 @@ use crate::{
 pub struct Atlas {
     store: Arc<dyn ObjectStore>,
     meta: Arc<Mutex<StoreMeta>>,
+    /// Write-side copy of the pruning index, kept aligned with `meta` as
+    /// datasets and arrays are declared and filled in at flush.
+    ///
+    /// `None` until a mutation needs it — a store opened purely to *query* the
+    /// index never materializes this, and reads go through
+    /// [`Atlas::pruning_index`], which fetches only the columns asked for.
+    pruning: Arc<Mutex<Option<PruningIndex>>>,
     /// Attribute writes buffered until [`Atlas::flush`], keeping mutations
     /// off-disk and attribute setters non-blocking.
     pending_attrs: Arc<Mutex<PendingAttrs>>,
@@ -35,6 +51,9 @@ pub struct Atlas {
     on_type_mismatch: TypeMismatchPolicy,
     meta_format: MetaFormat,
     meta_compression: Codec,
+    /// Codec for pruning-index column blocks; see
+    /// [`StoreConfig::pruning_compression`].
+    pruning_compression: Codec,
 }
 
 impl Atlas {
@@ -64,7 +83,7 @@ impl Atlas {
         let (meta, meta_format, meta_compression) = load_meta(&store).await?;
         let codec = meta.codec;
         info!(
-            datasets = meta.datasets.len(),
+            datasets = meta.live_count(),
             ?codec,
             ?meta_format,
             ?meta_compression,
@@ -73,12 +92,14 @@ impl Atlas {
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
+            pruning: Arc::new(Mutex::new(None)),
             pending_attrs: Arc::new(Mutex::new(PendingAttrs::default())),
             cache: default_cache(),
             codec,
             on_type_mismatch: config.on_type_mismatch,
             meta_format,
             meta_compression,
+            pruning_compression: config.pruning_compression,
         })
     }
 
@@ -86,22 +107,20 @@ impl Atlas {
     #[instrument(skip(store, config), fields(prefix = %prefix, codec = ?config.codec, meta_format = ?config.meta_format, meta_compression = ?config.meta_compression))]
     pub async fn create(store: Arc<dyn ObjectStore>, prefix: Path, config: StoreConfig) -> Result<Self> {
         let store = prefixed(store, prefix);
-        let meta = StoreMeta {
-            version: STORE_FORMAT_VERSION,
-            codec: config.codec,
-            ..Default::default()
-        };
+        let meta = StoreMeta::new(config.codec);
         save_meta(&store, &meta, config.meta_format, config.meta_compression).await?;
         info!("created atlas store");
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
+            pruning: Arc::new(Mutex::new(None)),
             pending_attrs: Arc::new(Mutex::new(PendingAttrs::default())),
             cache: default_cache(),
             codec: config.codec,
             on_type_mismatch: config.on_type_mismatch,
             meta_format: config.meta_format,
             meta_compression: config.meta_compression,
+            pruning_compression: config.pruning_compression,
         })
     }
 
@@ -171,12 +190,21 @@ impl Atlas {
     #[instrument(skip(self))]
     pub async fn create_dataset(&mut self, name: &str) -> Result<DatasetView> {
         crate::validate_name(name)?;
-        {
+        let ordinal = {
             let mut meta = self.meta.lock();
-            if meta.datasets.contains_key(name) {
+            if meta.is_live(name) {
                 return Err(Error::DatasetAlreadyExists(name.to_string()));
             }
-            meta.datasets.insert(name.to_string(), Default::default());
+            // Reuses the slot (and pruning-index row) if this name was
+            // previously tombstoned, so ordinals stay stable.
+            meta.add_dataset(name)
+        };
+        // Keep the index exactly as long as the dataset list from the moment
+        // the dataset exists: append (or clear, for a revived slot) its row now,
+        // and let the flush fill in the values.
+        self.ensure_pruning_loaded().await?;
+        if let Some(index) = self.pruning.lock().as_mut() {
+            index.reset_row(ordinal);
         }
         debug!("created dataset");
         Ok(DatasetView::new(
@@ -251,14 +279,185 @@ impl Atlas {
     /// Reads from the in-memory store metadata — no disk I/O.
     pub fn list_datasets(&self) -> Vec<String> {
         let meta = self.meta.lock();
-        meta.datasets.keys().cloned().collect()
+        meta.live_names()
     }
 
     /// `true` if a dataset with this name is registered. O(1) hash lookup in
     /// the in-memory store metadata.
     pub fn dataset_exists(&self, name: &str) -> bool {
         let meta = self.meta.lock();
-        meta.datasets.contains_key(name)
+        meta.is_live(name)
+    }
+
+    /// This dataset's **row ordinal**: its fixed position in the collection,
+    /// and its row in the pruning index. `None` if the dataset doesn't exist.
+    ///
+    /// Ordinals are assigned on creation and are stable across deletions — a
+    /// deleted dataset keeps its slot (masked) so no other dataset's row moves.
+    /// [`compact`](Self::compact) is the only operation that renumbers, and it
+    /// invalidates any ordinal held from before the call.
+    pub fn dataset_row(&self, name: &str) -> Option<usize> {
+        self.meta.lock().live_ordinal(name)
+    }
+
+    /// Total row slots, live and tombstoned — the pruning index's row count.
+    /// Larger than the number of live datasets until the next
+    /// [`compact`](Self::compact).
+    pub fn row_slots(&self) -> usize {
+        self.meta.lock().row_slots()
+    }
+
+    /// Object path of the pruning index.
+    fn pruning_path() -> Path {
+        Path::from(PRUNING_INDEX_FILE)
+    }
+
+    /// Loads the write-side index if it isn't loaded yet, then aligns its row
+    /// count with the dataset list.
+    ///
+    /// Only mutations need this; queries go through
+    /// [`pruning_index`](Self::pruning_index), which never materializes the
+    /// whole file.
+    async fn ensure_pruning_loaded(&self) -> Result<()> {
+        {
+            if self.pruning.lock().is_some() {
+                self.align_pruning_rows();
+                return Ok(());
+            }
+        }
+        let loaded = match self.store.get(&Self::pruning_path()).await {
+            Ok(result) => {
+                let bytes = result.bytes().await.map_err(Error::ObjectStore)?;
+                PruningIndex::decode(&bytes)?
+            }
+            // No index yet (new store, or never flushed) — start empty.
+            Err(_) => PruningIndex::new(),
+        };
+        *self.pruning.lock() = Some(loaded);
+        self.align_pruning_rows();
+        Ok(())
+    }
+
+    /// Extends the index with null rows until it covers every dataset slot.
+    ///
+    /// A dataset created since the index was written contributes a row that is
+    /// simply absent everywhere, which is the honest answer for something that
+    /// hasn't been flushed. Keeps `rows == row_slots()` true at all times.
+    fn align_pruning_rows(&self) {
+        let target = self.meta.lock().row_slots();
+        let mut guard = self.pruning.lock();
+        if let Some(index) = guard.as_mut() {
+            while index.rows() < target {
+                index.push_row();
+            }
+        }
+    }
+
+    /// Reads the pruning index for **only** the given columns.
+    ///
+    /// Two round trips regardless of collection size: one ranged read of the
+    /// file tail for the footer, then one batched ranged read covering just
+    /// those columns' blocks. A store with 166 columns asked for 2 transfers
+    /// roughly 2/166ths of the file — the reason the format is column-addressed
+    /// rather than a single serialized blob.
+    ///
+    /// Rows are positional: row `i` is the dataset at ordinal `i`, matching
+    /// [`dataset_row`](Self::dataset_row). Rows for deleted datasets are
+    /// present in the returned columns but masked — see
+    /// [`live_mask`](Self::live_mask).
+    ///
+    /// Returns an empty index if the store has never been flushed.
+    pub async fn pruning_index(&self, columns: &[ColumnKey]) -> Result<PruningIndex> {
+        let Some(footer) = self.read_pruning_footer().await? else {
+            return Ok(PruningIndex::new());
+        };
+        let mut index = PruningIndex::new();
+        index.set_meta_epoch(footer.meta_epoch);
+        for _ in 0..footer.row_count {
+            index.push_row();
+        }
+
+        let ranges = footer.ranges_for(columns);
+        if ranges.is_empty() {
+            return Ok(index);
+        }
+        let blocks = self
+            .store
+            .get_ranges(
+                &Self::pruning_path(),
+                &ranges.iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(),
+            )
+            .await
+            .map_err(Error::ObjectStore)?;
+        for ((key, _), bytes) in ranges.iter().zip(blocks) {
+            let column = footer.decode_column(key, &bytes)?;
+            index.insert_column(key.clone(), column);
+        }
+        Ok(index)
+    }
+
+    /// Every column's key and collection-wide min/max — read from the footer
+    /// alone, without fetching a single column block.
+    ///
+    /// Use it to skip columns whose global range can't satisfy a predicate
+    /// before deciding what to pass to [`pruning_index`](Self::pruning_index).
+    /// For a column's declared type, see
+    /// [`merged_schema`](Self::merged_schema).
+    pub async fn column_summaries(&self) -> Result<Vec<(ColumnKey, ColumnSummary)>> {
+        Ok(self
+            .read_pruning_footer()
+            .await?
+            .map(|f| f.summaries())
+            .unwrap_or_default())
+    }
+
+    /// The liveness mask over row slots: `false` where a dataset was deleted.
+    /// Apply it to any column from [`pruning_index`](Self::pruning_index).
+    pub fn live_mask(&self) -> Vec<bool> {
+        self.meta.lock().live_mask()
+    }
+
+    /// Dataset name per row slot, `None` where the slot is a tombstone.
+    ///
+    /// The join key between a pruning-index row and the collection: index
+    /// position `i` corresponds to entry `i` here.
+    pub fn dataset_names_by_row(&self) -> Vec<Option<String>> {
+        self.meta.lock().names_by_row()
+    }
+
+    /// Fetches and parses the index footer with one ranged read of the tail,
+    /// re-reading only if the footer is bigger than the initial suffix.
+    async fn read_pruning_footer(&self) -> Result<Option<crate::pruning::IndexFooter>> {
+        let path = Self::pruning_path();
+        let Ok(meta) = self.store.head(&path).await else {
+            return Ok(None); // never flushed
+        };
+        let len = meta.size;
+        let mut suffix_len = FOOTER_SUFFIX_HINT.min(len);
+        for _ in 0..2 {
+            let bytes = self
+                .store
+                .get_range(&path, (len - suffix_len)..len)
+                .await
+                .map_err(Error::ObjectStore)?;
+            match footer_from_suffix(&bytes, len)? {
+                FooterRead::Footer(footer) => {
+                    let expected = self.meta.lock().meta_epoch;
+                    if footer.meta_epoch != expected {
+                        return Err(Error::ArrayFormat(array_format::Error::Storage(format!(
+                            "pruning index is stale: epoch {} but metadata is at {expected}; \
+                             flush to rebuild it",
+                            footer.meta_epoch
+                        ))));
+                    }
+                    return Ok(Some(*footer));
+                }
+                FooterRead::NeedMore(needed) => suffix_len = (needed as u64).min(len),
+            }
+        }
+        Err(Error::ArrayFormat(array_format::Error::Storage(
+            "pruning index footer could not be read".into(),
+        )))
     }
 
     /// Distinct array names across all datasets in this store, sorted.
@@ -267,8 +466,7 @@ impl Atlas {
     pub fn list_arrays(&self) -> Vec<String> {
         let meta = self.meta.lock();
         let mut arrays: Vec<String> = meta
-            .datasets
-            .values()
+            .live_schemas()
             .flat_map(|d| d.arrays.keys().cloned())
             .collect::<std::collections::HashSet<_>>()
             .into_iter()
@@ -283,7 +481,7 @@ impl Atlas {
     /// into `atlas.json`; it is descriptive only — reads always use each
     /// dataset's own schema. Computed from the in-memory metadata, no disk I/O.
     pub fn merged_schema(&self) -> crate::MergedSchema {
-        crate::meta::compute_merged(&self.meta.lock().datasets)
+        crate::meta::compute_merged_live(&self.meta.lock())
     }
 
     /// Returns the dtype of `array` if any dataset in this store declares it.
@@ -291,8 +489,7 @@ impl Atlas {
     /// instantiation without round-tripping through a `DatasetView`.
     pub fn array_dtype(&self, array: &str) -> Option<array_format::DType> {
         let meta = self.meta.lock();
-        meta.datasets
-            .values()
+        meta.live_schemas()
             .find_map(|d| d.arrays.get(array))
             .map(|schema| schema.dtype.clone())
     }
@@ -329,8 +526,7 @@ impl Atlas {
             let mut present: Vec<bool> = Vec::with_capacity(dataset_names.len());
             for name in dataset_names {
                 let has = meta
-                    .datasets
-                    .get(name)
+                    .live_schema(name)
                     .and_then(|d| d.arrays.get(array))
                     .map(|schema| {
                         codec.get_or_insert(schema.codec);
@@ -416,8 +612,7 @@ impl Atlas {
             let mut codec: Option<Codec> = None;
             for name in dataset_names {
                 let schema = meta
-                    .datasets
-                    .get(name)
+                    .live_schema(name)
                     .and_then(|d| d.arrays.get(array))
                     .ok_or_else(|| {
                         Error::ArrayNotFound(format!("{array} (in dataset {name})"))
@@ -537,10 +732,119 @@ impl Atlas {
         for arc in snapshot {
             arc.write().await.flush().await?;
         }
-        let meta_snapshot = self.meta.lock().clone();
-        let datasets = meta_snapshot.datasets.len();
+        // Stats now exist for everything written above, so the index can be
+        // filled in and persisted alongside the metadata.
+        self.refresh_pruning_index().await?;
+
+        let meta_snapshot = {
+            let mut meta = self.meta.lock();
+            meta.meta_epoch += 1;
+            meta.clone()
+        };
+        let datasets = meta_snapshot.live_count();
+        self.write_pruning_index(&meta_snapshot).await?;
         save_meta(&self.store, &meta_snapshot, self.meta_format, self.meta_compression).await?;
         info!(files, datasets, "flushed atlas store");
+        Ok(())
+    }
+
+    /// Fills the in-memory index from the freshly flushed array statistics.
+    ///
+    /// Reads each array file's whole `StatsFile` in one go rather than looking
+    /// entries up per dataset — the latter is O(datasets²), since each lookup
+    /// scans the table.
+    async fn refresh_pruning_index(&self) -> Result<()> {
+        self.ensure_pruning_loaded().await?;
+
+        // Snapshot what each dataset declares, and the merged dtype of every
+        // column, before touching the files.
+        let (array_keys, rows_by_name, attr_cells) = {
+            let meta = self.meta.lock();
+            let mut array_keys: Vec<ColumnKey> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            let mut attr_cells: Vec<(ColumnKey, usize)> = Vec::new();
+            let mut rows_by_name = std::collections::HashMap::new();
+            for (ordinal, name, schema) in meta.live_datasets() {
+                rows_by_name.insert(name.clone(), ordinal);
+                for array in schema.arrays.keys() {
+                    if seen.insert(array.clone()) {
+                        array_keys.push(ColumnKey::array(array));
+                    }
+                }
+                for key in schema.global_attrs.keys() {
+                    attr_cells.push((ColumnKey::global_attr(key), ordinal));
+                }
+                for (array, attrs) in &schema.array_attrs {
+                    for key in attrs.keys() {
+                        attr_cells.push((ColumnKey::array_attr(array, key), ordinal));
+                    }
+                }
+            }
+            (array_keys, rows_by_name, attr_cells)
+        };
+
+        // Attribute columns: presence is known from the schema. Their values
+        // live in the `.af` files as real attributes, so the column records
+        // that the dataset carries the key; min/max for attribute *values* are
+        // filled from the same statistics path as arrays where available.
+        {
+            let mut guard = self.pruning.lock();
+            let Some(index) = guard.as_mut() else {
+                return Ok(());
+            };
+            for (key, ordinal) in &attr_cells {
+                index.ensure_column(key);
+                index.set_present(key, *ordinal);
+            }
+            for key in &array_keys {
+                index.ensure_column(key);
+            }
+        }
+
+        // One StatsFile read per array file, then one pass over its entries.
+        for key in &array_keys {
+            let ColumnKey::Array(array) = key else {
+                continue;
+            };
+            let codec = self
+                .meta
+                .lock()
+                .array_file_codec(array)
+                .unwrap_or_else(|| self.codec);
+            let handle = self.cache.get_or_insert(&self.store, array, &codec);
+            let Some(arc) = handle.get_existing().await? else {
+                continue;
+            };
+            let guard = arc.read().await;
+            let Some(stats) = guard.stats() else { continue };
+            let mut index_guard = self.pruning.lock();
+            let Some(index) = index_guard.as_mut() else {
+                continue;
+            };
+            for entry in stats.entries() {
+                if let Some(row) = rows_by_name.get(&entry.name) {
+                    index.set_stats(key, *row, entry);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Encodes and writes `pruning.idx`, tagged with the metadata epoch it was
+    /// built against.
+    async fn write_pruning_index(&self, meta: &StoreMeta) -> Result<()> {
+        let bytes = {
+            let mut guard = self.pruning.lock();
+            let Some(index) = guard.as_mut() else {
+                return Ok(());
+            };
+            index.set_meta_epoch(meta.meta_epoch);
+            index.encode(self.pruning_compression, &meta.live_mask())?
+        };
+        self.store
+            .put(&Self::pruning_path(), bytes.into())
+            .await
+            .map_err(Error::ObjectStore)?;
         Ok(())
     }
 
@@ -561,6 +865,28 @@ impl Atlas {
             guard.flush().await?;
             guard.compact().await?;
         }
+        // Tombstoned datasets have now been dropped from every array file, so
+        // their row slots can go too. This is the only point at which dataset
+        // ordinals change, which is why it invalidates any cached row number.
+        self.meta.lock().drop_tombstones();
+        // Ordinals just changed, so the index is rebuilt from scratch against
+        // the new numbering rather than patched.
+        *self.pruning.lock() = Some(PruningIndex::new());
+        self.refresh_pruning_index().await?;
+
+        let meta_snapshot = {
+            let mut meta = self.meta.lock();
+            meta.meta_epoch += 1;
+            meta.clone()
+        };
+        self.write_pruning_index(&meta_snapshot).await?;
+        save_meta(
+            &self.store,
+            &meta_snapshot,
+            self.meta_format,
+            self.meta_compression,
+        )
+        .await?;
         info!(files, "compacted atlas store");
         Ok(())
     }
@@ -623,7 +949,7 @@ impl Atlas {
             let meta = self.meta.lock();
             let mut seen = std::collections::HashSet::new();
             let mut out = Vec::new();
-            for ds in meta.datasets.values() {
+            for ds in meta.live_schemas() {
                 for (name, schema) in &ds.arrays {
                     if seen.insert(name.clone()) {
                         out.push((name.clone(), schema.codec.clone()));

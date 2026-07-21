@@ -16,7 +16,7 @@ use crate::{
 /// Current on-disk store-format version. `atlas.json` written by an older
 /// atlas (which inlined per-dataset attributes and duplicated schemas) is not
 /// read by this version — see [`decode`].
-pub(crate) const STORE_FORMAT_VERSION: u32 = 2;
+pub(crate) const STORE_FORMAT_VERSION: u32 = 3;
 
 /// Schema for a single dataset: its array schemas plus the attribute-key
 /// namespace (which global/per-array attribute keys the dataset uses).
@@ -146,12 +146,18 @@ fn merge_type(map: &mut IndexMap<String, DTypeS>, key: &str, ty: &DType) {
     }
 }
 
-/// Fold every dataset's schema into the collection-wide merged schema.
-/// Type collisions are widened where possible; insert-time validation
-/// (in `DatasetView`) guarantees only widenable types ever reach here.
-pub(crate) fn compute_merged(datasets: &IndexMap<String, Arc<DatasetSchema>>) -> MergedSchema {
+/// Fold every live dataset's schema into the collection-wide merged schema,
+/// skipping tombstones.
+///
+/// Type collisions are widened where possible; insert-time validation (in
+/// `DatasetView`) keeps a non-widenable type from displacing the first-seen one.
+pub(crate) fn compute_merged_live(meta: &StoreMeta) -> MergedSchema {
+    compute_merged_over(meta.live_schemas())
+}
+
+fn compute_merged_over<'a>(schemas: impl Iterator<Item = &'a Arc<DatasetSchema>>) -> MergedSchema {
     let mut merged = MergedSchema::default();
-    for schema in datasets.values() {
+    for schema in schemas {
         for (name, arr) in &schema.arrays {
             let entry = merged
                 .arrays
@@ -284,13 +290,31 @@ pub(crate) struct StoreMeta {
     pub version: u32,
     /// Codec used when new arrays are defined in this store.
     pub codec: Codec,
-    /// Dataset name → schema. Insertion-ordered.
+    /// Dataset name → schema. Insertion-ordered, and **including tombstones**.
     ///
-    /// Mutate through the `record_*` / `unrecord_*` methods rather than
-    /// directly, so [`StoreMeta::index`] stays consistent. Inserting an empty
-    /// [`DatasetSchema`] directly is safe (it contributes nothing to the
-    /// index); anything else must be followed by [`Self::rebuild_index`].
-    pub datasets: IndexMap<String, Arc<DatasetSchema>>,
+    /// A dataset's position in this map is its permanent row ordinal in the
+    /// pruning index, so deletes tombstone in place rather than removing —
+    /// removing would shift every later dataset up one and silently
+    /// re-point every row of a positional index. See [`Self::live`].
+    ///
+    /// Enumerate through [`Self::live_datasets`] rather than iterating this
+    /// directly, or dead entries leak into the result. Mutate through the
+    /// `record_*` / `unrecord_*` methods so [`Self::index`] stays consistent.
+    datasets: IndexMap<String, Arc<DatasetSchema>>,
+    /// Monotonic counter bumped on every save.
+    ///
+    /// The pruning index addresses rows positionally, so an index written
+    /// against a different dataset list doesn't fail — every row silently means
+    /// a different dataset. Both files carry this epoch; a mismatch means the
+    /// index is stale (e.g. a crash between the two writes) and must be
+    /// rebuilt rather than trusted.
+    pub(crate) meta_epoch: u64,
+    /// Liveness bit per entry of `datasets`, same order and length.
+    ///
+    /// This is the logical mask: `delete_dataset` clears a bit, `compact`
+    /// drops the dead entries and closes the holes. Persisted as the `deleted`
+    /// ordinal list in the metadata file.
+    pub(crate) live: Vec<bool>,
     /// Derived from `datasets` — never set directly; see [`Self::rebuild_index`].
     pub(crate) index: TypeIndex,
     /// Interning pool of distinct schemas, keyed by content hash.
@@ -308,11 +332,128 @@ pub(crate) struct StoreMeta {
 }
 
 impl StoreMeta {
+    /// An empty store's metadata at the current format version.
+    pub(crate) fn new(codec: Codec) -> Self {
+        Self {
+            version: STORE_FORMAT_VERSION,
+            codec,
+            ..Default::default()
+        }
+    }
+
+    /// Live datasets in ordinal order, as `(ordinal, name, schema)`.
+    ///
+    /// The enumeration entry point — skips tombstones, which raw iteration over
+    /// `datasets` would include.
+    pub(crate) fn live_datasets(
+        &self,
+    ) -> impl Iterator<Item = (usize, &String, &Arc<DatasetSchema>)> {
+        self.datasets
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.live.get(*i).copied().unwrap_or(false))
+            .map(|(i, (name, schema))| (i, name, schema))
+    }
+
+    /// Live schemas only — the common case where the name isn't needed.
+    pub(crate) fn live_schemas(&self) -> impl Iterator<Item = &Arc<DatasetSchema>> {
+        self.live_datasets().map(|(_, _, schema)| schema)
+    }
+
+    /// `true` if `name` exists and is not tombstoned.
+    pub(crate) fn is_live(&self, name: &str) -> bool {
+        match self.datasets.get_index_of(name) {
+            Some(i) => self.live.get(i).copied().unwrap_or(false),
+            None => false,
+        }
+    }
+
+    /// Schema for `name`, or `None` if absent or tombstoned.
+    pub(crate) fn live_schema(&self, name: &str) -> Option<&Arc<DatasetSchema>> {
+        let i = self.datasets.get_index_of(name)?;
+        if !self.live.get(i).copied().unwrap_or(false) {
+            return None;
+        }
+        self.datasets.get_index(i).map(|(_, schema)| schema)
+    }
+
+    /// Number of row slots, live and tombstoned. This is the pruning index's
+    /// row count — the invariant `index.rows == row_slots()` must always hold.
+    pub(crate) fn row_slots(&self) -> usize {
+        self.datasets.len()
+    }
+
+    /// How many datasets actually exist (tombstones excluded).
+    pub(crate) fn live_count(&self) -> usize {
+        self.live.iter().filter(|l| **l).count()
+    }
+
+    /// Names of the live datasets, in ordinal order.
+    pub(crate) fn live_names(&self) -> Vec<String> {
+        self.live_datasets().map(|(_, name, _)| name.clone()).collect()
+    }
+
+    /// Ordinal of `name` if it is live.
+    pub(crate) fn live_ordinal(&self, name: &str) -> Option<usize> {
+        let i = self.datasets.get_index_of(name)?;
+        self.live.get(i).copied().unwrap_or(false).then_some(i)
+    }
+
+    /// Dataset name per row slot; `None` for tombstones.
+    pub(crate) fn names_by_row(&self) -> Vec<Option<String>> {
+        self.datasets
+            .keys()
+            .enumerate()
+            .map(|(i, name)| self.live.get(i).copied().unwrap_or(false).then(|| name.clone()))
+            .collect()
+    }
+
+    /// The liveness mask over row slots, for applying to a pruning index.
+    pub(crate) fn live_mask(&self) -> Vec<bool> {
+        self.live.clone()
+    }
+
+    /// Ordinals of tombstoned rows, for persisting the mask.
+    pub(crate) fn deleted_ordinals(&self) -> Vec<u32> {
+        self.live
+            .iter()
+            .enumerate()
+            .filter(|(_, live)| !**live)
+            .map(|(i, _)| i as u32)
+            .collect()
+    }
+
+    /// Registers `name` as a live dataset, returning its ordinal.
+    ///
+    /// Reviving a tombstoned name reuses its slot (and so its pruning-index
+    /// row); a genuinely new name appends.
+    pub(crate) fn add_dataset(&mut self, name: &str) -> usize {
+        match self.datasets.get_index_of(name) {
+            Some(i) => {
+                self.live[i] = true;
+                // Revived: start from an empty schema so nothing of the previous
+                // occupant survives.
+                self.datasets[i] = Arc::new(DatasetSchema::default());
+                self.rebuild_index();
+                i
+            }
+            None => {
+                self.datasets
+                    .insert(name.to_string(), Arc::new(DatasetSchema::default()));
+                self.live.push(true);
+                self.datasets.len() - 1
+            }
+        }
+    }
+
     /// Recompute the type index from `datasets`. O(total keys); called after a
     /// bulk load or a removal, never on the per-dataset write path.
     pub(crate) fn rebuild_index(&mut self) {
         let mut index = TypeIndex::default();
-        for schema in self.datasets.values() {
+        for (i, (_, schema)) in self.datasets.iter().enumerate() {
+            if !self.live.get(i).copied().unwrap_or(false) {
+                continue; // a tombstone constrains nothing
+            }
             for (name, arr) in &schema.arrays {
                 index
                     .arrays
@@ -354,8 +495,8 @@ impl StoreMeta {
         F: FnMut(&DatasetSchema) -> Option<DType>,
     {
         let mut acc: Option<DType> = None;
-        for (name, schema) in &self.datasets {
-            if name == exclude {
+        for (i, (name, schema)) in self.datasets.iter().enumerate() {
+            if name == exclude || !self.live.get(i).copied().unwrap_or(false) {
                 continue;
             }
             if let Some(t) = pick(schema) {
@@ -512,12 +653,36 @@ impl StoreMeta {
         self.rebuild_index();
     }
 
-    /// Remove `dataset` entirely. Returns its schema.
+    /// Tombstone `dataset`, returning its schema.
+    ///
+    /// The entry keeps its slot in `datasets` so every later dataset keeps its
+    /// ordinal — the pruning index addresses rows positionally, so removing
+    /// here would re-point every row after this one. `compact` is what actually
+    /// drops the entry and closes the hole.
     pub(crate) fn unrecord_dataset(&mut self, dataset: &str) -> Option<Arc<DatasetSchema>> {
-        let schema = self.datasets.shift_remove(dataset)?;
+        let i = self.datasets.get_index_of(dataset)?;
+        if !self.live[i] {
+            return None; // already dead — behaves as "not found"
+        }
+        self.live[i] = false;
+        let schema = self.datasets[i].clone();
+        self.rebuild_index();
+        Some(schema)
+    }
+
+    /// Drops every tombstone, closing the ordinal holes.
+    ///
+    /// The only operation that renumbers, so it invalidates any externally
+    /// cached row ordinal and forces a full pruning-index rebuild.
+    pub(crate) fn drop_tombstones(&mut self) {
+        if self.live.iter().all(|l| *l) {
+            return;
+        }
+        let mut live_iter = self.live.iter();
+        self.datasets.retain(|_, _| *live_iter.next().unwrap_or(&true));
+        self.live = vec![true; self.datasets.len()];
         self.rebuild_index();
         self.prune_schema_pool();
-        Some(schema)
     }
 
     /// Mutable access to a dataset's schema, copying it out of the interning
@@ -525,7 +690,19 @@ impl StoreMeta {
     /// built its schema is unshared, so this is a plain deref — the copy only
     /// happens when an already-sealed dataset is edited again.
     fn schema_mut(&mut self, dataset: &str) -> &mut DatasetSchema {
-        Arc::make_mut(self.datasets.entry(dataset.to_string()).or_default())
+        // Allocating a schema slot must allocate a liveness bit with it, or
+        // `live` and `datasets` drift out of step and every later ordinal is
+        // mis-tagged. This is the only other path that can create an entry.
+        let index = match self.datasets.get_index_of(dataset) {
+            Some(i) => i,
+            None => {
+                self.datasets
+                    .insert(dataset.to_string(), Arc::new(DatasetSchema::default()));
+                self.live.push(true);
+                self.datasets.len() - 1
+            }
+        };
+        Arc::make_mut(&mut self.datasets[index])
     }
 
     /// Intern `dataset`'s schema: replace it with an identical one from the
@@ -581,9 +758,16 @@ struct StoreMetaWire {
     /// Pool of distinct dataset schemas, in first-seen order.
     #[serde(default)]
     schemas: Vec<DatasetSchema>,
-    /// Dataset name → index into `schemas`. Insertion-ordered.
+    /// Dataset name → index into `schemas`. Insertion-ordered, **including
+    /// tombstoned datasets**, whose ordinals must be preserved.
     #[serde(default)]
     datasets: IndexMap<String, usize>,
+    /// Ordinals in `datasets` that are tombstoned — the logical delete mask.
+    #[serde(default)]
+    deleted: Vec<u32>,
+    /// See [`StoreMeta::meta_epoch`].
+    #[serde(default)]
+    meta_epoch: u64,
     /// Collection-wide merged schema (every unique array/attribute with
     /// widened types). Derived from `schemas`; written for external tooling
     /// and ignored on load (the per-dataset schemas are the source of truth).
@@ -605,6 +789,12 @@ struct MetaVersion {
 /// Schemas are already interned in memory, so deduplication is a pointer-keyed
 /// hash lookup. Distinct-but-equal schemas (possible only for datasets never
 /// sealed) are caught by a fallback equality scan over the pool built so far.
+///
+/// **Tombstones are written too.** This is the one enumeration over `datasets`
+/// that must not filter by liveness: a dataset's position is its pruning-index
+/// row ordinal, so dropping dead entries here would shift every later dataset
+/// up one on the next load and silently re-point every row after the first
+/// deletion. `deleted` records which ordinals are dead.
 fn to_wire(meta: &StoreMeta) -> StoreMetaWire {
     let mut schemas: Vec<DatasetSchema> = Vec::new();
     let mut by_ptr: std::collections::HashMap<*const DatasetSchema, usize> =
@@ -628,12 +818,14 @@ fn to_wire(meta: &StoreMeta) -> StoreMetaWire {
         };
         datasets.insert(name.clone(), idx);
     }
-    let merged = compute_merged(&meta.datasets);
+    let merged = compute_merged_live(meta);
     StoreMetaWire {
         version: meta.version,
         codec: meta.codec,
         schemas,
         datasets,
+        deleted: meta.deleted_ordinals(),
+        meta_epoch: meta.meta_epoch,
         merged,
     }
 }
@@ -655,6 +847,20 @@ fn from_wire(wire: StoreMetaWire) -> Result<StoreMeta> {
         })?;
         datasets.insert(name, schema);
     }
+    // Rebuild the liveness mask from the persisted ordinals.
+    let mut live = vec![true; datasets.len()];
+    for ordinal in &wire.deleted {
+        match live.get_mut(*ordinal as usize) {
+            Some(slot) => *slot = false,
+            None => {
+                return Err(Error::ArrayFormat(array_format::Error::Storage(format!(
+                    "corrupt metadata: deleted ordinal {ordinal} of {} datasets",
+                    datasets.len()
+                ))));
+            }
+        }
+    }
+
     // Seed the interning pool so datasets added after a reopen can share these
     // schemas rather than starting a second copy of each.
     let mut schema_pool: std::collections::HashMap<u64, Vec<Arc<DatasetSchema>>> =
@@ -669,7 +875,9 @@ fn from_wire(wire: StoreMetaWire) -> Result<StoreMeta> {
         version: wire.version,
         codec: wire.codec,
         datasets,
+        live,
         schema_pool,
+        meta_epoch: wire.meta_epoch,
         ..Default::default()
     };
     meta.rebuild_index();
@@ -769,7 +977,7 @@ fn encode(meta: &StoreMeta, format: MetaFormat) -> Result<Vec<u8>> {
     }
 }
 
-fn compress(bytes: Vec<u8>, codec: Codec) -> Result<Vec<u8>> {
+pub(crate) fn compress(bytes: Vec<u8>, codec: Codec) -> Result<Vec<u8>> {
     match codec {
         Codec::Uncompressed => Ok(bytes),
         // zstd default level (3) — good ratio at low CPU. Metadata is small,
@@ -781,7 +989,7 @@ fn compress(bytes: Vec<u8>, codec: Codec) -> Result<Vec<u8>> {
     }
 }
 
-fn decompress(bytes: &[u8], codec: Codec) -> Result<Vec<u8>> {
+pub(crate) fn decompress(bytes: &[u8], codec: Codec) -> Result<Vec<u8>> {
     match codec {
         Codec::Uncompressed => Ok(bytes.to_vec()),
         Codec::Zstd => Ok(zstd::stream::decode_all(bytes)?),
@@ -1216,7 +1424,7 @@ mod tests {
             version: STORE_FORMAT_VERSION,
             ..Default::default()
         };
-        meta2.datasets.insert("new_ds".into(), Arc::new(DatasetSchema::default()));
+        meta2.add_dataset("new_ds");
         save_meta(&store, &meta2, MetaFormat::Json, Codec::Uncompressed)
             .await
             .unwrap();
@@ -1225,8 +1433,9 @@ mod tests {
         assert!(loaded.datasets.contains_key("new_ds"));
     }
 
-    /// A store written by an older atlas (version != 2) is rejected with a
-    /// clear error rather than a silent misparse.
+    /// A store written by an older atlas (version != 3) is rejected with a
+    /// clear error rather than a silent misparse. Version 3 added the tombstone
+    /// mask, so a version-2 store cannot be read positionally.
     #[tokio::test]
     async fn legacy_version_rejected() {
         let store = make_store();
@@ -1239,7 +1448,7 @@ mod tests {
             .unwrap();
         let err = load_meta(&store).await.unwrap_err();
         assert!(
-            matches!(err, Error::UnsupportedVersion { found: 1, expected: 2 }),
+            matches!(err, Error::UnsupportedVersion { found: 1, expected: 3 }),
             "expected UnsupportedVersion, got {err:?}"
         );
     }
@@ -1322,7 +1531,7 @@ mod tests {
         c.register_global_attr("region", DType::String);
         datasets.insert("c".into(), Arc::new(c));
 
-        let merged = compute_merged(&datasets);
+        let merged = compute_merged_over(datasets.values());
         // Int16 ∪ Int32 ∪ Float32 → Float64 (float + ≥32-bit int).
         assert_eq!(merged.arrays["temp"].dtype.0, DType::Float64);
         assert_eq!(merged.global_attributes["region"].0, DType::String);
@@ -1338,7 +1547,7 @@ mod tests {
         datasets.insert("a".into(), Arc::new(a));
         datasets.insert("b".into(), Arc::new(b));
 
-        let merged = compute_merged(&datasets);
+        let merged = compute_merged_over(datasets.values());
         assert_eq!(merged.global_attributes["created"].0, DType::String);
     }
 

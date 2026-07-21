@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
-use atlas::{Atlas, Codec, DType, MetaFormat, StoreConfig, TimestampNs, TypeMismatchPolicy};
-use numpy::{IntoPyArray, PyArray};
+use atlas::{
+    Atlas, Codec, ColumnKey, DType, MetaFormat, StatVal, StoreConfig, TimestampNs,
+    TypeMismatchPolicy,
+};
+use numpy::IntoPyArray;
 use object_store::path::Path as ObjStorePath;
 use pyo3::exceptions::{PyKeyError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
@@ -97,6 +100,7 @@ impl PyAtlas {
             on_type_mismatch: parse_type_mismatch_policy(on_type_mismatch)?,
             meta_format,
             meta_compression,
+            ..StoreConfig::default()
         };
         let inner = match source {
             AtlasSource::Path(path) => py
@@ -504,4 +508,182 @@ impl PyAtlas {
             _ => unreachable!("dtype filtered above"),
         }
     }
+
+    /// Reads the pruning index for **only** the requested columns.
+    ///
+    /// `arrays` / `global_attrs` are lists of names; `array_attrs` is a list of
+    /// `(array, key)` pairs. Returns
+    /// `{"rows", "datasets", "live", "columns": {label: {...}}}`, where each
+    /// column carries numpy arrays over the full row space, with `present`
+    /// marking which datasets actually declare it and `row_count` 0 for those
+    /// that don't. Statistics keep their source type; for a column's declared
+    /// type use `merged_schema()`.
+    ///
+    /// Only the named columns are fetched from storage — a store with hundreds
+    /// of columns costs the same here as one with two.
+    #[pyo3(signature = (arrays=None, global_attrs=None, array_attrs=None))]
+    fn pruning_index<'py>(
+        &self,
+        py: Python<'py>,
+        arrays: Option<Vec<String>>,
+        global_attrs: Option<Vec<String>>,
+        array_attrs: Option<Vec<(String, String)>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let mut keys: Vec<ColumnKey> = Vec::new();
+        for name in arrays.unwrap_or_default() {
+            keys.push(ColumnKey::Array(name));
+        }
+        for key in global_attrs.unwrap_or_default() {
+            keys.push(ColumnKey::GlobalAttr(key));
+        }
+        for (array, key) in array_attrs.unwrap_or_default() {
+            keys.push(ColumnKey::ArrayAttr(array, key));
+        }
+
+        let index = py
+            .detach(|| runtime().block_on(self.inner.pruning_index(&keys)))
+            .map_err(to_py_err)?;
+        let live = self.inner.live_mask();
+        let names = self.inner.dataset_names_by_row();
+
+        let out = PyDict::new(py);
+        out.set_item("rows", index.rows())?;
+        out.set_item("datasets", names)?;
+        out.set_item("live", live.into_pyarray(py))?;
+
+        let columns = PyDict::new(py);
+        for key in index.column_keys() {
+            let Some(column) = index.column(key) else {
+                continue;
+            };
+            let rows = index.rows();
+            let entry = PyDict::new(py);
+            let present: Vec<bool> = (0..rows).map(|i| column.present.get(i)).collect();
+            let valid: Vec<bool> = (0..rows).map(|i| column.stats_valid.get(i)).collect();
+            entry.set_item("present", present.into_pyarray(py))?;
+            entry.set_item("stats_valid", valid.into_pyarray(py))?;
+            entry.set_item("row_count", column.row_count.clone().into_pyarray(py))?;
+            entry.set_item("null_count", column.null_count.clone().into_pyarray(py))?;
+            entry.set_item("min", stat_vec_to_py(py, &column.min)?)?;
+            entry.set_item("max", stat_vec_to_py(py, &column.max)?)?;
+            columns.set_item(column_label(key), entry)?;
+        }
+        out.set_item("columns", columns)?;
+        Ok(out)
+    }
+
+    /// Every column's dtype and collection-wide min/max, read from the index
+    /// footer alone — no column data is fetched.
+    ///
+    /// Use it to rule a column out before asking for it: if its global range
+    /// can't satisfy a predicate, no dataset in it can either.
+    fn column_summaries<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let summaries = py
+            .detach(|| runtime().block_on(self.inner.column_summaries()))
+            .map_err(to_py_err)?;
+        let out = PyDict::new(py);
+        for (key, summary) in summaries {
+            let entry = PyDict::new(py);
+            entry.set_item("present_count", summary.present_count)?;
+            entry.set_item("min", summary.min.map(|v| stat_to_py(py, &v)).transpose()?)?;
+            entry.set_item("max", summary.max.map(|v| stat_to_py(py, &v)).transpose()?)?;
+            out.set_item(column_label(&key), entry)?;
+        }
+        Ok(out)
+    }
+
+    /// This dataset's fixed row ordinal in the pruning index, or `None`.
+    fn dataset_row(&self, name: &str) -> Option<usize> {
+        self.inner.dataset_row(name)
+    }
+
+    /// Total row slots including tombstoned ones — the pruning index's height.
+    fn row_slots(&self) -> usize {
+        self.inner.row_slots()
+    }
+}
+
+/// Dict key for a column: the array/attribute name, or `"array:key"` for a
+/// per-variable attribute.
+fn column_label(key: &ColumnKey) -> String {
+    match key {
+        ColumnKey::Array(name) => name.clone(),
+        ColumnKey::GlobalAttr(key) => key.clone(),
+        ColumnKey::ArrayAttr(array, key) => format!("{array}:{key}"),
+    }
+}
+
+fn stat_to_py(py: Python<'_>, value: &StatVal) -> PyResult<Py<PyAny>> {
+    Ok(match value {
+        StatVal::Int(i) => i.into_pyobject(py)?.into_any().unbind(),
+        StatVal::UInt(u) => u.into_pyobject(py)?.into_any().unbind(),
+        StatVal::Float(f) => f.into_pyobject(py)?.into_any().unbind(),
+        StatVal::TimestampNs(t) => t.into_pyobject(py)?.into_any().unbind(),
+        StatVal::Bytes(b) => pyo3::types::PyBytes::new(py, b).into_any().unbind(),
+    })
+}
+
+/// Expands a column's per-row values into a dense array.
+///
+/// Statistics keep their source type, so the output type is chosen from the
+/// values actually present: any byte value makes it a list of `bytes | None`,
+/// any float promotes the whole column to `float64`, otherwise it is an
+/// integer array. Rows without a value read as 0 (or NaN for floats) — consult
+/// `present` / `stats_valid` rather than the value itself.
+fn stat_vec_to_py(py: Python<'_>, values: &[Option<StatVal>]) -> PyResult<Py<PyAny>> {
+    let mut has_bytes = false;
+    let mut has_float = false;
+    let mut has_unsigned = false;
+    for value in values.iter().flatten() {
+        match value {
+            StatVal::Bytes(_) => has_bytes = true,
+            StatVal::Float(_) => has_float = true,
+            StatVal::UInt(_) => has_unsigned = true,
+            _ => {}
+        }
+    }
+
+    if has_bytes {
+        let list = PyList::empty(py);
+        for value in values {
+            match value {
+                Some(StatVal::Bytes(b)) => list.append(pyo3::types::PyBytes::new(py, b))?,
+                _ => list.append(py.None())?,
+            }
+        }
+        return Ok(list.into_any().unbind());
+    }
+    if has_float {
+        let out: Vec<f64> = values
+            .iter()
+            .map(|v| match v {
+                Some(StatVal::Float(f)) => *f,
+                Some(StatVal::Int(i)) => *i as f64,
+                Some(StatVal::UInt(u)) => *u as f64,
+                Some(StatVal::TimestampNs(t)) => *t as f64,
+                _ => f64::NAN,
+            })
+            .collect();
+        return Ok(out.into_pyarray(py).into_any().unbind());
+    }
+    if has_unsigned {
+        let out: Vec<u64> = values
+            .iter()
+            .map(|v| match v {
+                Some(StatVal::UInt(u)) => *u,
+                Some(StatVal::Int(i)) => (*i).max(0) as u64,
+                _ => 0,
+            })
+            .collect();
+        return Ok(out.into_pyarray(py).into_any().unbind());
+    }
+    let out: Vec<i64> = values
+        .iter()
+        .map(|v| match v {
+            Some(StatVal::Int(i)) => *i,
+            Some(StatVal::TimestampNs(t)) => *t,
+            _ => 0,
+        })
+        .collect();
+    Ok(out.into_pyarray(py).into_any().unbind())
 }

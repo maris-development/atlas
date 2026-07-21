@@ -648,7 +648,10 @@ fn stat_value_to_py(py: Python<'_>, val: &Option<atlas::StatValue>) -> PyResult<
         Some(StatValue::Float(f)) => (*f).into_py_any(py),
         Some(StatValue::Int(i)) => (*i).into_py_any(py),
         Some(StatValue::UInt(u)) => (*u).into_py_any(py),
-        Some(StatValue::Bytes(b)) => PyList::new(py, b)?.into_py_any(py),
+        // Raw bytes, not a list of ints: a string array's min/max is a value
+        // you compare against, so `b"apple"` is usable where `[97, 112, ...]`
+        // is not. Matches what the pruning index returns for the same column.
+        Some(StatValue::Bytes(b)) => pyo3::types::PyBytes::new(py, b).into_py_any(py),
         Some(StatValue::TimestampNs(t)) => (*t).into_py_any(py),
     }
 }

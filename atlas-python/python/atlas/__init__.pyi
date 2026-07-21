@@ -101,6 +101,56 @@ class Atlas:
         """
         ...
 
+    def pruning_index(
+        self,
+        arrays: Optional[list[str]] = None,
+        global_attrs: Optional[list[str]] = None,
+        array_attrs: Optional[list[tuple[str, str]]] = None,
+    ) -> dict[str, Any]:
+        """Flattened statistics for **only** the requested columns.
+
+        Returns ``{"rows", "datasets", "live", "columns"}``. Each entry of
+        ``columns`` holds numpy arrays over the full row space: ``present``,
+        ``stats_valid``, ``min``, ``max``, ``row_count``, ``null_count``.
+        ``row_count`` is 0 for a dataset that doesn't declare the column.
+
+        Statistics keep the type they were computed with, so ``min``/``max``
+        come back as int64, uint64, float64, or a list of ``bytes | None``
+        depending on what the column actually holds. For a column's
+        collection-wide declared type, use `merged_schema()`.
+
+        Row ``i`` is the dataset at ordinal ``i`` (see `dataset_row`);
+        ``datasets[i]`` names it, or is ``None`` for a deleted slot. Datasets
+        that don't declare a column are explicit gaps (``present`` is False).
+        Always ``&`` in ``live`` to exclude deleted datasets.
+
+        Only the named columns are fetched from storage, so the cost is
+        independent of how many other columns the collection has.
+        """
+        ...
+
+    def column_summaries(self) -> dict[str, Any]:
+        """Every column's ``{"min", "max", "present_count"}``, read from the
+        index footer alone — no column data is fetched.
+
+        Use it to rule a column out before requesting it: if its
+        collection-wide range can't satisfy a predicate, no dataset can.
+        """
+        ...
+
+    def dataset_row(self, name: str) -> Optional[int]:
+        """This dataset's fixed row ordinal in the pruning index.
+
+        Stable across deletions — a deleted dataset keeps its slot so no other
+        dataset's row moves. Only `compact()` renumbers.
+        """
+        ...
+
+    def row_slots(self) -> int:
+        """Total row slots including tombstoned ones — the pruning index's
+        height. Larger than the number of live datasets until `compact()`."""
+        ...
+
     def dataset_exists(self, name: str) -> bool: ...
 
     def __repr__(self) -> str: ...

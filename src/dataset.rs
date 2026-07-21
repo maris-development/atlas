@@ -213,8 +213,7 @@ impl DatasetView {
     pub fn schema(&self) -> DatasetSchema {
         self.atlas_meta
             .lock()
-            .datasets
-            .get(&self.name)
+            .live_schema(&self.name)
             .map(|s| (**s).clone())
             .unwrap_or_default()
     }
@@ -229,8 +228,7 @@ impl DatasetView {
     pub fn list_arrays(&self) -> Vec<String> {
         self.atlas_meta
             .lock()
-            .datasets
-            .get(&self.name)
+            .live_schema(&self.name)
             .map(|d| d.arrays.keys().cloned().collect())
             .unwrap_or_default()
     }
@@ -277,8 +275,7 @@ impl DatasetView {
         {
             let mut meta = self.atlas_meta.lock();
             let present = meta
-                .datasets
-                .get(&self.name)
+                .live_schema(&self.name)
                 .is_some_and(|d| d.arrays.contains_key(array));
             if !present {
                 return Err(Error::ArrayNotFound(array.to_string()));
@@ -313,8 +310,7 @@ impl DatasetView {
     pub fn array_meta(&self, array: &str) -> Option<ArraySchema> {
         self.atlas_meta
             .lock()
-            .datasets
-            .get(&self.name)
+            .live_schema(&self.name)
             .and_then(|d| d.arrays.get(array).cloned())
     }
 
@@ -354,7 +350,7 @@ impl DatasetView {
         let new_dtype = T::DTYPE.clone();
         {
             let meta = self.atlas_meta.lock();
-            if let Some(ds) = meta.datasets.get(&self.name) {
+            if let Some(ds) = meta.live_schema(&self.name) {
                 if ds.arrays.contains_key(array) {
                     return Err(Error::ArrayAlreadyExists(array.to_string()));
                 }
@@ -566,8 +562,7 @@ impl DatasetView {
     fn array_codec(&self, array: &str) -> Option<Codec> {
         self.atlas_meta
             .lock()
-            .datasets
-            .get(&self.name)
+            .live_schema(&self.name)
             .and_then(|d| d.arrays.get(array).map(|s| s.codec.clone()))
     }
 }
@@ -583,7 +578,7 @@ pub(crate) async fn open_dataset_view(
 ) -> Result<DatasetView> {
     {
         let meta = atlas_meta.lock();
-        if !meta.datasets.contains_key(name) {
+        if !meta.is_live(name) {
             return Err(Error::DatasetNotFound(name.to_string()));
         }
     }
@@ -609,8 +604,7 @@ mod tests {
 
     fn shared_meta_with(name: &str) -> Arc<Mutex<StoreMeta>> {
         let mut meta = StoreMeta::default();
-        meta.datasets
-            .insert(name.to_string(), Arc::new(DatasetSchema::default()));
+        meta.add_dataset(name);
         Arc::new(Mutex::new(meta))
     }
 
@@ -1072,8 +1066,8 @@ mod tests {
         let cache = test_cache();
         let shared = Arc::new(Mutex::new({
             let mut m = StoreMeta::default();
-            m.datasets.insert("ds_a".into(), Arc::new(DatasetSchema::default()));
-            m.datasets.insert("ds_b".into(), Arc::new(DatasetSchema::default()));
+            m.add_dataset("ds_a");
+            m.add_dataset("ds_b");
             m
         }));
         let pending = Arc::new(Mutex::new(PendingAttrs::default()));
