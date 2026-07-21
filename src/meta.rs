@@ -177,48 +177,79 @@ pub(crate) fn compute_merged(datasets: &IndexMap<String, Arc<DatasetSchema>>) ->
     merged
 }
 
+/// What the insert-time type check should compare against.
+enum Constraint {
+    /// No other dataset uses this key — anything goes.
+    Unconstrained,
+    /// Compare against this merged type.
+    Type(DType),
+    /// The fast path can't answer exactly; scan every dataset. Only reachable
+    /// for keys that hold mutually non-widenable types (see [`MergedType`]).
+    NeedsScan,
+}
+
 /// The merged type recorded for one key across every dataset in the store,
 /// plus how many datasets contribute it.
 ///
 /// This is the collection's merged schema for that key, maintained
-/// incrementally: each new declaration is widened into `dtype` rather than
-/// recomputed by scanning every dataset.
+/// incrementally: each new declaration is folded into `dtype` rather than
+/// recomputed by scanning every dataset. The fold is **first-seen-wins** — a
+/// type that can't merge leaves `dtype` alone — matching [`compute_merged`] and
+/// keeping a stored mismatch from becoming the reference type.
 ///
 /// The insert-time check asks "what type do the *other* datasets use?", which
 /// the merged type alone can't answer — widening is lossy, so a dataset's own
-/// contribution can't be subtracted back out. The `contributors` count closes
-/// that gap exactly, because of an invariant `ensure_widenable` maintains: all
-/// types recorded for a key are pairwise widenable. Under it, folding the
-/// current dataset's own type into the comparison never changes the
-/// accept/reject decision — widening within the numeric lattice is monotone,
-/// and `String`/`List`/`Bool` are incompatible with numerics either way. The
-/// single case where it *does* matter is when the current dataset is the only
-/// contributor, and then the answer is "no constraint" — which is exactly what
-/// a count of 1 identifies. See `index_matches_full_scan` in the tests.
+/// contribution can't be subtracted back out. `contributors` closes that gap
+/// whenever all types recorded for the key are pairwise widenable: folding the
+/// current dataset's own type in never changes the accept/reject decision
+/// (widening within the numeric lattice is monotone, and `String`/`List`/`Bool`
+/// are incompatible with numerics either way), so the only case that matters is
+/// the current dataset being the sole contributor — a count of 1.
+///
+/// `TypeMismatchPolicy::Warn` (the default) breaks that premise: a mismatching
+/// dataset is still stored, so a key can end up holding non-widenable types.
+/// Once that happens, excluding a dataset genuinely can change the answer — if
+/// the first-seen contributor is the one being excluded, the reference type
+/// shifts to whatever another dataset holds. `conflicted` marks those keys and
+/// sends them down the exact scan instead. It is set only by a real mismatch,
+/// so the common case stays O(1).
 #[derive(Debug, Default, Clone)]
 pub(crate) struct MergedType {
     dtype: Option<DType>,
     contributors: usize,
+    conflicted: bool,
 }
 
 impl MergedType {
-    /// Fold one dataset's declaration into the merged type.
+    /// Fold one dataset's declaration into the merged type, first-seen-wins.
     fn add(&mut self, ty: &DType) {
         self.dtype = Some(match self.dtype.take() {
             None => ty.clone(),
-            Some(a) => widen_dtype(&a, ty).unwrap_or_else(|| ty.clone()),
+            Some(a) => match widen_dtype(&a, ty) {
+                Some(w) => w,
+                None => {
+                    // Storable under Warn, so record it and stop trusting the
+                    // O(1) exclusion shortcut for this key.
+                    self.conflicted = true;
+                    a
+                }
+            },
         });
         self.contributors += 1;
     }
 
-    /// The constraint a write from `owner_declares` must satisfy: `None` when
-    /// no other dataset uses this key, else the merged type.
-    fn constraint(&self, owner_declares: bool) -> Option<DType> {
+    fn constraint(&self, owner_declares: bool) -> Constraint {
         let others = self.contributors - usize::from(owner_declares);
         if others == 0 {
-            return None;
+            return Constraint::Unconstrained;
         }
-        self.dtype.clone()
+        if self.conflicted {
+            return Constraint::NeedsScan;
+        }
+        match &self.dtype {
+            Some(d) => Constraint::Type(d.clone()),
+            None => Constraint::Unconstrained,
+        }
     }
 }
 
@@ -309,6 +340,34 @@ impl StoreMeta {
         self.index = index;
     }
 
+    /// Merge a key's type across every dataset **except** `exclude`, by
+    /// scanning them all. The exact reference definition; the type index is a
+    /// fast path over it, and falls back here for conflicted keys.
+    ///
+    /// Folds like [`compute_merged`]: compatible types widen, and a type that
+    /// can't merge leaves the accumulator alone so the **first-seen** type
+    /// wins. Keeping the two in step matters — once a mismatching dataset is
+    /// stored (under `TypeMismatchPolicy::Warn`), a last-wins fold here would
+    /// silently adopt the odd type out and stop reporting further mismatches.
+    fn scan_other<F>(&self, exclude: &str, mut pick: F) -> Option<DType>
+    where
+        F: FnMut(&DatasetSchema) -> Option<DType>,
+    {
+        let mut acc: Option<DType> = None;
+        for (name, schema) in &self.datasets {
+            if name == exclude {
+                continue;
+            }
+            if let Some(t) = pick(schema) {
+                acc = Some(match acc {
+                    None => t,
+                    Some(a) => widen_dtype(&a, &t).unwrap_or(a),
+                });
+            }
+        }
+        acc
+    }
+
     /// The type constraint a write of `array` from dataset `exclude` must
     /// satisfy: the merged type across the collection, or `None` if `exclude`
     /// is the only dataset declaring it.
@@ -317,7 +376,13 @@ impl StoreMeta {
             .datasets
             .get(exclude)
             .is_some_and(|s| s.arrays.contains_key(array));
-        self.index.arrays.get(array)?.dtype.constraint(owner_declares)
+        match self.index.arrays.get(array)?.dtype.constraint(owner_declares) {
+            Constraint::Unconstrained => None,
+            Constraint::Type(d) => Some(d),
+            Constraint::NeedsScan => {
+                self.scan_other(exclude, |s| s.arrays.get(array).map(|a| a.dtype.clone()))
+            }
+        }
     }
 
     /// As [`Self::other_array_dtype`], for a dataset-global attribute key.
@@ -326,7 +391,13 @@ impl StoreMeta {
             .datasets
             .get(exclude)
             .is_some_and(|s| s.global_attrs.contains_key(key));
-        self.index.global_attrs.get(key)?.constraint(owner_declares)
+        match self.index.global_attrs.get(key)?.constraint(owner_declares) {
+            Constraint::Unconstrained => None,
+            Constraint::Type(d) => Some(d),
+            Constraint::NeedsScan => {
+                self.scan_other(exclude, |s| s.global_attrs.get(key).map(|d| d.0.clone()))
+            }
+        }
     }
 
     /// As [`Self::other_array_dtype`], for a per-variable attribute key.
@@ -341,10 +412,21 @@ impl StoreMeta {
             .get(exclude)
             .and_then(|s| s.array_attrs.get(array))
             .is_some_and(|m| m.contains_key(key));
-        self.index
+        match self
+            .index
             .array_attrs
             .get(&(array.to_string(), key.to_string()))?
             .constraint(owner_declares)
+        {
+            Constraint::Unconstrained => None,
+            Constraint::Type(d) => Some(d),
+            Constraint::NeedsScan => self.scan_other(exclude, |s| {
+                s.array_attrs
+                    .get(array)
+                    .and_then(|m| m.get(key))
+                    .map(|d| d.0.clone())
+            }),
+        }
     }
 
     /// Codec of the physical file backing `array`, from the first dataset that
@@ -730,9 +812,10 @@ mod tests {
     use array_format::{AttributeValue, DType};
     use object_store::memory::InMemory;
 
-    /// The pre-index implementation: merge a key's type across every dataset
-    /// **except** `exclude`, by scanning them all. Kept as the reference
-    /// definition the incremental index is checked against.
+    /// Independent reference implementation of "merge this key's type across
+    /// every dataset except `exclude`", written out separately from
+    /// [`StoreMeta::scan_other`] so the test is a real cross-check rather than
+    /// a tautology. First-seen-wins, matching [`compute_merged`].
     fn merged_other_by_scan<F>(meta: &StoreMeta, exclude: &str, mut pick: F) -> Option<DType>
     where
         F: FnMut(&DatasetSchema) -> Option<DType>,
@@ -745,7 +828,7 @@ mod tests {
             if let Some(t) = pick(schema) {
                 acc = Some(match acc {
                     None => t,
-                    Some(a) => widen_dtype(&a, &t).unwrap_or(t),
+                    Some(a) => widen_dtype(&a, &t).unwrap_or(a),
                 });
             }
         }
@@ -777,21 +860,21 @@ mod tests {
         ];
         let mut meta = StoreMeta::default();
 
-        // Build a store where each dataset declares `x` and `k` with a
-        // rotating dtype, skipping combinations the invariant forbids.
+        // Every dataset declares `x`, `k` and `units` with a rotating dtype.
+        // Mismatching types are deliberately *kept*: under the default
+        // `TypeMismatchPolicy::Warn` they really are stored, so the index has
+        // to stay exact across conflicted keys too.
         for (i, dtype) in dtypes.iter().cycle().take(24).enumerate() {
             let ds = format!("ds{i}");
-            let allowed = meta
-                .other_array_dtype(&ds, "x")
-                .is_none_or(|e| widen_dtype(&e, dtype).is_some());
-            if !allowed {
-                continue;
-            }
             meta.record_array(&ds, "x", array_of(dtype.clone()));
             meta.record_global_attr(&ds, "k", dtype.clone());
             meta.record_array_attr(&ds, "x", "units", dtype.clone());
         }
         assert!(meta.datasets.len() > 1, "fixture should hold datasets");
+        assert!(
+            meta.index.arrays["x"].dtype.conflicted,
+            "fixture should exercise the conflicted path"
+        );
 
         let check = |meta: &StoreMeta| {
             // Probe from every existing dataset plus one that isn't there.
@@ -874,6 +957,35 @@ mod tests {
         assert_eq!(wire.schemas.len(), 2);
         assert_eq!(wire.datasets.len(), 100);
         assert_ne!(wire.datasets["ds7"], wire.datasets["ds0"]);
+    }
+
+    /// Under `TypeMismatchPolicy::Warn` a key can hold non-widenable types.
+    /// Excluding the *first-seen* contributor then genuinely shifts the
+    /// reference type, which the merged-type fast path cannot represent — it
+    /// must fall through to the exact scan.
+    #[test]
+    fn excluding_first_seen_contributor_of_a_conflicted_key() {
+        let mut meta = StoreMeta::default();
+        meta.record_global_attr("a", "k", DType::Int64);
+        meta.record_global_attr("odd", "k", DType::String);
+
+        // Merged (first-seen wins) is Int64, and that is what a third dataset
+        // is checked against.
+        assert_eq!(meta.other_global_attr_dtype("third", "k"), Some(DType::Int64));
+
+        // But for "a" itself the constraint is only what the others hold —
+        // String — not the merged type that "a" contributed to.
+        assert_eq!(meta.other_global_attr_dtype("a", "k"), Some(DType::String));
+        assert_eq!(meta.other_global_attr_dtype("odd", "k"), Some(DType::Int64));
+
+        // All three agree with a full scan.
+        for name in ["a", "odd", "third"] {
+            assert_eq!(
+                meta.other_global_attr_dtype(name, "k"),
+                merged_other_by_scan(&meta, name, |s| s.global_attrs.get("k").map(|d| d.0.clone())),
+                "mismatch for {name}"
+            );
+        }
     }
 
     /// A dataset that is the only one using a key has no constraint, so it may

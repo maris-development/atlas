@@ -7,7 +7,7 @@ use tracing::{debug, info, instrument};
 
 use crate::{
     Error, Result,
-    config::{Codec, MetaFormat, StoreConfig},
+    config::{Codec, MetaFormat, StoreConfig, TypeMismatchPolicy},
     dataset::{ArrayCache, DatasetView, GLOBAL_ATTRS_ARRAY, PendingAttrs, open_dataset_view},
     meta::{STORE_FORMAT_VERSION, StoreMeta, load_meta, save_meta},
 };
@@ -30,6 +30,9 @@ pub struct Atlas {
     pending_attrs: Arc<Mutex<PendingAttrs>>,
     cache: Arc<ArrayCache>,
     codec: Codec,
+    /// How type mismatches across datasets are reported. Per-session, not
+    /// persisted to `atlas.json`.
+    on_type_mismatch: TypeMismatchPolicy,
     meta_format: MetaFormat,
     meta_compression: Codec,
 }
@@ -41,6 +44,22 @@ impl Atlas {
     /// in-memory meta until [`Atlas::flush`] is called.
     #[instrument(skip(store), fields(prefix = %prefix))]
     pub async fn open(store: Arc<dyn ObjectStore>, prefix: Path) -> Result<Self> {
+        Self::open_with_config(store, prefix, StoreConfig::default()).await
+    }
+
+    /// Like [`Atlas::open`], but lets you choose the per-session
+    /// [`TypeMismatchPolicy`](crate::TypeMismatchPolicy) via
+    /// [`StoreConfig::on_type_mismatch`].
+    ///
+    /// Only `on_type_mismatch` is honoured here: the array codec and the
+    /// metadata format/compression are detected from the files on disk, so
+    /// those fields of `config` are ignored when opening.
+    #[instrument(skip(store, config), fields(prefix = %prefix, on_type_mismatch = ?config.on_type_mismatch))]
+    pub async fn open_with_config(
+        store: Arc<dyn ObjectStore>,
+        prefix: Path,
+        config: StoreConfig,
+    ) -> Result<Self> {
         let store = prefixed(store, prefix);
         let (meta, meta_format, meta_compression) = load_meta(&store).await?;
         let codec = meta.codec;
@@ -57,6 +76,7 @@ impl Atlas {
             pending_attrs: Arc::new(Mutex::new(PendingAttrs::default())),
             cache: default_cache(),
             codec,
+            on_type_mismatch: config.on_type_mismatch,
             meta_format,
             meta_compression,
         })
@@ -79,6 +99,7 @@ impl Atlas {
             pending_attrs: Arc::new(Mutex::new(PendingAttrs::default())),
             cache: default_cache(),
             codec: config.codec,
+            on_type_mismatch: config.on_type_mismatch,
             meta_format: config.meta_format,
             meta_compression: config.meta_compression,
         })
@@ -107,8 +128,19 @@ impl Atlas {
     /// # });
     /// ```
     pub async fn open_path(path: impl AsRef<std::path::Path>) -> Result<Self> {
+        Self::open_path_with_config(path, StoreConfig::default()).await
+    }
+
+    /// Like [`Atlas::open_path`], but lets you choose the per-session
+    /// [`TypeMismatchPolicy`](crate::TypeMismatchPolicy). Only
+    /// `config.on_type_mismatch` is honoured; the codec and metadata
+    /// format/compression are detected from disk.
+    pub async fn open_path_with_config(
+        path: impl AsRef<std::path::Path>,
+        config: StoreConfig,
+    ) -> Result<Self> {
         let store = Arc::new(LocalFileSystem::new_with_prefix(path.as_ref())?);
-        Self::open(store, Path::from("")).await
+        Self::open_with_config(store, Path::from(""), config).await
     }
 
     /// Create a new store at the given local filesystem path. The directory is created
@@ -154,6 +186,7 @@ impl Atlas {
             self.meta.clone(),
             self.pending_attrs.clone(),
             self.codec.clone(),
+            self.on_type_mismatch,
         ))
     }
 
@@ -169,6 +202,7 @@ impl Atlas {
             self.pending_attrs.clone(),
             name,
             self.codec.clone(),
+            self.on_type_mismatch,
         )
         .await
     }

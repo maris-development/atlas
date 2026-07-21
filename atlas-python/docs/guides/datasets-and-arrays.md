@@ -166,6 +166,22 @@ merged["global_attributes"]                     # {attr_key: dtype}
 When the same array name or attribute key appears in multiple datasets with
 different types, the merged type is **widened** — but only within numeric types
 (`int16` ∪ `int32` → `int32`, `int32` ∪ `float32` → `float64`) or between
-`string` and `timestamp` (→ `string`). Anything else is a collision:
-`define_array` / `set_attribute` raise `ValueError` (e.g. an `int32` array in
-one dataset and a `string` array under the same name in another).
+`string` and `timestamp` (→ `string`).
+
+Anything else can't merge (e.g. an `int32` array in one dataset and a `string`
+array under the same name in another). The dataset is **still stored** under its
+own type and reads back normally; the merged schema just keeps the
+**first-seen** type. `on_type_mismatch` decides how that's reported:
+
+```python
+# "warn" (default): stored, logs a warning, merged keeps the first type
+store = atlas.Atlas.create("/tmp/store")
+store = atlas.Atlas.open("/tmp/store")
+
+# "error": the mismatching define_array / set_attribute raises ValueError
+store = atlas.Atlas.create("/tmp/store", on_type_mismatch="error")
+store = atlas.Atlas.open("/tmp/store", on_type_mismatch="error")
+```
+
+It's a per-session choice — it isn't stored in `atlas.json`, so pass it each
+time you open the collection.
