@@ -183,8 +183,7 @@ impl Atlas {
     pub async fn delete_dataset(&mut self, name: &str) -> Result<()> {
         let dataset_meta = {
             let mut meta = self.meta.lock();
-            meta.datasets
-                .shift_remove(name)
+            meta.unrecord_dataset(name)
                 .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?
         };
         // Drop any buffered (not-yet-flushed) attribute writes for this dataset.
@@ -563,10 +562,9 @@ impl Atlas {
         if file == GLOBAL_ATTRS_ARRAY {
             return self.codec.clone();
         }
-        let meta = self.meta.lock();
-        meta.datasets
-            .values()
-            .find_map(|d| d.arrays.get(file).map(|s| s.codec.clone()))
+        self.meta
+            .lock()
+            .array_file_codec(file)
             .unwrap_or_else(|| self.codec.clone())
     }
 

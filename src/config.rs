@@ -7,7 +7,9 @@
 ///
 /// Also reused for metadata compression via
 /// [`StoreConfig::meta_compression`] — the same three options apply.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum Codec {
     /// Zstd compression (default). Best compression ratio at moderate speed.
     #[default]

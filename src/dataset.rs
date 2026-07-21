@@ -15,28 +15,6 @@ use crate::{
     schema::{ArraySchema, Attr, attr_dtype, widen_dtype},
 };
 
-/// Merge the type of `array`/attribute across every dataset **except**
-/// `exclude`, so a (re)insert can be checked against the rest of the
-/// collection. `pick` extracts the relevant type from a dataset's schema.
-fn merged_other<F>(meta: &StoreMeta, exclude: &str, mut pick: F) -> Option<DType>
-where
-    F: FnMut(&DatasetSchema) -> Option<DType>,
-{
-    let mut acc: Option<DType> = None;
-    for (name, schema) in &meta.datasets {
-        if name == exclude {
-            continue;
-        }
-        if let Some(t) = pick(schema) {
-            acc = Some(match acc {
-                None => t,
-                Some(a) => widen_dtype(&a, &t).unwrap_or(t),
-            });
-        }
-    }
-    acc
-}
-
 /// Error unless `new` widens with the already-recorded `existing` type.
 fn ensure_widenable(name: &str, existing: Option<DType>, new: &DType) -> Result<()> {
     if let Some(m) = existing {
@@ -169,6 +147,15 @@ pub struct DatasetView {
     codec: Codec,
 }
 
+/// Interning hook: once a view goes away the dataset is fully written, so its
+/// schema can be deduplicated against the rest of the collection. Datasets that
+/// share a layout (an ingest of like-shaped files) then share one allocation.
+impl Drop for DatasetView {
+    fn drop(&mut self) {
+        self.atlas_meta.lock().seal_dataset(&self.name);
+    }
+}
+
 impl DatasetView {
     pub(crate) fn new(
         store: Arc<dyn ObjectStore>,
@@ -195,7 +182,7 @@ impl DatasetView {
             .lock()
             .datasets
             .get(&self.name)
-            .cloned()
+            .map(|s| (**s).clone())
             .unwrap_or_default()
     }
 
@@ -226,14 +213,9 @@ impl DatasetView {
         let ty = attr_dtype(&value);
         {
             let mut meta = self.atlas_meta.lock();
-            let existing = merged_other(&meta, &self.name, |s| {
-                s.global_attrs.get(key).map(|d| d.0.clone())
-            });
+            let existing = meta.other_global_attr_dtype(&self.name, key);
             ensure_widenable(key, existing, &ty)?;
-            meta.datasets
-                .entry(self.name.clone())
-                .or_default()
-                .register_global_attr(key, ty);
+            meta.record_global_attr(&self.name, key, ty);
         }
         self.pending_attrs
             .lock()
@@ -268,14 +250,9 @@ impl DatasetView {
             if !present {
                 return Err(Error::ArrayNotFound(array.to_string()));
             }
-            let existing = merged_other(&meta, &self.name, |s| {
-                s.array_attrs.get(array).and_then(|m| m.get(key)).map(|d| d.0.clone())
-            });
+            let existing = meta.other_array_attr_dtype(&self.name, array, key);
             ensure_widenable(key, existing, &ty)?;
-            meta.datasets
-                .entry(self.name.clone())
-                .or_default()
-                .register_array_attr(array, key, ty);
+            meta.record_array_attr(&self.name, array, key, ty);
         }
         self.pending_attrs.lock().set(array, &self.name, key, value);
         Ok(())
@@ -351,9 +328,7 @@ impl DatasetView {
             }
             // Reject a dtype that can't merge with the same array name in other
             // datasets (e.g. an int32 array here vs a string array elsewhere).
-            let existing = merged_other(&meta, &self.name, |s| {
-                s.arrays.get(array).map(|a| a.dtype.clone())
-            });
+            let existing = meta.other_array_dtype(&self.name, array);
             ensure_widenable(array, existing, &new_dtype)?;
         }
 
@@ -376,12 +351,9 @@ impl DatasetView {
             dimension_names: dims,
             codec: self.codec.clone(),
         };
-        let mut meta = self.atlas_meta.lock();
-        meta.datasets
-            .entry(self.name.clone())
-            .or_default()
-            .arrays
-            .insert(array.to_string(), schema);
+        self.atlas_meta
+            .lock()
+            .record_array(&self.name, array, schema);
         Ok(())
     }
 
@@ -507,11 +479,7 @@ impl DatasetView {
         arc.write().await.delete(&self.name)?;
         // Drop any buffered per-variable attribute writes for this array.
         self.pending_attrs.lock().remove(array, &self.name);
-        let mut meta = self.atlas_meta.lock();
-        if let Some(ds_meta) = meta.datasets.get_mut(&self.name) {
-            ds_meta.arrays.shift_remove(array);
-            ds_meta.array_attrs.shift_remove(array);
-        }
+        self.atlas_meta.lock().unrecord_array(&self.name, array);
         debug!("deleted array");
         Ok(())
     }
@@ -607,7 +575,7 @@ mod tests {
     fn shared_meta_with(name: &str) -> Arc<Mutex<StoreMeta>> {
         let mut meta = StoreMeta::default();
         meta.datasets
-            .insert(name.to_string(), DatasetSchema::default());
+            .insert(name.to_string(), Arc::new(DatasetSchema::default()));
         Arc::new(Mutex::new(meta))
     }
 
@@ -1066,8 +1034,8 @@ mod tests {
         let cache = test_cache();
         let shared = Arc::new(Mutex::new({
             let mut m = StoreMeta::default();
-            m.datasets.insert("ds_a".into(), DatasetSchema::default());
-            m.datasets.insert("ds_b".into(), DatasetSchema::default());
+            m.datasets.insert("ds_a".into(), Arc::new(DatasetSchema::default()));
+            m.datasets.insert("ds_b".into(), Arc::new(DatasetSchema::default()));
             m
         }));
         let pending = Arc::new(Mutex::new(PendingAttrs::default()));

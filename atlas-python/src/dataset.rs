@@ -86,12 +86,17 @@ impl PyDatasetView {
     #[pyo3(signature = (key, value, dtype=None))]
     fn set_attribute(
         &mut self,
+        py: Python<'_>,
         key: &str,
         value: &Bound<'_, PyAny>,
         dtype: Option<&str>,
     ) -> PyResult<()> {
         let attr = py_to_attr(value, dtype)?;
-        self.inner.set_attribute(key, attr).map_err(to_py_err)
+        // Release the GIL: the setter takes the store-wide meta lock, so
+        // holding it would serialise every thread writing a dataset. Attribute
+        // writes dominate the call count on an xarray ingest (~170 per file).
+        py.detach(|| self.inner.set_attribute(key, attr))
+            .map_err(to_py_err)
     }
 
     fn get_attribute(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyAny>>> {
@@ -105,14 +110,14 @@ impl PyDatasetView {
     #[pyo3(signature = (array, key, value, dtype=None))]
     fn set_array_attribute(
         &mut self,
+        py: Python<'_>,
         array: &str,
         key: &str,
         value: &Bound<'_, PyAny>,
         dtype: Option<&str>,
     ) -> PyResult<()> {
         let attr = py_to_attr(value, dtype)?;
-        self.inner
-            .set_array_attribute(array, key, attr)
+        py.detach(|| self.inner.set_array_attribute(array, key, attr))
             .map_err(to_py_err)
     }
 

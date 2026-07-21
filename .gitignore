@@ -33,3 +33,5 @@ atlas-python/python/atlas/_atlas.pyd
 atlas-python/python/atlas/_atlas.abi3.so
 atlas-python/python/atlas/_atlas*.so
 atlas-python/python/atlas/_atlas.pdb
+test-collection-netcdf-seadatanet/
+batch_to_atlas.py

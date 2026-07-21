@@ -39,6 +39,10 @@ pub struct DatasetSchema {
     pub array_attrs: IndexMap<String, IndexMap<String, DTypeS>>,
 }
 
+/// Direct schema mutators, used only to build fixtures. Production writes go
+/// through [`StoreMeta::record_global_attr`] / [`StoreMeta::record_array_attr`]
+/// so the type index stays in sync.
+#[cfg(test)]
 impl DatasetSchema {
     /// Record (or update the type of) a global attribute key.
     pub(crate) fn register_global_attr(&mut self, key: &str, ty: DType) {
@@ -52,6 +56,54 @@ impl DatasetSchema {
             .or_default()
             .insert(key.to_string(), DTypeS(ty));
     }
+}
+
+/// Feed a [`DType`] into a hasher. `DType` comes from `array_format` and
+/// derives neither `Hash` nor `Eq` (it holds no floats — this is just a
+/// missing derive), so schema hashing spells it out here.
+fn hash_dtype<H: std::hash::Hasher>(dtype: &DType, state: &mut H) {
+    use std::hash::Hash;
+    std::mem::discriminant(dtype).hash(state);
+    match dtype {
+        DType::List { child } => hash_dtype(child, state),
+        DType::FixedSizeList { child, size } => {
+            hash_dtype(child, state);
+            size.hash(state);
+        }
+        _ => {}
+    }
+}
+
+/// Content hash of a dataset schema, consistent with its `PartialEq`: two
+/// schemas that compare equal hash equal. Used to intern identical schemas.
+fn schema_hash(schema: &DatasetSchema) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut state = std::collections::hash_map::DefaultHasher::new();
+
+    schema.arrays.len().hash(&mut state);
+    for (name, array) in &schema.arrays {
+        name.hash(&mut state);
+        hash_dtype(&array.dtype, &mut state);
+        array.shape.hash(&mut state);
+        array.chunk_shape.hash(&mut state);
+        array.dimension_names.hash(&mut state);
+        array.codec.hash(&mut state);
+    }
+    schema.global_attrs.len().hash(&mut state);
+    for (key, ty) in &schema.global_attrs {
+        key.hash(&mut state);
+        hash_dtype(&ty.0, &mut state);
+    }
+    schema.array_attrs.len().hash(&mut state);
+    for (array, attrs) in &schema.array_attrs {
+        array.hash(&mut state);
+        attrs.len().hash(&mut state);
+        for (key, ty) in attrs {
+            key.hash(&mut state);
+            hash_dtype(&ty.0, &mut state);
+        }
+    }
+    state.finish()
 }
 
 /// A collection-wide, merged view of every unique array and attribute, with
@@ -97,7 +149,7 @@ fn merge_type(map: &mut IndexMap<String, DTypeS>, key: &str, ty: &DType) {
 /// Fold every dataset's schema into the collection-wide merged schema.
 /// Type collisions are widened where possible; insert-time validation
 /// (in `DatasetView`) guarantees only widenable types ever reach here.
-pub(crate) fn compute_merged(datasets: &IndexMap<String, DatasetSchema>) -> MergedSchema {
+pub(crate) fn compute_merged(datasets: &IndexMap<String, Arc<DatasetSchema>>) -> MergedSchema {
     let mut merged = MergedSchema::default();
     for schema in datasets.values() {
         for (name, arr) in &schema.arrays {
@@ -125,13 +177,313 @@ pub(crate) fn compute_merged(datasets: &IndexMap<String, DatasetSchema>) -> Merg
     merged
 }
 
+/// The merged type recorded for one key across every dataset in the store,
+/// plus how many datasets contribute it.
+///
+/// This is the collection's merged schema for that key, maintained
+/// incrementally: each new declaration is widened into `dtype` rather than
+/// recomputed by scanning every dataset.
+///
+/// The insert-time check asks "what type do the *other* datasets use?", which
+/// the merged type alone can't answer — widening is lossy, so a dataset's own
+/// contribution can't be subtracted back out. The `contributors` count closes
+/// that gap exactly, because of an invariant `ensure_widenable` maintains: all
+/// types recorded for a key are pairwise widenable. Under it, folding the
+/// current dataset's own type into the comparison never changes the
+/// accept/reject decision — widening within the numeric lattice is monotone,
+/// and `String`/`List`/`Bool` are incompatible with numerics either way. The
+/// single case where it *does* matter is when the current dataset is the only
+/// contributor, and then the answer is "no constraint" — which is exactly what
+/// a count of 1 identifies. See `index_matches_full_scan` in the tests.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct MergedType {
+    dtype: Option<DType>,
+    contributors: usize,
+}
+
+impl MergedType {
+    /// Fold one dataset's declaration into the merged type.
+    fn add(&mut self, ty: &DType) {
+        self.dtype = Some(match self.dtype.take() {
+            None => ty.clone(),
+            Some(a) => widen_dtype(&a, ty).unwrap_or_else(|| ty.clone()),
+        });
+        self.contributors += 1;
+    }
+
+    /// The constraint a write from `owner_declares` must satisfy: `None` when
+    /// no other dataset uses this key, else the merged type.
+    fn constraint(&self, owner_declares: bool) -> Option<DType> {
+        let others = self.contributors - usize::from(owner_declares);
+        if others == 0 {
+            return None;
+        }
+        self.dtype.clone()
+    }
+}
+
+/// Per-array index entry: the merged dtype for this array name across all
+/// datasets, plus the codec of the physical `.af` file that backs it.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ArrayIndexEntry {
+    dtype: MergedType,
+    codec: Codec,
+}
+
+/// Incrementally-maintained reverse index over every dataset schema in the
+/// store, so adding dataset *N* costs the same as adding dataset 1.
+///
+/// Without it, each `define_array` / `set_attribute` / `set_array_attribute`
+/// scanned all N datasets to find the type already recorded for that key
+/// elsewhere, making a bulk ingest O(N² · keys-per-dataset) — the dominant
+/// cost when writing thousands of small, attribute-heavy datasets (a NetCDF
+/// folder ingest sets ~170 keys per file).
+///
+/// Kept in sync by the `record_*` / `unrecord_*` methods on [`StoreMeta`];
+/// [`StoreMeta::rebuild_index`] recomputes it from scratch after a bulk load.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct TypeIndex {
+    arrays: std::collections::HashMap<String, ArrayIndexEntry>,
+    global_attrs: std::collections::HashMap<String, MergedType>,
+    array_attrs: std::collections::HashMap<(String, String), MergedType>,
+}
+
 #[derive(Debug, Default, Clone)]
 pub(crate) struct StoreMeta {
     pub version: u32,
     /// Codec used when new arrays are defined in this store.
     pub codec: Codec,
     /// Dataset name → schema. Insertion-ordered.
-    pub datasets: IndexMap<String, DatasetSchema>,
+    ///
+    /// Mutate through the `record_*` / `unrecord_*` methods rather than
+    /// directly, so [`StoreMeta::index`] stays consistent. Inserting an empty
+    /// [`DatasetSchema`] directly is safe (it contributes nothing to the
+    /// index); anything else must be followed by [`Self::rebuild_index`].
+    pub datasets: IndexMap<String, Arc<DatasetSchema>>,
+    /// Derived from `datasets` — never set directly; see [`Self::rebuild_index`].
+    pub(crate) index: TypeIndex,
+    /// Interning pool of distinct schemas, keyed by content hash.
+    ///
+    /// A collection of homogeneous datasets (the common case — one NetCDF
+    /// folder, one variable layout) holds a single `DatasetSchema` allocation
+    /// shared by every dataset, instead of one deep copy each. The on-disk
+    /// format already interns this way; without the pool the in-memory
+    /// representation was the larger of the two by far.
+    ///
+    /// Populated by [`Self::seal_dataset`]. Mutations use `Arc::make_mut`, so a
+    /// dataset that is edited after interning transparently copies out of the
+    /// pool first.
+    pub(crate) schema_pool: std::collections::HashMap<u64, Vec<Arc<DatasetSchema>>>,
+}
+
+impl StoreMeta {
+    /// Recompute the type index from `datasets`. O(total keys); called after a
+    /// bulk load or a removal, never on the per-dataset write path.
+    pub(crate) fn rebuild_index(&mut self) {
+        let mut index = TypeIndex::default();
+        for schema in self.datasets.values() {
+            for (name, arr) in &schema.arrays {
+                index
+                    .arrays
+                    .entry(name.clone())
+                    .or_insert_with(|| ArrayIndexEntry {
+                        dtype: MergedType::default(),
+                        codec: arr.codec.clone(),
+                    })
+                    .dtype
+                    .add(&arr.dtype);
+            }
+            for (key, ty) in &schema.global_attrs {
+                index.global_attrs.entry(key.clone()).or_default().add(&ty.0);
+            }
+            for (array, attrs) in &schema.array_attrs {
+                for (key, ty) in attrs {
+                    index
+                        .array_attrs
+                        .entry((array.clone(), key.clone()))
+                        .or_default()
+                        .add(&ty.0);
+                }
+            }
+        }
+        self.index = index;
+    }
+
+    /// The type constraint a write of `array` from dataset `exclude` must
+    /// satisfy: the merged type across the collection, or `None` if `exclude`
+    /// is the only dataset declaring it.
+    pub(crate) fn other_array_dtype(&self, exclude: &str, array: &str) -> Option<DType> {
+        let owner_declares = self
+            .datasets
+            .get(exclude)
+            .is_some_and(|s| s.arrays.contains_key(array));
+        self.index.arrays.get(array)?.dtype.constraint(owner_declares)
+    }
+
+    /// As [`Self::other_array_dtype`], for a dataset-global attribute key.
+    pub(crate) fn other_global_attr_dtype(&self, exclude: &str, key: &str) -> Option<DType> {
+        let owner_declares = self
+            .datasets
+            .get(exclude)
+            .is_some_and(|s| s.global_attrs.contains_key(key));
+        self.index.global_attrs.get(key)?.constraint(owner_declares)
+    }
+
+    /// As [`Self::other_array_dtype`], for a per-variable attribute key.
+    pub(crate) fn other_array_attr_dtype(
+        &self,
+        exclude: &str,
+        array: &str,
+        key: &str,
+    ) -> Option<DType> {
+        let owner_declares = self
+            .datasets
+            .get(exclude)
+            .and_then(|s| s.array_attrs.get(array))
+            .is_some_and(|m| m.contains_key(key));
+        self.index
+            .array_attrs
+            .get(&(array.to_string(), key.to_string()))?
+            .constraint(owner_declares)
+    }
+
+    /// Codec of the physical file backing `array`, from the first dataset that
+    /// declared it. O(1); replaces a scan over every dataset.
+    pub(crate) fn array_file_codec(&self, array: &str) -> Option<Codec> {
+        self.index.arrays.get(array).map(|e| e.codec.clone())
+    }
+
+    /// Declare `array` in `dataset`, folding its dtype into the index.
+    pub(crate) fn record_array(&mut self, dataset: &str, array: &str, schema: ArraySchema) {
+        let dtype = schema.dtype.clone();
+        let codec = schema.codec.clone();
+        let previous = self
+            .schema_mut(dataset)
+            .arrays
+            .insert(array.to_string(), schema);
+        if retyped(previous.as_ref().map(|p| &p.dtype), &dtype) {
+            // Rare: this dataset changed the array's type. The merged type
+            // can't un-widen, so recompute it exactly.
+            self.rebuild_index();
+            return;
+        }
+        if previous.is_none() {
+            self.index
+                .arrays
+                .entry(array.to_string())
+                .or_insert_with(|| ArrayIndexEntry {
+                    dtype: MergedType::default(),
+                    codec,
+                })
+                .dtype
+                .add(&dtype);
+        }
+    }
+
+    /// Record (or retype) a dataset-global attribute key, updating the index.
+    pub(crate) fn record_global_attr(&mut self, dataset: &str, key: &str, ty: DType) {
+        let previous = self
+            .schema_mut(dataset)
+            .global_attrs
+            .insert(key.to_string(), DTypeS(ty.clone()));
+        if retyped(previous.as_ref().map(|p| &p.0), &ty) {
+            self.rebuild_index();
+            return;
+        }
+        if previous.is_none() {
+            self.index
+                .global_attrs
+                .entry(key.to_string())
+                .or_default()
+                .add(&ty);
+        }
+    }
+
+    /// Record (or retype) a per-variable attribute key, updating the index.
+    pub(crate) fn record_array_attr(&mut self, dataset: &str, array: &str, key: &str, ty: DType) {
+        let previous = self
+            .schema_mut(dataset)
+            .array_attrs
+            .entry(array.to_string())
+            .or_default()
+            .insert(key.to_string(), DTypeS(ty.clone()));
+        if retyped(previous.as_ref().map(|p| &p.0), &ty) {
+            self.rebuild_index();
+            return;
+        }
+        if previous.is_none() {
+            self.index
+                .array_attrs
+                .entry((array.to_string(), key.to_string()))
+                .or_default()
+                .add(&ty);
+        }
+    }
+
+    /// Drop `array` (and its attribute keys) from `dataset`.
+    pub(crate) fn unrecord_array(&mut self, dataset: &str, array: &str) {
+        if self.datasets.contains_key(dataset) {
+            let ds = self.schema_mut(dataset);
+            ds.arrays.shift_remove(array);
+            ds.array_attrs.shift_remove(array);
+        }
+        self.rebuild_index();
+    }
+
+    /// Remove `dataset` entirely. Returns its schema.
+    pub(crate) fn unrecord_dataset(&mut self, dataset: &str) -> Option<Arc<DatasetSchema>> {
+        let schema = self.datasets.shift_remove(dataset)?;
+        self.rebuild_index();
+        self.prune_schema_pool();
+        Some(schema)
+    }
+
+    /// Mutable access to a dataset's schema, copying it out of the interning
+    /// pool first if it is shared (`Arc::make_mut`). While a dataset is being
+    /// built its schema is unshared, so this is a plain deref — the copy only
+    /// happens when an already-sealed dataset is edited again.
+    fn schema_mut(&mut self, dataset: &str) -> &mut DatasetSchema {
+        Arc::make_mut(self.datasets.entry(dataset.to_string()).or_default())
+    }
+
+    /// Intern `dataset`'s schema: replace it with an identical one from the
+    /// pool if there is one, otherwise add it to the pool.
+    ///
+    /// Called when a [`DatasetView`](crate::DatasetView) is dropped, i.e. once
+    /// the dataset is fully written. Costs one hash plus one equality compare
+    /// over the schema, both O(keys), once per dataset.
+    pub(crate) fn seal_dataset(&mut self, dataset: &str) {
+        let Some(schema) = self.datasets.get(dataset) else {
+            return;
+        };
+        if Arc::strong_count(schema) > 1 {
+            return; // already interned
+        }
+        let hash = schema_hash(schema);
+        let bucket = self.schema_pool.entry(hash).or_default();
+        match bucket.iter().find(|pooled| ***pooled == **schema) {
+            Some(pooled) => {
+                let shared = pooled.clone();
+                self.datasets.insert(dataset.to_string(), shared);
+            }
+            None => bucket.push(schema.clone()),
+        }
+    }
+
+    /// Drop pooled schemas no dataset references any more.
+    fn prune_schema_pool(&mut self) {
+        for bucket in self.schema_pool.values_mut() {
+            bucket.retain(|s| Arc::strong_count(s) > 1);
+        }
+        self.schema_pool.retain(|_, bucket| !bucket.is_empty());
+    }
+}
+
+/// `true` if `previous` exists and differs from `new` — the only case where an
+/// incremental index update is not enough, since a merged type can widen but
+/// never narrow back.
+fn retyped(previous: Option<&DType>, new: &DType) -> bool {
+    previous.is_some_and(|p| p != new)
 }
 
 /// On-disk wire form of [`StoreMeta`]. Identical dataset schemas are
@@ -166,18 +518,30 @@ struct MetaVersion {
     version: u32,
 }
 
-/// Build the interned wire form from in-memory metadata. Dataset schemas are
-/// deduplicated by value (linear scan — the pool is tiny for the homogeneous
-/// collections this optimises for).
+/// Build the interned wire form from in-memory metadata.
+///
+/// Schemas are already interned in memory, so deduplication is a pointer-keyed
+/// hash lookup. Distinct-but-equal schemas (possible only for datasets never
+/// sealed) are caught by a fallback equality scan over the pool built so far.
 fn to_wire(meta: &StoreMeta) -> StoreMetaWire {
     let mut schemas: Vec<DatasetSchema> = Vec::new();
+    let mut by_ptr: std::collections::HashMap<*const DatasetSchema, usize> =
+        std::collections::HashMap::new();
     let mut datasets: IndexMap<String, usize> = IndexMap::with_capacity(meta.datasets.len());
     for (name, schema) in &meta.datasets {
-        let idx = match schemas.iter().position(|s| s == schema) {
-            Some(i) => i,
+        let ptr = Arc::as_ptr(schema);
+        let idx = match by_ptr.get(&ptr) {
+            Some(&i) => i,
             None => {
-                schemas.push(schema.clone());
-                schemas.len() - 1
+                let i = match schemas.iter().position(|s| s == &**schema) {
+                    Some(i) => i,
+                    None => {
+                        schemas.push((**schema).clone());
+                        schemas.len() - 1
+                    }
+                };
+                by_ptr.insert(ptr, i);
+                i
             }
         };
         datasets.insert(name.clone(), idx);
@@ -195,22 +559,40 @@ fn to_wire(meta: &StoreMeta) -> StoreMetaWire {
 /// Expand the interned wire form back into per-dataset schemas, sharing the
 /// pooled schema for every dataset that references the same index.
 fn from_wire(wire: StoreMetaWire) -> Result<StoreMeta> {
-    let mut datasets: IndexMap<String, DatasetSchema> =
+    // One allocation per distinct schema, shared by every dataset that uses it
+    // — the load-side half of the in-memory interning.
+    let pooled: Vec<Arc<DatasetSchema>> = wire.schemas.into_iter().map(Arc::new).collect();
+    let mut datasets: IndexMap<String, Arc<DatasetSchema>> =
         IndexMap::with_capacity(wire.datasets.len());
     for (name, idx) in wire.datasets {
-        let schema = wire.schemas.get(idx).cloned().ok_or_else(|| {
+        let schema = pooled.get(idx).cloned().ok_or_else(|| {
             Error::ArrayFormat(array_format::Error::Storage(format!(
                 "corrupt metadata: dataset '{name}' references schema index {idx} of {}",
-                wire.schemas.len()
+                pooled.len()
             )))
         })?;
         datasets.insert(name, schema);
     }
-    Ok(StoreMeta {
+    // Seed the interning pool so datasets added after a reopen can share these
+    // schemas rather than starting a second copy of each.
+    let mut schema_pool: std::collections::HashMap<u64, Vec<Arc<DatasetSchema>>> =
+        std::collections::HashMap::new();
+    for schema in pooled {
+        schema_pool
+            .entry(schema_hash(&schema))
+            .or_default()
+            .push(schema);
+    }
+    let mut meta = StoreMeta {
         version: wire.version,
         codec: wire.codec,
         datasets,
-    })
+        schema_pool,
+        ..Default::default()
+    };
+    meta.rebuild_index();
+    meta.prune_schema_pool();
+    Ok(meta)
 }
 
 /// Load store metadata, auto-detecting both the encoding format and the
@@ -348,6 +730,171 @@ mod tests {
     use array_format::{AttributeValue, DType};
     use object_store::memory::InMemory;
 
+    /// The pre-index implementation: merge a key's type across every dataset
+    /// **except** `exclude`, by scanning them all. Kept as the reference
+    /// definition the incremental index is checked against.
+    fn merged_other_by_scan<F>(meta: &StoreMeta, exclude: &str, mut pick: F) -> Option<DType>
+    where
+        F: FnMut(&DatasetSchema) -> Option<DType>,
+    {
+        let mut acc: Option<DType> = None;
+        for (name, schema) in &meta.datasets {
+            if name == exclude {
+                continue;
+            }
+            if let Some(t) = pick(schema) {
+                acc = Some(match acc {
+                    None => t,
+                    Some(a) => widen_dtype(&a, &t).unwrap_or(t),
+                });
+            }
+        }
+        acc
+    }
+
+    fn array_of(dtype: DType) -> ArraySchema {
+        ArraySchema {
+            dtype,
+            shape: vec![1],
+            chunk_shape: vec![1],
+            dimension_names: vec!["i".into()],
+            codec: Codec::default(),
+        }
+    }
+
+    /// The index must give the same accept/reject answer as a full scan for
+    /// every dataset/key combination, including the sole-contributor case and
+    /// after deletions.
+    #[test]
+    fn index_matches_full_scan() {
+        let dtypes = [
+            DType::Int32,
+            DType::Int64,
+            DType::Float64,
+            DType::UInt8,
+            DType::String,
+            DType::TimestampNs,
+        ];
+        let mut meta = StoreMeta::default();
+
+        // Build a store where each dataset declares `x` and `k` with a
+        // rotating dtype, skipping combinations the invariant forbids.
+        for (i, dtype) in dtypes.iter().cycle().take(24).enumerate() {
+            let ds = format!("ds{i}");
+            let allowed = meta
+                .other_array_dtype(&ds, "x")
+                .is_none_or(|e| widen_dtype(&e, dtype).is_some());
+            if !allowed {
+                continue;
+            }
+            meta.record_array(&ds, "x", array_of(dtype.clone()));
+            meta.record_global_attr(&ds, "k", dtype.clone());
+            meta.record_array_attr(&ds, "x", "units", dtype.clone());
+        }
+        assert!(meta.datasets.len() > 1, "fixture should hold datasets");
+
+        let check = |meta: &StoreMeta| {
+            // Probe from every existing dataset plus one that isn't there.
+            let mut names: Vec<String> = meta.datasets.keys().cloned().collect();
+            names.push("absent".into());
+            for name in &names {
+                assert_eq!(
+                    meta.other_array_dtype(name, "x"),
+                    merged_other_by_scan(meta, name, |s| s.arrays.get("x").map(|a| a.dtype.clone())),
+                    "array dtype mismatch for {name}"
+                );
+                assert_eq!(
+                    meta.other_global_attr_dtype(name, "k"),
+                    merged_other_by_scan(meta, name, |s| s.global_attrs.get("k").map(|d| d.0.clone())),
+                    "global attr mismatch for {name}"
+                );
+                assert_eq!(
+                    meta.other_array_attr_dtype(name, "x", "units"),
+                    merged_other_by_scan(meta, name, |s| s
+                        .array_attrs
+                        .get("x")
+                        .and_then(|m| m.get("units"))
+                        .map(|d| d.0.clone())),
+                    "array attr mismatch for {name}"
+                );
+            }
+        };
+
+        check(&meta);
+
+        // Deleting must narrow the constraint back, not leave it widened.
+        let victims: Vec<String> = meta.datasets.keys().take(2).cloned().collect();
+        for v in victims {
+            meta.unrecord_dataset(&v);
+            check(&meta);
+        }
+
+        // Dropping the array from a dataset clears its attribute keys too.
+        if let Some(name) = meta.datasets.keys().next().cloned() {
+            meta.unrecord_array(&name, "x");
+            check(&meta);
+        }
+    }
+
+    /// Datasets with identical schemas must end up sharing one allocation, and
+    /// editing one afterwards must not disturb the others.
+    #[test]
+    fn identical_schemas_share_one_allocation() {
+        let mut meta = StoreMeta::default();
+        for i in 0..100 {
+            let ds = format!("ds{i}");
+            meta.record_array(&ds, "temp", array_of(DType::Float64));
+            meta.record_global_attr(&ds, "title", DType::String);
+            meta.record_array_attr(&ds, "temp", "units", DType::String);
+            meta.seal_dataset(&ds);
+        }
+
+        let first = meta.datasets["ds0"].clone();
+        assert!(
+            meta.datasets
+                .values()
+                .all(|s| Arc::ptr_eq(s, &first)),
+            "all 100 identical schemas should share one allocation"
+        );
+        assert_eq!(meta.schema_pool.values().map(Vec::len).sum::<usize>(), 1);
+
+        // Copy-on-write: editing one dataset must not touch its neighbours.
+        meta.record_global_attr("ds7", "extra", DType::Int64);
+        assert!(!Arc::ptr_eq(&meta.datasets["ds7"], &first));
+        assert!(meta.datasets["ds7"].global_attrs.contains_key("extra"));
+        assert!(!meta.datasets["ds0"].global_attrs.contains_key("extra"));
+        assert!(Arc::ptr_eq(&meta.datasets["ds0"], &first));
+
+        // A genuinely different schema gets its own pool entry.
+        meta.seal_dataset("ds7");
+        assert_eq!(meta.schema_pool.values().map(Vec::len).sum::<usize>(), 2);
+
+        // Interning must not change what gets written to disk.
+        let wire = to_wire(&meta);
+        assert_eq!(wire.schemas.len(), 2);
+        assert_eq!(wire.datasets.len(), 100);
+        assert_ne!(wire.datasets["ds7"], wire.datasets["ds0"]);
+    }
+
+    /// A dataset that is the only one using a key has no constraint, so it may
+    /// freely retype it — the behaviour the contributor count preserves.
+    #[test]
+    fn sole_contributor_can_retype() {
+        let mut meta = StoreMeta::default();
+        meta.record_global_attr("solo", "k", DType::Int64);
+        assert_eq!(meta.other_global_attr_dtype("solo", "k"), None);
+
+        meta.record_global_attr("solo", "k", DType::String);
+        assert_eq!(meta.other_global_attr_dtype("solo", "k"), None);
+        assert_eq!(meta.datasets["solo"].global_attrs["k"].0, DType::String);
+
+        // A second dataset now sees the String constraint.
+        assert_eq!(
+            meta.other_global_attr_dtype("other", "k"),
+            Some(DType::String)
+        );
+    }
+
     fn make_store() -> Arc<dyn ObjectStore> {
         Arc::new(InMemory::new())
     }
@@ -377,7 +924,7 @@ mod tests {
             version: STORE_FORMAT_VERSION,
             ..Default::default()
         };
-        meta.datasets.insert("ds1".into(), sample_schema());
+        meta.datasets.insert("ds1".into(), Arc::new(sample_schema()));
         meta
     }
 
@@ -426,12 +973,12 @@ mod tests {
             ..Default::default()
         };
         // Three datasets share one schema; a fourth differs.
-        meta.datasets.insert("a".into(), sample_schema());
-        meta.datasets.insert("b".into(), sample_schema());
-        meta.datasets.insert("c".into(), sample_schema());
+        meta.datasets.insert("a".into(), Arc::new(sample_schema()));
+        meta.datasets.insert("b".into(), Arc::new(sample_schema()));
+        meta.datasets.insert("c".into(), Arc::new(sample_schema()));
         let mut other = sample_schema();
         other.register_global_attr("extra", DType::Float64);
-        meta.datasets.insert("d".into(), other);
+        meta.datasets.insert("d".into(), Arc::new(other));
 
         // Wire form pools identical schemas: two distinct entries, not four.
         let wire = to_wire(&meta);
@@ -489,7 +1036,7 @@ mod tests {
             }
             // Distinct global key per dataset to defeat interning here.
             ds.register_global_attr(&format!("k_{i}"), DType::Int64);
-            meta.datasets.insert(format!("dataset_{i}"), ds);
+            meta.datasets.insert(format!("dataset_{i}"), Arc::new(ds));
         }
 
         for format in [MetaFormat::Json, MetaFormat::MsgPack] {
@@ -528,7 +1075,7 @@ mod tests {
     async fn load_priority_order_when_many_present() {
         let store = make_store();
         let mut a = sample_meta();
-        a.datasets.insert("only_a".into(), DatasetSchema::default());
+        a.datasets.insert("only_a".into(), Arc::new(DatasetSchema::default()));
         let b = sample_meta();
         let c = sample_meta();
         // Write three different files; uncompressed-JSON should win.
@@ -557,7 +1104,7 @@ mod tests {
             version: STORE_FORMAT_VERSION,
             ..Default::default()
         };
-        meta2.datasets.insert("new_ds".into(), DatasetSchema::default());
+        meta2.datasets.insert("new_ds".into(), Arc::new(DatasetSchema::default()));
         save_meta(&store, &meta2, MetaFormat::Json, Codec::Uncompressed)
             .await
             .unwrap();
@@ -656,12 +1203,12 @@ mod tests {
 
     #[test]
     fn merged_schema_widens_numeric_array_dtypes() {
-        let mut datasets: IndexMap<String, DatasetSchema> = IndexMap::new();
-        datasets.insert("a".into(), schema_with_array("temp", DType::Int16));
-        datasets.insert("b".into(), schema_with_array("temp", DType::Int32));
+        let mut datasets: IndexMap<String, Arc<DatasetSchema>> = IndexMap::new();
+        datasets.insert("a".into(), Arc::new(schema_with_array("temp", DType::Int16)));
+        datasets.insert("b".into(), Arc::new(schema_with_array("temp", DType::Int32)));
         let mut c = schema_with_array("temp", DType::Float32);
         c.register_global_attr("region", DType::String);
-        datasets.insert("c".into(), c);
+        datasets.insert("c".into(), Arc::new(c));
 
         let merged = compute_merged(&datasets);
         // Int16 ∪ Int32 ∪ Float32 → Float64 (float + ≥32-bit int).
@@ -671,13 +1218,13 @@ mod tests {
 
     #[test]
     fn merged_schema_widens_string_and_timestamp_attr() {
-        let mut datasets: IndexMap<String, DatasetSchema> = IndexMap::new();
+        let mut datasets: IndexMap<String, Arc<DatasetSchema>> = IndexMap::new();
         let mut a = DatasetSchema::default();
         a.register_global_attr("created", DType::TimestampNs);
         let mut b = DatasetSchema::default();
         b.register_global_attr("created", DType::String);
-        datasets.insert("a".into(), a);
-        datasets.insert("b".into(), b);
+        datasets.insert("a".into(), Arc::new(a));
+        datasets.insert("b".into(), Arc::new(b));
 
         let merged = compute_merged(&datasets);
         assert_eq!(merged.global_attributes["created"].0, DType::String);
@@ -690,7 +1237,7 @@ mod tests {
             ..Default::default()
         };
         meta.datasets
-            .insert("a".into(), schema_with_array("temp", DType::Int32));
+            .insert("a".into(), Arc::new(schema_with_array("temp", DType::Int32)));
         let json = String::from_utf8(encode(&meta, MetaFormat::Json).unwrap()).unwrap();
         assert!(json.contains("\"merged\""), "atlas.json must include merged schema:\n{json}");
     }
