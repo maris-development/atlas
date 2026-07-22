@@ -1,18 +1,20 @@
-use std::{collections::HashMap, sync::Arc};
+//! [`DatasetView`]: the handle for reading and writing one dataset.
 
-use array_format::{ArrayElement, ArrayStats, DType, DeltaCache, FillValue};
+use std::sync::Arc;
+
+use array_format::{ArrayElement, ArrayStats, DType, FillValue};
 use indexmap::IndexMap;
 use ndarray::{ArcArray, ArrayView, IxDyn};
 use object_store::ObjectStore;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use tracing::{debug, instrument, trace, warn};
 
+use super::{ArrayCache, PendingAttrs};
 use crate::{
     Error, Result,
-    array::AtlasArray,
     config::{Codec, TypeMismatchPolicy},
     meta::{DatasetSchema, StoreMeta},
-    schema::{ArraySchema, Attr, attr_dtype, widen_dtype},
+    schema::{ArraySchema, Attr, widen_dtype},
 };
 
 /// Check `new` against the type the collection already records.
@@ -25,7 +27,7 @@ use crate::{
 ///
 /// The `existing` type comes from [`StoreMeta`]'s incrementally-maintained type
 /// index rather than a scan over every dataset; it folds first-seen-wins to
-/// match [`crate::meta::compute_merged`], so a stored mismatch never becomes the
+/// match the collection's merged schema, so a stored mismatch never becomes the
 /// reference type that later inserts are checked against.
 fn check_type_alignment(
     policy: TypeMismatchPolicy,
@@ -63,94 +65,6 @@ fn check_type_alignment(
 /// that dataset's global attribute values. The leading `_` guarantees it never
 /// collides with a user array (see [`crate::validate_name`]).
 pub(crate) const GLOBAL_ATTRS_ARRAY: &str = "_global";
-
-/// Buffered attribute writes, applied to the `.af` files at flush time.
-///
-/// Setting an attribute never touches disk: it lands here and is drained into
-/// the array files by [`Atlas::flush`](crate::Atlas::flush) /
-/// [`Atlas::compact`](crate::Atlas::compact), preserving atlas's single
-/// durability boundary. Keyed by physical array-file name (`_global` for
-/// dataset-global attrs, else the array name) and dataset name.
-#[derive(Default)]
-pub(crate) struct PendingAttrs {
-    entries: HashMap<(String, String), IndexMap<String, Attr>>,
-}
-
-impl PendingAttrs {
-    fn set(&mut self, file: &str, dataset: &str, key: &str, value: Attr) {
-        self.entries
-            .entry((file.to_string(), dataset.to_string()))
-            .or_default()
-            .insert(key.to_string(), value);
-    }
-
-    fn get(&self, file: &str, dataset: &str, key: &str) -> Option<Attr> {
-        self.entries
-            .get(&(file.to_string(), dataset.to_string()))
-            .and_then(|m| m.get(key).cloned())
-    }
-
-    /// Drops every buffered write for one `(file, dataset)` pair.
-    fn remove(&mut self, file: &str, dataset: &str) {
-        self.entries.remove(&(file.to_string(), dataset.to_string()));
-    }
-
-    /// Drops every buffered write for `dataset` across all files.
-    pub(crate) fn remove_dataset(&mut self, dataset: &str) {
-        self.entries.retain(|(_, ds), _| ds != dataset);
-    }
-
-    /// Snapshot of all buffered writes as `((file, dataset), key→value)`,
-    /// consuming the buffer. Used by the flush-time drain.
-    pub(crate) fn drain_all(&mut self) -> Vec<((String, String), IndexMap<String, Attr>)> {
-        self.entries.drain().collect()
-    }
-}
-
-/// Shared lazy-handle map: array name → `Arc<AtlasArray>`. Cloned by reference
-/// from `Atlas` into every `DatasetView`, so all views observe the same
-/// initialization state. The map lock (`parking_lot::RwLock`) is never held
-/// across an `await` point; `AtlasArray` defers its actual I/O via
-/// `tokio::sync::OnceCell` so each underlying file opens at most once.
-pub(crate) struct ArrayCache {
-    pub(crate) files: RwLock<HashMap<String, Arc<AtlasArray>>>,
-    pub(crate) delta: Arc<DeltaCache>,
-}
-
-impl ArrayCache {
-    pub(crate) fn new(delta: Arc<DeltaCache>) -> Self {
-        Self {
-            files: RwLock::new(HashMap::new()),
-            delta,
-        }
-    }
-
-    /// Returns the lazy handle for `array_name`, registering a new one if
-    /// absent. Does **not** open or create the underlying file — that happens
-    /// on the first `AtlasArray::get().await`.
-    pub(crate) fn get_or_insert(
-        &self,
-        store: &Arc<dyn ObjectStore>,
-        array_name: &str,
-        codec: &Codec,
-    ) -> Arc<AtlasArray> {
-        if let Some(arc) = self.files.read().get(array_name) {
-            return arc.clone();
-        }
-        let mut guard = self.files.write();
-        guard
-            .entry(array_name.to_string())
-            .or_insert_with(|| {
-                Arc::new(AtlasArray::new(
-                    store.clone(),
-                    codec.clone(),
-                    array_name.to_string(),
-                    self.delta.clone(),
-                ))
-            })
-            .clone()
-    }
-}
 
 /// A borrowed handle to one dataset within an [`Atlas`](crate::Atlas).
 ///
@@ -241,7 +155,7 @@ impl DatasetView {
     /// Errors with [`Error::TypeMismatch`] if another dataset already uses this
     /// global key with a type that can't widen to this value's type.
     pub fn set_attribute(&mut self, key: &str, value: Attr) -> Result<()> {
-        let ty = attr_dtype(&value);
+        let ty = value.dtype();
         {
             let mut meta = self.atlas_meta.lock();
             let existing = meta.other_global_attr_dtype(&self.name, key);
@@ -271,7 +185,7 @@ impl DatasetView {
     /// Buffered until flush, which writes it into `<array>/data.af`. Errors
     /// with [`Error::ArrayNotFound`] if the array isn't declared here.
     pub fn set_array_attribute(&mut self, array: &str, key: &str, value: Attr) -> Result<()> {
-        let ty = attr_dtype(&value);
+        let ty = value.dtype();
         {
             let mut meta = self.atlas_meta.lock();
             let present = meta
@@ -350,11 +264,10 @@ impl DatasetView {
         let new_dtype = T::DTYPE.clone();
         {
             let meta = self.atlas_meta.lock();
-            if let Some(ds) = meta.live_schema(&self.name) {
-                if ds.arrays.contains_key(array) {
+            if let Some(ds) = meta.live_schema(&self.name)
+                && ds.arrays.contains_key(array) {
                     return Err(Error::ArrayAlreadyExists(array.to_string()));
                 }
-            }
             // Reject a dtype that can't merge with the same array name in other
             // datasets (e.g. an int32 array here vs a string array elsewhere).
             let existing = meta.other_array_dtype(&self.name, array);
@@ -378,7 +291,7 @@ impl DatasetView {
             shape,
             chunk_shape: actual_chunk,
             dimension_names: dims,
-            codec: self.codec.clone(),
+            codec: self.codec,
         };
         self.atlas_meta
             .lock()
@@ -551,9 +464,9 @@ impl DatasetView {
     /// otherwise the array's recorded codec (falling back to the store codec).
     fn file_codec(&self, file: &str) -> Codec {
         if file == GLOBAL_ATTRS_ARRAY {
-            self.codec.clone()
+            self.codec
         } else {
-            self.array_codec(file).unwrap_or_else(|| self.codec.clone())
+            self.array_codec(file).unwrap_or(self.codec)
         }
     }
 
@@ -563,7 +476,7 @@ impl DatasetView {
         self.atlas_meta
             .lock()
             .live_schema(&self.name)
-            .and_then(|d| d.arrays.get(array).map(|s| s.codec.clone()))
+            .and_then(|d| d.arrays.get(array).map(|s| s.codec))
     }
 }
 
@@ -596,6 +509,7 @@ pub(crate) async fn open_dataset_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use array_format::DeltaCache;
     use object_store::memory::InMemory;
 
     fn make_store() -> Arc<dyn ObjectStore> {
@@ -1021,18 +935,20 @@ mod tests {
                 .unwrap();
 
             // Drain the buffer into the .af files the way Atlas::flush does.
-            for ((file, ds), attrs) in pending.lock().drain_all() {
+            // Bind the drained Vec so the lock is released before the awaits.
+            let drained = pending.lock().drain_all();
+            for ((file, ds), attrs) in drained {
                 let codec = Codec::default();
                 let handle = cache.get_or_insert(&store, &file, &codec);
                 let arc = handle.get().await.unwrap();
                 let mut guard = arc.write().await;
                 if guard.get_array(&ds).is_err() {
                     guard
-                        .define_array::<u8>(ds.clone(), vec![], vec![], None, None)
+                        .define_array::<u8>(ds.to_string(), vec![], vec![], None, None)
                         .unwrap();
                 }
                 for (k, v) in attrs {
-                    guard.set_attribute(&ds, &k, v.into()).unwrap();
+                    guard.set_attribute(&ds, &k, (*v).clone().into()).unwrap();
                 }
             }
             flush_initialized(&cache).await;

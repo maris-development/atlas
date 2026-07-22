@@ -97,7 +97,7 @@ pub use config::{Codec, MetaFormat, StoreConfig, TypeMismatchPolicy};
 pub use dataset::DatasetView;
 pub use error::{Error, Result};
 pub use meta::{DatasetSchema, MergedArray, MergedSchema};
-pub use pruning::{Bitmap, ColumnKey, ColumnSummary, PruningIndex, StatColumn, StatVal};
+pub use pruning::{ColumnKey, ColumnSummary, ColumnView, PruningIndex, StatColumn, StatVal};
 pub use store::Atlas;
 
 pub use array_format::{

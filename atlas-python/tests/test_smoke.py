@@ -554,3 +554,46 @@ if __name__ == "__main__":
     test_delete_dataset_and_array()
     test_array_meta()
     print("All smoke tests passed.")
+
+
+def test_facade_wraps_the_core_and_delegates():
+    """The public Atlas is a thin Python facade over the Rust core: it wraps the
+    core, forwards primitives to it, and keeps the fast paths on the core.
+    """
+    import atlas._atlas as _core
+
+    with tempfile.TemporaryDirectory() as d:
+        s = atlas.Atlas.create(d)
+        # The facade is Python; its inner is the Rust core.
+        assert isinstance(s, atlas.Atlas)
+        assert type(s).__module__ == "atlas.store"
+        assert isinstance(s._inner, _core.Atlas)
+
+        # create_dataset returns the *core* DatasetView (hot path is direct,
+        # not wrapped) — so per-array writes never cross the facade.
+        view = s.create_dataset("d")
+        assert isinstance(view, _core.DatasetView)
+        view.define_array("t", "int64", ["x"], [3])
+        view.write_array("t", [0], np.arange(3, dtype=np.int64))
+        del view
+
+        # A delegated primitive (not defined on the facade) still works via
+        # __getattr__ forwarding to the core.
+        assert s.dataset_exists("d")
+        assert "d" in s.list_datasets()
+
+        s.flush()
+        # A pure-Python high-level method (pruning_index is delegated; the query
+        # shape is unchanged).
+        idx = s.pruning_index(arrays=["t"])
+        assert idx["rows"] == 1
+        s.close()
+
+
+def test_facade_context_manager_flushes():
+    with tempfile.TemporaryDirectory() as d:
+        with atlas.Atlas.create(d) as s:
+            s.create_dataset("only").set_attribute("k", 1)
+        # __exit__ called close()/flush(), so the dataset persists.
+        with atlas.Atlas.open(d) as s2:
+            assert s2.list_datasets() == ["only"]

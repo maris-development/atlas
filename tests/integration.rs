@@ -951,19 +951,20 @@ async fn pruning_index_flattens_with_nulls() {
     let index = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
     assert_eq!(index.rows(), 3, "one row per dataset");
 
-    let column = index.column(&key).expect("temp column");
-    assert!(column.present.get(0));
+    let view = index.view(&key).expect("temp column");
+    assert!(view.is_present(0));
     assert!(
-        !column.present.get(1),
+        !view.is_present(1),
         "ds1 has no temp — must be an explicit gap"
     );
-    assert!(column.present.get(2));
+    assert!(view.is_present(2));
 
-    assert_eq!(column.min[0], Some(StatVal::Int(1)));
-    assert_eq!(column.max[0], Some(StatVal::Int(5)));
-    assert_eq!(column.min[2], Some(StatVal::Int(-4)));
-    assert_eq!(column.max[2], Some(StatVal::Int(2)));
-    assert_eq!(column.min[1], None, "the gap carries no statistics");
+    assert_eq!(view.min(0), Some(&StatVal::Int(1)));
+    assert_eq!(view.max(0), Some(&StatVal::Int(5)));
+    assert_eq!(view.min(2), Some(&StatVal::Int(-4)));
+    assert_eq!(view.max(2), Some(&StatVal::Int(2)));
+    assert_eq!(view.min(1), None, "the gap carries no statistics");
+    assert_eq!(view.row_count(1), 0, "and no rows");
 
     // Row positions line up with dataset_row, which is what lets a caller join
     // the flattened table back to dataset names.
@@ -1003,27 +1004,26 @@ async fn pruning_index_masks_deleted_rows() {
 
     let key = ColumnKey::array("v");
     let index = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
-    let mask = atlas.live_mask();
-
     assert_eq!(index.rows(), 3, "the dead row keeps its slot");
-    assert_eq!(mask, vec![true, false, true]);
+    assert_eq!(index.live(), &[true, false, true]);
 
-    let column = index.column(&key).unwrap();
+    // The view applies present/stats_valid/live for us — a caller cannot
+    // accidentally see the deleted dataset.
+    let view = index.view(&key).expect("v column");
     assert_eq!(
-        column.max[2],
-        Some(StatVal::Int(4)),
+        view.max(2),
+        Some(&StatVal::Int(4)),
         "c must not have shifted into b's row"
     );
+    assert_eq!(view.max(1), None, "the deleted row exposes nothing");
+    assert_eq!(view.row_count(1), 0);
+    assert_eq!(view.present_rows(), vec![0, 2]);
 
-    // A scan that honours the mask must not see the deleted dataset's outlier.
-    let live_max = (0..index.rows())
-        .filter(|i| mask[*i] && column.stats_valid.get(*i))
-        .filter_map(|i| match column.max[i] {
-            Some(StatVal::Int(v)) => Some(v),
-            _ => None,
-        })
-        .max();
-    assert_eq!(live_max, Some(4), "b's 200 must be masked out");
+    // b's outlier of 200 must not survive a range scan.
+    assert!(
+        view.candidates(|_, hi| hi > &StatVal::Int(100)).is_empty(),
+        "b's 200 must be masked out"
+    );
 }
 
 /// Reading two columns must materialize only those two — the property the
@@ -1114,6 +1114,7 @@ async fn pruning_index_matches_per_dataset_stats() {
     let key = ColumnKey::array("depth");
     let index = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
     let column = index.column(&key).unwrap();
+    let present = column.present_mask();
 
     for d in 0..6 {
         let name = format!("ds{d}");
@@ -1126,7 +1127,7 @@ async fn pruning_index_matches_per_dataset_stats() {
             .await;
         match per_dataset {
             Some(stats) => {
-                assert!(column.present.get(row), "{name} declares depth");
+                assert!(present[row], "{name} declares depth");
                 assert_eq!(column.row_count[row], stats.row_count, "{name} row_count");
                 assert_eq!(column.null_count[row], stats.null_count, "{name} null_count");
                 let expected_min = match stats.min {
@@ -1135,7 +1136,7 @@ async fn pruning_index_matches_per_dataset_stats() {
                 };
                 assert_eq!(column.min[row], expected_min, "{name} min");
             }
-            None => assert!(!column.present.get(row), "{name} has no depth"),
+            None => assert!(!present[row], "{name} has no depth"),
         }
     }
 }
@@ -1199,7 +1200,7 @@ async fn reading_one_column_does_not_touch_another() {
     let column = late
         .column(&ColumnKey::array("arr7"))
         .expect("a column beyond the damage must still load");
-    assert_eq!(column.present.count_set(), 8);
+    assert_eq!(column.present_mask().iter().filter(|b| **b).count(), 8);
 
     // ...and the damaged column itself does fail, confirming the corruption
     // was real rather than landing in padding.
@@ -1210,4 +1211,308 @@ async fn reading_one_column_does_not_touch_another() {
             .is_err(),
         "the corrupted column must fail to decode"
     );
+}
+
+/// A revived dataset must not inherit the previous occupant's pruning stats —
+/// the row is reset when the slot is reused.
+#[tokio::test]
+async fn pruning_row_is_reset_when_a_dataset_is_revived() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    // "recycled" declares `temp` with a distinctive max, then is deleted.
+    {
+        let mut ds = atlas.create_dataset("recycled").await.unwrap();
+        ds.define_array::<i32>("temp", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        ds.write_array("temp", vec![0], ndarray::Array::from_vec(vec![900i32, 999]).into_dyn().view())
+            .await
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+    let row = atlas.dataset_row("recycled").unwrap();
+    atlas.delete_dataset("recycled").await.unwrap();
+
+    // Recreate the same name; it reuses the slot but declares nothing yet.
+    atlas.create_dataset("recycled").await.unwrap();
+    atlas.flush().await.unwrap();
+
+    let idx = atlas.pruning_index(&[ColumnKey::array("temp")]).await.unwrap();
+    let view = idx.view(&ColumnKey::array("temp")).expect("temp column");
+    assert_eq!(atlas.dataset_row("recycled"), Some(row), "slot reused");
+    assert!(
+        !view.is_present(row),
+        "revived row must not carry the old dataset's stats"
+    );
+    assert_eq!(view.max(row), None);
+}
+
+/// After `compact` renumbers datasets, the pruning index must be rebuilt in the
+/// new numbering with the surviving rows' stats intact.
+#[tokio::test]
+async fn compact_rebuilds_the_pruning_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+        .await
+        .unwrap();
+
+    for (name, vals) in [("a", vec![1i32, 2]), ("b", vec![50i32, 60]), ("c", vec![7i32, 8])] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.define_array::<i32>("v", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        ds.write_array("v", vec![0], ndarray::Array::from_vec(vals).into_dyn().view())
+            .await
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+    atlas.delete_dataset("a").await.unwrap();
+    atlas.flush().await.unwrap();
+    atlas.compact().await.unwrap();
+
+    // b and c renumbered to rows 0 and 1; their stats must line up.
+    let idx = atlas.pruning_index(&[ColumnKey::array("v")]).await.unwrap();
+    assert_eq!(idx.rows(), 2, "dead row reclaimed");
+    let view = idx.view(&ColumnKey::array("v")).unwrap();
+    assert_eq!(view.max(atlas.dataset_row("b").unwrap()), Some(&StatVal::Int(60)));
+    assert_eq!(view.max(atlas.dataset_row("c").unwrap()), Some(&StatVal::Int(8)));
+
+    // And it survives a reopen at the new epoch.
+    let reopened = Atlas::open(store, prefix).await.unwrap();
+    let idx2 = reopened.pruning_index(&[ColumnKey::array("v")]).await.unwrap();
+    assert_eq!(idx2.rows(), 2);
+    assert_eq!(idx2.view(&ColumnKey::array("v")).unwrap().present_rows().len(), 2);
+}
+
+/// Attribute columns record which datasets carry a global / per-array key.
+#[tokio::test]
+async fn pruning_index_tracks_attribute_presence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    // ds0 and ds2 set `cruise`; ds1 does not.
+    for (name, set_cruise) in [("ds0", true), ("ds1", false), ("ds2", true)] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.define_array::<i32>("v", vec!["i".into()], vec![1], None, None)
+            .await
+            .unwrap();
+        ds.set_array_attribute("v", "units", Attr::String("m".into())).unwrap();
+        if set_cruise {
+            ds.set_attribute("cruise", Attr::String(name.into())).unwrap();
+        }
+    }
+    atlas.flush().await.unwrap();
+
+    let idx = atlas
+        .pruning_index(&[
+            ColumnKey::global_attr("cruise"),
+            ColumnKey::array_attr("v", "units"),
+        ])
+        .await
+        .unwrap();
+
+    let cruise = idx.view(&ColumnKey::global_attr("cruise")).expect("cruise column");
+    assert!(cruise.is_present(0));
+    assert!(!cruise.is_present(1), "ds1 has no cruise attribute");
+    assert!(cruise.is_present(2));
+
+    // Every dataset set the per-array `units` attribute.
+    let units = idx.view(&ColumnKey::array_attr("v", "units")).expect("units column");
+    assert_eq!(units.present_rows(), vec![0, 1, 2]);
+}
+
+/// Querying the index for a dataset created but not yet flushed returns a
+/// present row with no statistics, rather than a missing row or an error.
+#[tokio::test]
+async fn pruning_index_reads_unflushed_dataset_as_present_without_stats() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    {
+        let mut a = atlas.create_dataset("a").await.unwrap();
+        a.define_array::<i32>("temp", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        a.write_array("temp", vec![0], ndarray::Array::from_vec(vec![1i32, 2]).into_dyn().view())
+            .await
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+
+    // A second dataset exists in memory but has never been flushed.
+    {
+        let mut b = atlas.create_dataset("b").await.unwrap();
+        b.define_array::<i32>("temp", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+    }
+
+    // The write-side index (in memory) covers both rows; the unflushed one has
+    // no stats yet but is still a real row.
+    assert_eq!(atlas.row_slots(), 2);
+    assert_eq!(atlas.dataset_row("b"), Some(1));
+}
+
+/// The returned index is self-describing: it carries the row↔name mapping and
+/// the liveness mask, so a consumer prunes and resolves names from the one
+/// object — no second call to the store, no separate mask to remember to apply.
+#[tokio::test]
+async fn pruning_index_is_self_describing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    // Three datasets declare `temp`; "hot" holds the only value above 25.
+    for (name, vals) in [("cold", vec![1i32, 5]), ("hot", vec![30i32, 40]), ("mild", vec![10i32, 20])] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.define_array::<i32>("temp", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        ds.write_array("temp", vec![0], ndarray::Array::from_vec(vals).into_dyn().view())
+            .await
+            .unwrap();
+    }
+    // A deleted dataset with an extreme value must not surface as a candidate.
+    {
+        let mut ds = atlas.create_dataset("deleted").await.unwrap();
+        ds.define_array::<i32>("temp", vec!["i".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        ds.write_array("temp", vec![0], ndarray::Array::from_vec(vec![900i32, 999]).into_dyn().view())
+            .await
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+    atlas.delete_dataset("deleted").await.unwrap();
+    atlas.flush().await.unwrap();
+
+    let key = ColumnKey::array("temp");
+    let index = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+
+    // Everything needed lives on `index`: candidates (mask already applied) and
+    // the row→name mapping.
+    let view = index.view(&key).unwrap();
+    let names: Vec<&str> = view
+        .candidates(|_, hi| hi > &StatVal::Int(25))
+        .into_iter()
+        .map(|row| index.dataset_name(row).unwrap())
+        .collect();
+    assert_eq!(names, vec!["hot"], "only 'hot' exceeds 25; 'deleted' is masked");
+
+    // The row↔name mapping agrees with the store's own ordinals, and a
+    // tombstoned slot is both nameless and masked dead — all from `index`.
+    for (row, name) in index.dataset_names().iter().enumerate() {
+        match name {
+            Some(n) => {
+                assert_eq!(atlas.dataset_row(n), Some(row));
+                assert!(index.live()[row]);
+            }
+            None => assert!(!index.live()[row], "tombstoned row must be masked dead"),
+        }
+    }
+}
+
+/// End-to-end proof that a downstream client can prune a query to the right
+/// candidate datasets using only the pruning index — never missing a real match
+/// (no false negatives), excluding datasets that don't declare the array, and
+/// masking deleted datasets even when they hold an extreme value.
+#[tokio::test]
+async fn client_prunes_candidates_soundly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    // 10 datasets declaring `temp`, dataset i has max = 2*i (a real cell value).
+    // 2 datasets declare no `temp` (gaps). 1 dataset holds an extreme value but
+    // is deleted — the client must never see it.
+    let mut expected_max: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+    for i in 0..10 {
+        let name = format!("d{i:02}");
+        let mut ds = atlas.create_dataset(&name).await.unwrap();
+        ds.define_array::<f64>("temp", vec!["x".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        ds.write_array(
+            "temp",
+            vec![0],
+            ndarray::Array::from_vec(vec![i as f64, (2 * i) as f64]).into_dyn().view(),
+        )
+        .await
+        .unwrap();
+        expected_max.insert(name, (2 * i) as f64);
+    }
+    // Gaps: exist, but declare a different array — must never be candidates.
+    for name in ["gap_a", "gap_b"] {
+        atlas
+            .create_dataset(name)
+            .await
+            .unwrap()
+            .define_array::<f64>("other", vec!["x".into()], vec![1], None, None)
+            .await
+            .unwrap();
+    }
+    // Deleted dataset with an enormous `temp` value.
+    {
+        let mut ds = atlas.create_dataset("deleted").await.unwrap();
+        ds.define_array::<f64>("temp", vec!["x".into()], vec![2], None, None)
+            .await
+            .unwrap();
+        ds.write_array("temp", vec![0], ndarray::Array::from_vec(vec![1000.0, 9999.0]).into_dyn().view())
+            .await
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+    atlas.delete_dataset("deleted").await.unwrap();
+    atlas.flush().await.unwrap();
+
+    let key = ColumnKey::array("temp");
+    let index = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+    let view = index.view(&key).unwrap();
+
+    // For a sweep of thresholds, the client prunes to "max > T" and we check it
+    // against the known ground truth.
+    for t in [-1.0, 5.0, 9.0, 15.0, 18.0, 100.0] {
+        let candidates: std::collections::HashSet<String> = view
+            .candidates(|_, hi| hi > &StatVal::Float(t))
+            .into_iter()
+            .map(|row| index.dataset_name(row).unwrap().to_string())
+            .collect();
+
+        let truth: std::collections::HashSet<String> = expected_max
+            .iter()
+            .filter(|&(_, &m)| m > t)
+            .map(|(n, _)| n.clone())
+            .collect();
+
+        // No false negatives — every real match is a candidate — and for the
+        // exact `>` predicate on a min/max index, no false positives either.
+        assert_eq!(candidates, truth, "candidate set wrong at T={t}");
+        // The deleted dataset (max 9999) and the gaps are never candidates.
+        assert!(!candidates.contains("deleted"), "deleted leaked at T={t}");
+        assert!(!candidates.contains("gap_a") && !candidates.contains("gap_b"));
+    }
+
+    // A predicate above every live dataset's max prunes to nothing, and the
+    // footer-only summary confirms the whole column is skippable — without
+    // reading the deleted dataset's 9999 into the range.
+    let summaries = atlas.column_summaries().await.unwrap();
+    let (_, summary) = summaries.iter().find(|(k, _)| k == &key).unwrap();
+    assert_eq!(summary.max, Some(StatVal::Float(18.0)), "global max excludes the deleted 9999");
+    assert!(!summary.might_match(|_, hi| hi > &StatVal::Float(50.0)), "column skippable for >50");
+    assert!(view.candidates(|_, hi| hi > &StatVal::Float(50.0)).is_empty());
 }

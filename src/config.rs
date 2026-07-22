@@ -20,6 +20,31 @@ pub enum Codec {
     Uncompressed,
 }
 
+impl Codec {
+    /// Compress `bytes` with this codec. Used for whole-file metadata and
+    /// pruning-index blocks, not array chunks (those go through `array_format`).
+    pub(crate) fn compress(self, bytes: Vec<u8>) -> crate::Result<Vec<u8>> {
+        Ok(match self {
+            Codec::Uncompressed => bytes,
+            // zstd default level (3) — good ratio at low CPU. These payloads are
+            // small, so even level 19 would be sub-millisecond.
+            Codec::Zstd => zstd::stream::encode_all(bytes.as_slice(), 0)?,
+            // lz4_flex compression is infallible; the size prefix lets decode
+            // recover the output length without scanning.
+            Codec::Lz4 => lz4_flex::compress_prepend_size(&bytes),
+        })
+    }
+
+    /// Reverse [`compress`](Self::compress).
+    pub(crate) fn decompress(self, bytes: &[u8]) -> crate::Result<Vec<u8>> {
+        Ok(match self {
+            Codec::Uncompressed => bytes.to_vec(),
+            Codec::Zstd => zstd::stream::decode_all(bytes)?,
+            Codec::Lz4 => lz4_flex::decompress_size_prepended(bytes)?,
+        })
+    }
+}
+
 /// On-disk encoding for the store's metadata file.
 ///
 /// The format choice lives in the filename (`atlas.json` vs `atlas.msgpack`,

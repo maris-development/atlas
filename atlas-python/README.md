@@ -188,6 +188,40 @@ for the full resolution order.
 - `bool` is available as an *attribute* type but not as an array dtype.
 - `binary`, `list[...]`, `fixed_size_list[...,N]` are reserved for a later release.
 
+## Cross-dataset pruning
+
+`ds.array_stats(name)` answers "what's the range of `temperature` in *this* dataset?" one at a
+time. To ask "which of my 10 000 datasets could contain a value above 25?" as a single
+vectorised scan, use the **pruning index** — a flattened, columnar view of the per-dataset
+statistics, one row per dataset:
+
+```python
+import numpy as np
+
+store = atlas.Atlas.open("/tmp/my_store")
+
+# Footer only — every column's collection-wide min/max, no column data fetched.
+summ = store.column_summaries()
+if summ["temperature"]["max"] < 25.0:
+    ...  # nothing can match — skip the column entirely
+
+# Fetch just the columns you need; each is a dict of numpy arrays over the row space.
+idx = store.pruning_index(arrays=["temperature"])
+col = idx["columns"]["temperature"]
+
+ok   = col["present"] & col["stats_valid"] & idx["live"]   # exclude gaps + deleted rows
+hits = np.where(ok & (col["max"] > 25.0))[0]
+candidates = [idx["datasets"][i] for i in hits]            # row -> dataset name
+```
+
+The return value is self-describing: `idx["datasets"][i]` names row `i`, `idx["live"]` is the
+delete mask (always `&` it in), and datasets that don't declare a column are explicit gaps
+(`present` is `False`, with `row_count` 0). Only the columns you ask for are fetched from
+storage, so the cost is independent of how many other columns the collection has. `min`/`max`
+keep their source type (strings come back as `bytes`, timestamps as int64 nanoseconds). See the
+[stats & scans guide](https://github.com/maris-development/atlas/blob/main/atlas-python/docs/guides/stats.md)
+for the full API, including `global_attrs=` / `array_attrs=` columns.
+
 ## Cloud / object storage
 
 With the `cloud` extra, `Atlas.open` / `Atlas.create` accept an
@@ -212,9 +246,13 @@ handle instead of a local path. The path-based local-filesystem API works withou
 | `add_xarray_dataset(ds, name, chunks=None, fill_value=None)` | Append an `xarray.Dataset` (does **not** flush). `fill_value` overrides the per-array fill (scalar or `{var: scalar}`); see [Missing data](#missing-data). |
 | `open_as_xarray_dataset(name) -> xr.Dataset` | Read a dataset back (chunked vars come back dask-backed). |
 | `open_as_many_xarray_dataset(names, concat_dim="dataset") -> xr.Dataset` | Open many datasets stacked along `concat_dim` (eager numpy). |
+| `pruning_index(arrays=None, global_attrs=None, array_attrs=None) -> dict` | Flattened statistics for **only** the requested columns; see [Cross-dataset pruning](#cross-dataset-pruning). |
+| `column_summaries() -> dict` | Every column's collection-wide min/max, read from the index footer alone (no column data fetched). |
+| `dataset_row(name) -> int \| None` | The dataset's fixed row ordinal in the pruning index. |
+| `row_slots() -> int` | Total row slots (live + tombstoned) — the pruning index's height. |
 | `flush()` | The single durability boundary — persist everything. |
 | `close()` | Alias for `flush()`; also the `with`-block exit. |
-| `compact()` | Reclaim tombstoned space across cached array files. |
+| `compact()` | Reclaim tombstoned space across cached array files, and renumber row ordinals. |
 | `__enter__` / `__exit__` | Context-manager support (`__exit__` calls `close()`). |
 
 ### `atlas.DatasetView`

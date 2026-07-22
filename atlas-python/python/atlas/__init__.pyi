@@ -20,6 +20,17 @@ AtlasSource = Union[str, "os.PathLike[str]", "_obstore_store.ObjectStore"]
 
 __version__: str
 
+def init_tracing(filter: Optional[str] = None) -> None:
+    """Install a `tracing` subscriber that writes atlas's internal logs to stderr.
+
+    `filter` is an [`env_logger`/`tracing`-style directive](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
+    (e.g. `"atlas=debug"`); when omitted, the `ATLAS_LOG` / `RUST_LOG`
+    environment variables are consulted, defaulting to `"info"`. Idempotent —
+    safe to call more than once; only the first call installs the subscriber.
+    Raises `ValueError` if `filter` is not a valid directive.
+    """
+    ...
+
 class Atlas:
     """A directory-based store for many named datasets of N-dimensional arrays."""
 
@@ -109,6 +120,11 @@ class Atlas:
     ) -> dict[str, Any]:
         """Flattened statistics for **only** the requested columns.
 
+        Columns are addressed by ``arrays`` (array names), ``global_attrs``
+        (dataset-level attribute keys), and ``array_attrs`` (``(array, key)``
+        pairs). In the result, an array column is keyed by its name, a global
+        attribute by its key, and a per-array attribute by ``"array:key"``.
+
         Returns ``{"rows", "datasets", "live", "columns"}``. Each entry of
         ``columns`` holds numpy arrays over the full row space: ``present``,
         ``stats_valid``, ``min``, ``max``, ``row_count``, ``null_count``.
@@ -117,7 +133,10 @@ class Atlas:
         Statistics keep the type they were computed with, so ``min``/``max``
         come back as int64, uint64, float64, or a list of ``bytes | None``
         depending on what the column actually holds. For a column's
-        collection-wide declared type, use `merged_schema()`.
+        collection-wide declared type, use `merged_schema()`. **Attribute
+        columns currently carry presence only** — ``present`` marks which
+        datasets have the key, but ``stats_valid`` is False and ``min``/``max``
+        are unset.
 
         Row ``i`` is the dataset at ordinal ``i`` (see `dataset_row`);
         ``datasets[i]`` names it, or is ``None`` for a deleted slot. Datasets
@@ -125,7 +144,9 @@ class Atlas:
         Always ``&`` in ``live`` to exclude deleted datasets.
 
         Only the named columns are fetched from storage, so the cost is
-        independent of how many other columns the collection has.
+        independent of how many other columns the collection has. Raises
+        `RuntimeError` if the on-disk index is stale relative to the metadata
+        (flush to rebuild it) or corrupt.
         """
         ...
 
@@ -374,9 +395,14 @@ class DatasetView:
         ...
 
     def array_stats(self, name: str) -> Optional[dict[str, Any]]:
-        """Persisted statistics or `None` if not yet computed.
+        """Persisted statistics, or `None` if the array isn't in this dataset or
+        hasn't been flushed yet.
 
         After `flush()` returns `{"row_count", "null_count", "min", "max"}`.
+        `min`/`max` keep the array's own type: `int`/`float` for numeric arrays,
+        `bytes` for string arrays (lexicographic order), and `int` nanoseconds
+        since the epoch for `timestamp_nanoseconds` arrays. `min`/`max` are
+        `None` for dtypes with no natural ordering (e.g. lists).
         """
         ...
 

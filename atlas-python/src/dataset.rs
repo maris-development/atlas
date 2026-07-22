@@ -2,7 +2,7 @@ use atlas::{DType, DatasetView, FillValue, TimestampNs};
 use numpy::{IntoPyArray, PyArray, PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
 use pyo3::exceptions::{PyNotImplementedError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyList, PyString};
+use pyo3::types::{PyBool, PyDict, PyFloat, PyInt, PyString};
 
 use crate::attr::{attr_to_py, py_to_attr};
 use crate::dtype::{dtype_to_string, parse_dtype};
@@ -64,11 +64,7 @@ impl PyDatasetView {
     }
 
     fn list_arrays(&self) -> Vec<String> {
-        self.inner
-            .list_arrays()
-            .into_iter()
-            .map(String::from)
-            .collect()
+        self.inner.list_arrays()
     }
 
     /// Returns a dict of dataset-level (global) attribute name -> Python value.
@@ -196,6 +192,7 @@ impl PyDatasetView {
     }
 
     #[pyo3(signature = (name, dtype, dims, shape, chunk_shape=None, fill_value=None))]
+    #[allow(clippy::too_many_arguments)] // mirrors the Python define_array signature
     fn define_array(
         &mut self,
         py: Python<'_>,
@@ -276,7 +273,7 @@ impl PyDatasetView {
             // flow through one extraction path. astype('object') is a no-op for
             // already-object arrays.
             let obj = data.call_method1("astype", ("object",))?;
-            let arr = obj.downcast::<PyArrayDyn<Py<PyAny>>>().map_err(|_| {
+            let arr = obj.cast::<PyArrayDyn<Py<PyAny>>>().map_err(|_| {
                 PyTypeError::new_err(format!(
                     "expected numpy ndarray of object/bytes/unicode strings for array {:?}",
                     name
@@ -317,7 +314,7 @@ impl PyDatasetView {
         if matches!(&stored, DType::TimestampNs) {
             // Accept np.int64 input. For datetime64[ns] callers should pass
             // arr.view(np.int64) -- pyo3-numpy distinguishes the dtype kinds.
-            let arr = data.downcast::<PyArrayDyn<i64>>().map_err(|_| {
+            let arr = data.cast::<PyArrayDyn<i64>>().map_err(|_| {
                 PyTypeError::new_err(format!(
                     "expected numpy ndarray with dtype int64 (use arr.view(np.int64) \
                      for datetime64[ns]) for array {:?}",
@@ -348,7 +345,7 @@ impl PyDatasetView {
 
         macro_rules! write_typed {
             ($t:ty) => {{
-                let arr = data.downcast::<PyArrayDyn<$t>>().map_err(|_| {
+                let arr = data.cast::<PyArrayDyn<$t>>().map_err(|_| {
                     PyTypeError::new_err(format!(
                         "expected numpy ndarray with dtype {} for array {:?}",
                         dtype_to_string(&stored),
@@ -528,10 +525,10 @@ impl PyDatasetView {
 ///   - string dtype requires a `str`
 fn py_to_fill_value(value: &Bound<'_, PyAny>, dtype: &DType) -> PyResult<FillValue> {
     // PyBool must be checked before PyInt — `isinstance(True, int)` is True in Python.
-    let is_bool = value.downcast::<PyBool>().is_ok();
-    let is_int = !is_bool && value.downcast::<PyInt>().is_ok();
-    let is_float = value.downcast::<PyFloat>().is_ok();
-    let is_str = value.downcast::<PyString>().is_ok();
+    let is_bool = value.cast::<PyBool>().is_ok();
+    let is_int = !is_bool && value.cast::<PyInt>().is_ok();
+    let is_float = value.cast::<PyFloat>().is_ok();
+    let is_str = value.cast::<PyString>().is_ok();
 
     let type_err = |expected: &str| -> PyErr {
         PyTypeError::new_err(format!(

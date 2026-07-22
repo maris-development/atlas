@@ -173,7 +173,7 @@ impl PyAtlas {
     }
 
     fn list_datasets(&self) -> Vec<String> {
-        self.inner.list_datasets().into_iter().map(String::from).collect()
+        self.inner.list_datasets()
     }
 
     fn list_arrays(&self) -> Vec<String> {
@@ -260,55 +260,6 @@ impl PyAtlas {
     /// disables the default for that variable). When omitted, arrays default to a
     /// sentinel fill so mask_and_scale'd missing cells are recorded as null: `NaN`
     /// for floats, `NaT` for `datetime64[ns]`, and `""` for strings (integers have
-    /// none).
-    #[pyo3(signature = (ds, name, chunks=None, fill_value=None))]
-    fn add_xarray_dataset(
-        slf: Py<Self>,
-        py: Python<'_>,
-        ds: Py<PyAny>,
-        name: &str,
-        chunks: Option<Py<PyAny>>,
-        fill_value: Option<Py<PyAny>>,
-    ) -> PyResult<()> {
-        let helper = py
-            .import("atlas.xarray")?
-            .getattr("_write_xarray_new_dataset")?;
-        let chunks_arg: Py<PyAny> = chunks.unwrap_or_else(|| py.None());
-        let fill_arg: Py<PyAny> = fill_value.unwrap_or_else(|| py.None());
-        helper.call1((slf, ds, name, chunks_arg, fill_arg))?;
-        Ok(())
-    }
-
-    /// Open `name` and return it as an `xarray.Dataset` (eager read).
-    fn open_as_xarray_dataset(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
-        let view = py
-            .detach(|| runtime().block_on(self.inner.open_dataset(name)))
-            .map_err(to_py_err)?;
-        let py_view = Py::new(py, PyDatasetView::new(view))?;
-        let helper = py
-            .import("atlas.xarray")?
-            .getattr("_view_to_xarray")?;
-        Ok(helper.call1((py_view,))?.unbind())
-    }
-
-    /// Open many datasets and return them stacked along `concat_dim` as a
-    /// single lazy `xarray.Dataset`. atlas-native equivalent of
-    /// `xr.open_mfdataset(...)`. See [`atlas.xarray._atlas_to_xarray_many`]
-    /// for the actual builder.
-    #[pyo3(signature = (names, concat_dim="dataset", parallel=true))]
-    fn open_as_many_xarray_dataset(
-        slf: Py<Self>,
-        py: Python<'_>,
-        names: Vec<String>,
-        concat_dim: &str,
-        parallel: bool,
-    ) -> PyResult<Py<PyAny>> {
-        let helper = py
-            .import("atlas.xarray")?
-            .getattr("_atlas_to_xarray_many")?;
-        Ok(helper.call1((slf, names, concat_dim, parallel))?.unbind())
-    }
-
     /// Bulk-read the same slice of `array` across many datasets in a single
     /// Rust call. Returns a Python `list[np.ndarray | None]` of length
     /// `len(dataset_names)` — `None` for datasets that don't declare the
@@ -540,28 +491,25 @@ impl PyAtlas {
             keys.push(ColumnKey::ArrayAttr(array, key));
         }
 
+        // The index is self-describing: it carries the liveness mask and the
+        // row↔name mapping, so no separate store calls are needed.
         let index = py
             .detach(|| runtime().block_on(self.inner.pruning_index(&keys)))
             .map_err(to_py_err)?;
-        let live = self.inner.live_mask();
-        let names = self.inner.dataset_names_by_row();
 
         let out = PyDict::new(py);
         out.set_item("rows", index.rows())?;
-        out.set_item("datasets", names)?;
-        out.set_item("live", live.into_pyarray(py))?;
+        out.set_item("datasets", index.dataset_names().to_vec())?;
+        out.set_item("live", index.live().to_vec().into_pyarray(py))?;
 
         let columns = PyDict::new(py);
         for key in index.column_keys() {
             let Some(column) = index.column(key) else {
                 continue;
             };
-            let rows = index.rows();
             let entry = PyDict::new(py);
-            let present: Vec<bool> = (0..rows).map(|i| column.present.get(i)).collect();
-            let valid: Vec<bool> = (0..rows).map(|i| column.stats_valid.get(i)).collect();
-            entry.set_item("present", present.into_pyarray(py))?;
-            entry.set_item("stats_valid", valid.into_pyarray(py))?;
+            entry.set_item("present", column.present_mask().into_pyarray(py))?;
+            entry.set_item("stats_valid", column.stats_valid_mask().into_pyarray(py))?;
             entry.set_item("row_count", column.row_count.clone().into_pyarray(py))?;
             entry.set_item("null_count", column.null_count.clone().into_pyarray(py))?;
             entry.set_item("min", stat_vec_to_py(py, &column.min)?)?;
