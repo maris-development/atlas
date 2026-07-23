@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -724,13 +724,52 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cross-dataset-scans" class="md-nav__link">
+  <a href="#cross-dataset-scans-the-pruning-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cross-dataset scans
+        Cross-dataset scans: the pruning index
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Cross-dataset scans: the pruning index">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-only-what-you-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read only what you need
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#attribute-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attribute columns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1065,13 +1104,52 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#cross-dataset-scans" class="md-nav__link">
+  <a href="#cross-dataset-scans-the-pruning-index" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Cross-dataset scans
+        Cross-dataset scans: the pruning index
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Cross-dataset scans: the pruning index">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-only-what-you-need" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read only what you need
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#types" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#attribute-columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attribute columns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1133,51 +1211,126 @@ exist in this dataset, or hasn't been flushed yet):</p>
 <tbody>
 <tr>
 <td><code>row_count</code></td>
-<td>Number of written cells (logical, after collapsing chunked writes).</td>
+<td>The array's full logical size — the product of its shape.</td>
 </tr>
 <tr>
 <td><code>null_count</code></td>
-<td>Number of cells equal to the array's <code>fill_value</code>.</td>
+<td>Cells equal to the <code>fill_value</code>, <strong>plus every cell never written</strong>.</td>
 </tr>
 <tr>
 <td><code>min</code></td>
-<td>Minimum value across all written cells.</td>
+<td>Minimum across written, non-fill cells.</td>
 </tr>
 <tr>
 <td><code>max</code></td>
-<td>Maximum value across all written cells.</td>
+<td>Maximum across written, non-fill cells.</td>
 </tr>
 </tbody>
 </table>
+<p><code>row_count</code> is capacity, not how much you wrote. An array declared with shape
+<code>[10]</code> reports <code>row_count == 10</code> even if you only ever wrote 5 cells — the
+other 5 show up in <code>null_count</code>, since they read back as the fill value:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span><span class="s2">&quot;t&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;int32&quot;</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;i&quot;</span><span class="p">],</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">10</span><span class="p">],</span> <span class="n">chunk_shape</span><span class="o">=</span><span class="p">[</span><span class="mi">5</span><span class="p">],</span> <span class="n">fill_value</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span><span class="s2">&quot;t&quot;</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">))</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;t&quot;</span><span class="p">)</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="c1"># {&quot;row_count&quot;: 10, &quot;null_count&quot;: 5, &quot;min&quot;: 1, &quot;max&quot;: 5}</span>
+</span></code></pre></div>
+<p>So <code>row_count - null_count</code> is the count of real values.</p>
 <p>Stats are populated <strong>after</strong> <a href="../durability/"><code>atlas.flush()</code></a>. Between a
 <code>define_array</code> / <code>write_array</code> and the next flush, <code>array_stats(name)</code>
 returns <code>None</code>.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span><span class="s2">&quot;readings&quot;</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">data</span><span class="o">=</span><span class="n">values</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;readings&quot;</span><span class="p">)</span>        <span class="c1"># None — not flushed yet</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;readings&quot;</span><span class="p">)</span>        <span class="c1"># {&quot;row_count&quot;: ..., &quot;null_count&quot;: ..., &quot;min&quot;: ..., &quot;max&quot;: ...}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span><span class="s2">&quot;readings&quot;</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">data</span><span class="o">=</span><span class="n">values</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;readings&quot;</span><span class="p">)</span>        <span class="c1"># None — not flushed yet</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;readings&quot;</span><span class="p">)</span>        <span class="c1"># {&quot;row_count&quot;: ..., &quot;null_count&quot;: ..., &quot;min&quot;: ..., &quot;max&quot;: ...}</span>
 </span></code></pre></div>
-<h2 id="cross-dataset-scans">Cross-dataset scans</h2>
-<p>Because stats are persisted alongside the schema in <code>atlas.json</code>, scanning
-them across the entire store is essentially free — no chunk decompression,
-no array file I/O:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">atlas</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">peak_sensor</span><span class="p">,</span> <span class="n">peak_max</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span><span class="p">,</span> <span class="o">-</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;inf&quot;</span><span class="p">)</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">():</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    <span class="n">stats</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="n">name</span><span class="p">)</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;readings&quot;</span><span class="p">)</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    <span class="k">if</span> <span class="n">stats</span> <span class="ow">and</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;max&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="n">peak_max</span><span class="p">:</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>        <span class="n">peak_sensor</span><span class="p">,</span> <span class="n">peak_max</span> <span class="o">=</span> <span class="n">name</span><span class="p">,</span> <span class="n">stats</span><span class="p">[</span><span class="s2">&quot;max&quot;</span><span class="p">]</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="nb">print</span><span class="p">(</span><span class="n">peak_sensor</span><span class="p">,</span> <span class="n">peak_max</span><span class="p">)</span>
+<p>Stats live in a per-array <code>{array}/data.stats</code> sidecar, next to that array's
+<code>data.af</code> — <strong>not</strong> in <code>atlas.json</code>, which holds only schemas.</p>
+<h2 id="cross-dataset-scans-the-pruning-index">Cross-dataset scans: the pruning index</h2>
+<p><code>array_stats</code> answers for one array in one dataset. To ask "which datasets
+could possibly match this?" across a whole collection, use the <strong>pruning
+index</strong> — a flattened, columnar view with one row per dataset:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">idx</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">pruning_index</span><span class="p">(</span><span class="n">arrays</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;readings&quot;</span><span class="p">])</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">col</span> <span class="o">=</span> <span class="n">idx</span><span class="p">[</span><span class="s2">&quot;columns&quot;</span><span class="p">][</span><span class="s2">&quot;readings&quot;</span><span class="p">]</span>
+</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1"># Vectorized: no Python loop over datasets.</span>
+</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">ok</span>   <span class="o">=</span> <span class="n">col</span><span class="p">[</span><span class="s2">&quot;present&quot;</span><span class="p">]</span> <span class="o">&amp;</span> <span class="n">col</span><span class="p">[</span><span class="s2">&quot;stats_valid&quot;</span><span class="p">]</span> <span class="o">&amp;</span> <span class="n">idx</span><span class="p">[</span><span class="s2">&quot;live&quot;</span><span class="p">]</span>
+</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="n">hits</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">ok</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">col</span><span class="p">[</span><span class="s2">&quot;max&quot;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mf">25.0</span><span class="p">))[</span><span class="mi">0</span><span class="p">]</span>
+</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">candidates</span> <span class="o">=</span> <span class="p">[</span><span class="n">idx</span><span class="p">[</span><span class="s2">&quot;datasets&quot;</span><span class="p">][</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">hits</span><span class="p">]</span>
 </span></code></pre></div>
-<p>This pattern is what makes "find the dataset with the most extreme value"
-queries scale to fleets of 10 000 datasets — the work is bounded by the
-metadata-file size, which is a few MB even at that scale (see
-<a href="../codecs-and-meta/">Codecs and metadata</a> for msgpack / compression
-options if you want it smaller).</p>
+<p>Each column is a dict of numpy arrays, all the same length as <code>idx["rows"]</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>present</code></td>
+<td>The dataset at this row declares the array/attribute.</td>
+</tr>
+<tr>
+<td><code>stats_valid</code></td>
+<td><code>min</code>/<code>max</code> are meaningful here.</td>
+</tr>
+<tr>
+<td><code>min</code>, <code>max</code></td>
+<td>The per-dataset range.</td>
+</tr>
+<tr>
+<td><code>row_count</code>, <code>null_count</code></td>
+<td>As above — <strong>both 0</strong> where <code>present</code> is <code>False</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Row <code>i</code> is the dataset at ordinal <code>i</code> (<code>store.dataset_row(name)</code>), and
+<code>idx["datasets"][i]</code> maps back to its name. Datasets that don't declare the
+array are <strong>explicit gaps</strong> rather than missing entries, so columns stay
+aligned across the collection no matter how heterogeneous it is. A dataset
+without the array contributes <code>row_count == 0</code>, which is a real answer you can
+sum or filter on directly.</p>
+<p><code>present</code> and <code>stats_valid</code> are separate on purpose: <code>stats_valid</code> is <code>False</code>
+where there is no usable range even though the dataset does declare the array
+— <code>List</code> dtypes, which carry no statistics at all, and rows written but not
+yet flushed. Their <code>row_count</code> / <code>null_count</code> are still valid, so check
+<code>present</code> for "does it have this?" and <code>stats_valid</code> before touching
+<code>min</code>/<code>max</code>.</p>
+<p>Deleted datasets keep their row and are masked by <code>idx["live"]</code>. Always <code>&amp;</code> it
+in, or a deleted dataset's values will widen your result.</p>
+<h3 id="read-only-what-you-need">Read only what you need</h3>
+<p><code>pruning.idx</code> is column-addressed: asking for two columns fetches two byte
+ranges, not the file. On a 10 000-dataset collection with 781 columns, reading
+one column takes ~2 ms.</p>
+<p>Cheaper still, <code>column_summaries()</code> reads the <strong>footer only</strong> — every column's
+collection-wide min/max and present count, no column data at all:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">summaries</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">column_summaries</span><span class="p">()</span>      <span class="c1"># ~2 ms for 781 columns</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">if</span> <span class="n">summaries</span><span class="p">[</span><span class="s2">&quot;readings&quot;</span><span class="p">][</span><span class="s2">&quot;max&quot;</span><span class="p">]</span> <span class="o">&lt;</span> <span class="mf">25.0</span><span class="p">:</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="o">...</span>  <span class="c1"># no dataset can match; skip fetching the column entirely</span>
+</span></code></pre></div>
+<p>The index is compressed with zstd by default
+(<code>StoreConfig.pruning_compression</code>) — on that same 10 000-dataset collection
+it is 0.29 MB rather than 17.4 MB. Blocks are compressed individually, so
+single-column reads stay ranged whatever codec you pick, and the codec is
+recorded in the index itself so readers adapt without being told.</p>
+<h3 id="types">Types</h3>
+<p>Statistics keep the type they were computed with — nothing is cast. <code>min</code> and
+<code>max</code> come back as <code>int64</code>, <code>uint64</code>, <code>float64</code>, or a list of <code>bytes | None</code>,
+chosen from what the column actually holds. A column that is <code>int32</code> in some
+datasets and <code>float64</code> in others promotes to <code>float64</code> at the numpy boundary.</p>
+<p>For a column's collection-wide <em>declared</em> type, use
+<a href="../datasets-and-arrays/"><code>merged_schema()</code></a> — the index itself stores no dtype.</p>
+<h3 id="attribute-columns">Attribute columns</h3>
+<p>Attribute columns currently record <strong>presence only</strong>: <code>present</code> tells you which
+datasets carry the key, but <code>stats_valid</code> is <code>False</code> and <code>min</code>/<code>max</code> are unset.
+Filtering on attribute <em>values</em> through the index isn't wired up yet — read
+them per dataset with <code>attributes()</code> for now.</p>
 <p><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/06_stats_scan.py"><code>examples/06_stats_scan.py</code></a>
-runs exactly this pattern across 32 sensor datasets.</p>
+runs a per-dataset scan across 32 sensor datasets.</p>
 <h2 id="how-null_count-works-with-fill_value">How <code>null_count</code> works with <code>fill_value</code></h2>
 <p>A "null" in atlas is <strong>a cell whose stored value equals the array's
 <code>fill_value</code></strong>. Both <em>unwritten</em> cells (which read back as the fill value)
@@ -1185,11 +1338,11 @@ and <em>written</em> cells whose value happens to match contribute to the count.
 <p>For float arrays the natural choice is <code>fill_value=float("nan")</code> — NaN
 doesn't compare equal to itself by IEEE rules, but atlas special-cases
 NaN, so a written NaN counts as a null.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span><span class="s2">&quot;temp&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">))</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span><span class="s2">&quot;temp&quot;</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;temp&quot;</span><span class="p">)</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># {&quot;row_count&quot;: 3, &quot;null_count&quot;: 1, &quot;min&quot;: 1.0, &quot;max&quot;: 3.0}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span><span class="s2">&quot;temp&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">))</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span><span class="s2">&quot;temp&quot;</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">nan</span><span class="p">,</span> <span class="mf">3.0</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">))</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">flush</span><span class="p">()</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;temp&quot;</span><span class="p">)</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="c1"># {&quot;row_count&quot;: 3, &quot;null_count&quot;: 1, &quot;min&quot;: 1.0, &quot;max&quot;: 3.0}</span>
 </span></code></pre></div>
 <p>For integer arrays, pick a sentinel value (<code>-1</code>, <code>np.iinfo(dtype).min</code>,
 etc.) — any <em>written</em> cell equal to it will also be counted as null. Pick
@@ -1205,10 +1358,17 @@ counted as null automatically. Pass <code>fill_value=</code> to override.</p>
   cheap-on-write and cheap-on-read, not a full analytics engine.</li>
 <li><strong>No per-dimension reductions.</strong> <code>min</code> / <code>max</code> are scalars over the
   whole array, not per-row / per-column.</li>
-<li><strong>String / timestamp arrays:</strong> <code>row_count</code> and <code>null_count</code> are
-  populated; <code>min</code> / <code>max</code> may be omitted for dtypes where they don't
-  have a natural meaning.</li>
+<li><strong>No per-chunk zone maps.</strong> Statistics are per array per dataset; there is
+  no finer granularity to prune within a large array.</li>
+<li><strong><code>List</code> / <code>FixedSizeList</code> arrays get no statistics at all</strong> — not even
+  counts.</li>
 </ul>
+<p>Strings and timestamps <em>are</em> covered. String <code>min</code>/<code>max</code> come back as <code>bytes</code>
+and order lexicographically; timestamps come back as integer nanoseconds since
+the epoch:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;station&quot;</span><span class="p">)[</span><span class="s2">&quot;min&quot;</span><span class="p">]</span>    <span class="c1"># b&quot;AAA01&quot;</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;time&quot;</span><span class="p">)[</span><span class="s2">&quot;min&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="s2">&quot;datetime64[ns]&quot;</span><span class="p">)</span>
+</span></code></pre></div>
 
 
 
@@ -1267,7 +1427,7 @@ counted as null automatically. Pass <code>fill_value=</code> to override.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.expand", "navigation.sections", "navigation.top", "content.code.copy", "content.code.annotate", "search.share", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

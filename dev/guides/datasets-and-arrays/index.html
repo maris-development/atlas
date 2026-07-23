@@ -19,7 +19,7 @@
       
       
       <link rel="icon" href="../../assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
@@ -27,7 +27,7 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
         <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
@@ -504,6 +504,17 @@
     <span class="md-ellipsis">
       
         Lifecycle
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deleting-datasets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deleting datasets
       
     </span>
   </a>
@@ -1120,6 +1131,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#deleting-datasets" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deleting datasets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#declaring-an-array" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1255,18 +1277,34 @@ until you flush the <em>atlas</em>.</p>
 </span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="c1"># Remove (in-memory; persisted on next flush).</span>
 </span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="n">atlas</span><span class="o">.</span><span class="n">delete_dataset</span><span class="p">(</span><span class="s2">&quot;feb_2024&quot;</span><span class="p">)</span>
 </span></code></pre></div>
+<h2 id="deleting-datasets">Deleting datasets</h2>
+<p><code>delete_dataset</code> is <strong>logical</strong>. The dataset immediately disappears from
+<code>list_datasets()</code>, reads, the merged schema, and the pruning index — but under
+the hood it is <em>tombstoned</em>: its slot stays in <code>atlas.json</code> and its bytes stay
+in the shared array files. This keeps every other dataset's <strong>row ordinal
+stable</strong> (<code>dataset_row(name)</code> never shifts under you, which is what lets a
+cached <a href="../stats/">pruning index</a> stay valid across a delete).</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">delete_dataset</span><span class="p">(</span><span class="s2">&quot;feb_2024&quot;</span><span class="p">)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">atlas</span><span class="o">.</span><span class="n">dataset_exists</span><span class="p">(</span><span class="s2">&quot;feb_2024&quot;</span><span class="p">)</span>   <span class="c1"># False — invisible immediately</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">row_slots</span><span class="p">()</span>                  <span class="c1"># still counts the dead slot until compact</span>
+</span></code></pre></div>
+<p>Call <a href="../durability/"><code>atlas.compact()</code></a> to actually reclaim the space: it
+rewrites the array files without the tombstoned regions and <strong>renumbers</strong> the
+surviving datasets to close the ordinal holes — the only operation that changes
+a row ordinal. Re-creating a deleted name reuses its slot with a clean schema
+(the revived dataset never inherits the old one's data or stats).</p>
 <h2 id="declaring-an-array">Declaring an array</h2>
 <p><code>define_array</code> records the schema (dtype, dims, shape, chunking, fill
 value) but allocates no data. The dtype is enforced on every later
 <code>write_array</code>.</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">jan</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    <span class="s2">&quot;temperature&quot;</span><span class="p">,</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span>                  <span class="c1"># see Supported dtypes</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">,</span> <span class="s2">&quot;lon&quot;</span><span class="p">],</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">16</span><span class="p">],</span>                    <span class="c1"># logical extent on each axis</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>    <span class="n">chunk_shape</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">],</span>               <span class="c1"># optional; defaults to shape (= 1 chunk)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    <span class="n">fill_value</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">),</span>          <span class="c1"># optional; returned for unwritten cells</span>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">jan</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="s2">&quot;temperature&quot;</span><span class="p">,</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span>                  <span class="c1"># see Supported dtypes</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">,</span> <span class="s2">&quot;lon&quot;</span><span class="p">],</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">16</span><span class="p">],</span>                    <span class="c1"># logical extent on each axis</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">chunk_shape</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">],</span>               <span class="c1"># optional; defaults to shape (= 1 chunk)</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    <span class="n">fill_value</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">),</span>          <span class="c1"># optional; returned for unwritten cells</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="p">)</span>
 </span></code></pre></div>
 <p><code>chunk_shape</code> controls both compression granularity and partial-read
 performance. A chunk shape equal to the full shape stores the array as one
@@ -1284,12 +1322,12 @@ decompress the chunks that touch the requested slice. See
 <p>Reading an unwritten cell returns the fill value. Any <em>written</em> cell equal
 to the fill value is counted as a null in <a href="../stats/"><code>array_stats</code></a>.</p>
 <h2 id="writing">Writing</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">jan</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="s2">&quot;temperature&quot;</span><span class="p">,</span>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="mf">20.0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">jan</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="s2">&quot;temperature&quot;</span><span class="p">,</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">),</span> <span class="mf">20.0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="p">)</span>
 </span></code></pre></div>
 <p>Rules:</p>
 <ul>
@@ -1302,25 +1340,25 @@ to the fill value is counted as a null in <a href="../stats/"><code>array_stats<
   boundary.</li>
 </ul>
 <h2 id="reading">Reading</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">full</span>   <span class="o">=</span> <span class="n">jan</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>                       <span class="c1"># entire array</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">slice_</span> <span class="o">=</span> <span class="n">jan</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>       <span class="c1"># partial</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="n">missing</span> <span class="o">=</span> <span class="n">jan</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;not_defined_here&quot;</span><span class="p">)</span>                 <span class="c1"># -&gt; None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">full</span>   <span class="o">=</span> <span class="n">jan</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>                       <span class="c1"># entire array</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">slice_</span> <span class="o">=</span> <span class="n">jan</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>       <span class="c1"># partial</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">missing</span> <span class="o">=</span> <span class="n">jan</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;not_defined_here&quot;</span><span class="p">)</span>                 <span class="c1"># -&gt; None</span>
 </span></code></pre></div>
 <p>For multi-array reads inside a hot loop (e.g. one dask worker), use the
 bulk path:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">jan</span><span class="o">.</span><span class="n">read_arrays</span><span class="p">([</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="s2">&quot;pressure&quot;</span><span class="p">],</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># {&quot;temperature&quot;: np.ndarray, &quot;pressure&quot;: np.ndarray}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">jan</span><span class="o">.</span><span class="n">read_arrays</span><span class="p">([</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="s2">&quot;pressure&quot;</span><span class="p">],</span> <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># {&quot;temperature&quot;: np.ndarray, &quot;pressure&quot;: np.ndarray}</span>
 </span></code></pre></div>
 <p>See <a href="../bulk-reads/">Bulk reads</a> for the cross-dataset variants.</p>
 <h2 id="inspecting-schema">Inspecting schema</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">jan</span><span class="o">.</span><span class="n">list_arrays</span><span class="p">()</span>                       <span class="c1"># [&quot;temperature&quot;, &quot;pressure&quot;, ...]</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="n">jan</span><span class="o">.</span><span class="n">array_meta</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>           <span class="c1"># {&quot;dtype&quot;, &quot;shape&quot;, &quot;chunk_shape&quot;, &quot;dimension_names&quot;}</span>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">jan</span><span class="o">.</span><span class="n">array_fill_value</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>     <span class="c1"># the fill value passed to define_array, or None</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">jan</span><span class="o">.</span><span class="n">list_arrays</span><span class="p">()</span>                       <span class="c1"># [&quot;temperature&quot;, &quot;pressure&quot;, ...]</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">jan</span><span class="o">.</span><span class="n">array_meta</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>           <span class="c1"># {&quot;dtype&quot;, &quot;shape&quot;, &quot;chunk_shape&quot;, &quot;dimension_names&quot;}</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">jan</span><span class="o">.</span><span class="n">array_fill_value</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>     <span class="c1"># the fill value passed to define_array, or None</span>
 </span></code></pre></div>
 <p><code>array_meta(name)</code> returns <code>None</code> if the array doesn't exist in <em>this</em>
 dataset — useful for "does this dataset declare it?" checks without raising.</p>
 <h2 id="deleting-arrays">Deleting arrays</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">jan</span><span class="o">.</span><span class="n">delete_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>    <span class="c1"># tombstone within this dataset</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">jan</span><span class="o">.</span><span class="n">delete_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>    <span class="c1"># tombstone within this dataset</span>
 </span></code></pre></div>
 <p>The array's bytes inside the shared physical file are tombstoned; reclaim
 the space with <a href="../durability/"><code>atlas.compact()</code></a>.</p>
@@ -1329,10 +1367,10 @@ the space with <a href="../durability/"><code>atlas.compact()</code></a>.</p>
 array (with its dtype, dimensions, and per-variable attribute types) and every
 global attribute type, folded across all datasets. Read it with
 <code>atlas.merged_schema()</code>:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">merged</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">merged_schema</span><span class="p">()</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;arrays&quot;</span><span class="p">][</span><span class="s2">&quot;temperature&quot;</span><span class="p">][</span><span class="s2">&quot;dtype&quot;</span><span class="p">]</span>        <span class="c1"># widened dtype across datasets</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;arrays&quot;</span><span class="p">][</span><span class="s2">&quot;temperature&quot;</span><span class="p">][</span><span class="s2">&quot;attributes&quot;</span><span class="p">]</span>   <span class="c1"># {attr_key: dtype}</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;global_attributes&quot;</span><span class="p">]</span>                     <span class="c1"># {attr_key: dtype}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">merged</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">merged_schema</span><span class="p">()</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;arrays&quot;</span><span class="p">][</span><span class="s2">&quot;temperature&quot;</span><span class="p">][</span><span class="s2">&quot;dtype&quot;</span><span class="p">]</span>        <span class="c1"># widened dtype across datasets</span>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;arrays&quot;</span><span class="p">][</span><span class="s2">&quot;temperature&quot;</span><span class="p">][</span><span class="s2">&quot;attributes&quot;</span><span class="p">]</span>   <span class="c1"># {attr_key: dtype}</span>
+</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">merged</span><span class="p">[</span><span class="s2">&quot;global_attributes&quot;</span><span class="p">]</span>                     <span class="c1"># {attr_key: dtype}</span>
 </span></code></pre></div>
 <p>When the same array name or attribute key appears in multiple datasets with
 different types, the merged type is <strong>widened</strong> — but only within numeric types
@@ -1342,13 +1380,13 @@ different types, the merged type is <strong>widened</strong> — but only within
 array under the same name in another). The dataset is <strong>still stored</strong> under its
 own type and reads back normally; the merged schema just keeps the
 <strong>first-seen</strong> type. <code>on_type_mismatch</code> decides how that's reported:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># &quot;warn&quot; (default): stored, logs a warning, merged keeps the first type</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># &quot;error&quot;: the mismatching define_array / set_attribute raises ValueError</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="o">=</span><span class="s2">&quot;error&quot;</span><span class="p">)</span>
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="o">=</span><span class="s2">&quot;error&quot;</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># &quot;warn&quot; (default): stored, logs a warning, merged keeps the first type</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">)</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="c1"># &quot;error&quot;: the mismatching define_array / set_attribute raises ValueError</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="o">=</span><span class="s2">&quot;error&quot;</span><span class="p">)</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="n">store</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/store&quot;</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="o">=</span><span class="s2">&quot;error&quot;</span><span class="p">)</span>
 </span></code></pre></div>
 <p>It's a per-session choice — it isn't stored in <code>atlas.json</code>, so pass it each
 time you open the collection.</p>
@@ -1410,7 +1448,7 @@ time you open the collection.</p>
       <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.expand", "navigation.sections", "navigation.top", "content.code.copy", "content.code.annotate", "search.share", "toc.follow"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>
