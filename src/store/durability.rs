@@ -67,6 +67,7 @@ impl Atlas {
         // their row slots can go too. This is the only point at which dataset
         // ordinals change, which is why it invalidates any cached row number.
         self.meta.lock().drop_tombstones();
+        *self.ordinal_map.lock() = None; // ordinals renumbered
         // Ordinals just changed. Nothing to rebuild — the pruning index is
         // assembled on demand from the (now renumbered) array statistics.
         let meta_snapshot = {
