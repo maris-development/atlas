@@ -1081,6 +1081,42 @@ async fn pruning_index_reads_only_requested_columns() {
     );
 }
 
+/// The pruning index is built on demand from the array files — nothing is
+/// persisted for it, and a freshly reopened store (no index cache) still serves
+/// it from the stats alone.
+#[tokio::test]
+async fn pruning_index_is_built_on_demand_without_persistence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+        .await
+        .unwrap();
+    for (name, v) in [("a", 5i32), ("b", 50), ("c", 500)] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.define_array::<i32>("temp", vec!["i".into()], vec![1], None, None).await.unwrap();
+        ds.write_array("temp", vec![0], ndarray::Array::from_vec(vec![v]).into_dyn().view())
+            .await
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+
+    // No pruning index is written — the stats live in the array file only.
+    assert!(!tmp.path().join("pruning.idx").exists());
+    assert!(!tmp.path().join("pruning").exists());
+    assert!(tmp.path().join("temp").join("data.af").exists());
+
+    // A reopened store (cold — no in-memory index) serves the flat column from
+    // the array stats on demand.
+    let reopened = Atlas::open(store, prefix).await.unwrap();
+    let key = ColumnKey::array("temp");
+    let idx = reopened.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+    let view = idx.view(&key).unwrap();
+    assert_eq!(idx.rows(), 3);
+    assert_eq!(view.max(reopened.dataset_row("b").unwrap()), Some(&StatVal::Int(50)));
+    assert_eq!(view.candidates(|_, hi| hi > &StatVal::Int(100)),
+               vec![reopened.dataset_row("c").unwrap()]);
+}
+
 /// Every value in the index must agree with the per-dataset stats API it
 /// summarizes — including where the holes are.
 #[tokio::test]
@@ -1141,80 +1177,6 @@ async fn pruning_index_matches_per_dataset_stats() {
     }
 }
 
-/// Proof that a column read is genuinely selective: corrupt one column's bytes
-/// on disk, and reading a *different* column must still succeed.
-///
-/// A whole-file read would decode the damaged block and fail, so this fails
-/// loudly if `pruning_index` ever regresses to loading everything.
-#[tokio::test]
-async fn reading_one_column_does_not_touch_another() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (store, prefix) = make_store(&tmp);
-    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
-        .await
-        .unwrap();
-
-    for d in 0..8 {
-        let mut ds = atlas.create_dataset(&format!("ds{d}")).await.unwrap();
-        for a in 0..8 {
-            let name = format!("arr{a}");
-            ds.define_array::<i64>(&name, vec!["i".into()], vec![4], None, None)
-                .await
-                .unwrap();
-            ds.write_array(
-                &name,
-                vec![0],
-                ndarray::Array::from_vec(vec![d as i64, a as i64, 11, 13])
-                    .into_dyn()
-                    .view(),
-            )
-            .await
-            .unwrap();
-        }
-    }
-    atlas.flush().await.unwrap();
-
-    let idx_path = tmp.path().join("pruning.idx");
-    let original = std::fs::read(&idx_path).unwrap();
-
-    // Find where arr0's block sits by reading it cleanly first, then scribble
-    // over the front of the file — arr0 is the first column written, so its
-    // block starts right after the 8-byte header.
-    let first = atlas
-        .pruning_index(&[ColumnKey::array("arr0")])
-        .await
-        .unwrap();
-    assert!(first.column(&ColumnKey::array("arr0")).is_some());
-
-    let mut damaged = original.clone();
-    for byte in damaged.iter_mut().skip(8).take(64) {
-        *byte ^= 0xff;
-    }
-    std::fs::write(&idx_path, &damaged).unwrap();
-
-    // A later column is still readable, because its bytes were never fetched.
-    let late = atlas
-        .pruning_index(&[ColumnKey::array("arr7")])
-        .await
-        .unwrap();
-    let column = late
-        .column(&ColumnKey::array("arr7"))
-        .expect("a column beyond the damage must still load");
-    assert_eq!(column.present_mask().iter().filter(|b| **b).count(), 8);
-
-    // ...and the damaged column itself does fail, confirming the corruption
-    // was real rather than landing in padding.
-    assert!(
-        atlas
-            .pruning_index(&[ColumnKey::array("arr0")])
-            .await
-            .is_err(),
-        "the corrupted column must fail to decode"
-    );
-}
-
-/// A revived dataset must not inherit the previous occupant's pruning stats —
-/// the row is reset when the slot is reused.
 #[tokio::test]
 async fn pruning_row_is_reset_when_a_dataset_is_revived() {
     let tmp = tempfile::tempdir().unwrap();

@@ -10,8 +10,7 @@ use crate::{
     Result,
     config::Codec,
     dataset::GLOBAL_ATTRS_ARRAY,
-    meta::{StoreMeta, save_meta},
-    pruning::{ColumnKey, PruningIndex, PruningStore},
+    meta::save_meta,
 };
 
 impl Atlas {
@@ -33,118 +32,18 @@ impl Atlas {
         for arc in snapshot {
             arc.write().await.flush().await?;
         }
-        // Stats now exist for everything written above, so the index can be
-        // filled in and persisted alongside the metadata.
-        self.refresh_pruning_index().await?;
-
+        // The array files now hold up-to-date per-dataset statistics. There is
+        // no separate pruning index to build or persist — it is assembled on
+        // demand from those stats (see `Atlas::pruning_index`).
         let meta_snapshot = {
             let mut meta = self.meta.lock();
             meta.meta_epoch += 1;
             meta.clone()
         };
         let datasets = meta_snapshot.live_count();
-        self.write_pruning_index(&meta_snapshot).await?;
         save_meta(&self.store, &meta_snapshot, self.meta_format, self.meta_compression).await?;
         info!(files, datasets, "flushed atlas store");
         Ok(())
-    }
-
-    /// Fills the in-memory index from the freshly flushed array statistics.
-    ///
-    /// Reads each array file's whole `StatsFile` in one go rather than looking
-    /// entries up per dataset — the latter is O(datasets²), since each lookup
-    /// scans the table.
-    async fn refresh_pruning_index(&self) -> Result<()> {
-        self.ensure_pruning_loaded().await?;
-
-        // Snapshot what each dataset declares, and the merged dtype of every
-        // column, before touching the files.
-        let (array_keys, rows_by_name, attr_cells) = {
-            let meta = self.meta.lock();
-            let mut array_keys: Vec<ColumnKey> = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            let mut attr_cells: Vec<(ColumnKey, usize)> = Vec::new();
-            let mut rows_by_name = std::collections::HashMap::new();
-            for (ordinal, name, schema) in meta.live_datasets() {
-                rows_by_name.insert(name.clone(), ordinal);
-                for array in schema.arrays.keys() {
-                    if seen.insert(array.clone()) {
-                        array_keys.push(ColumnKey::array(array));
-                    }
-                }
-                for key in schema.global_attrs.keys() {
-                    attr_cells.push((ColumnKey::global_attr(key), ordinal));
-                }
-                for (array, attrs) in &schema.array_attrs {
-                    for key in attrs.keys() {
-                        attr_cells.push((ColumnKey::array_attr(array, key), ordinal));
-                    }
-                }
-            }
-            (array_keys, rows_by_name, attr_cells)
-        };
-
-        // Attribute columns: presence is known from the schema. Their values
-        // live in the `.af` files as real attributes, so the column records
-        // that the dataset carries the key; min/max for attribute *values* are
-        // filled from the same statistics path as arrays where available.
-        {
-            let mut guard = self.pruning.lock();
-            let Some(index) = guard.as_mut() else {
-                return Ok(());
-            };
-            for (key, ordinal) in &attr_cells {
-                index.ensure_column(key);
-                index.set_present(key, *ordinal);
-            }
-            for key in &array_keys {
-                index.ensure_column(key);
-            }
-        }
-
-        // One StatsFile read per array file, then one pass over its entries.
-        for key in &array_keys {
-            let ColumnKey::Array(array) = key else {
-                continue;
-            };
-            let codec = self
-                .meta
-                .lock()
-                .array_file_codec(array)
-                .unwrap_or(self.codec);
-            let handle = self.cache.get_or_insert(&self.store, array, &codec);
-            let Some(arc) = handle.get_existing().await? else {
-                continue;
-            };
-            let guard = arc.read().await;
-            let Some(stats) = guard.stats() else { continue };
-            let mut index_guard = self.pruning.lock();
-            let Some(index) = index_guard.as_mut() else {
-                continue;
-            };
-            for entry in stats.entries() {
-                if let Some(row) = rows_by_name.get(&entry.name) {
-                    index.set_stats(key, *row, entry);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Writes `pruning.idx`, tagged with the metadata epoch it was built
-    /// against so a torn write is detectable rather than silently mis-read.
-    async fn write_pruning_index(&self, meta: &StoreMeta) -> Result<()> {
-        let index = {
-            let mut guard = self.pruning.lock();
-            let Some(index) = guard.as_mut() else {
-                return Ok(());
-            };
-            index.set_meta_epoch(meta.meta_epoch);
-            index.clone()
-        };
-        PruningStore::new(self.store.clone())
-            .save(&index, meta.meta_epoch, self.pruning_compression, &meta.live_mask())
-            .await
     }
 
     /// Compact every known array file in place (reclaims tombstoned space).
@@ -168,17 +67,13 @@ impl Atlas {
         // their row slots can go too. This is the only point at which dataset
         // ordinals change, which is why it invalidates any cached row number.
         self.meta.lock().drop_tombstones();
-        // Ordinals just changed, so the index is rebuilt from scratch against
-        // the new numbering rather than patched.
-        *self.pruning.lock() = Some(PruningIndex::new());
-        self.refresh_pruning_index().await?;
-
+        // Ordinals just changed. Nothing to rebuild — the pruning index is
+        // assembled on demand from the (now renumbered) array statistics.
         let meta_snapshot = {
             let mut meta = self.meta.lock();
             meta.meta_epoch += 1;
             meta.clone()
         };
-        self.write_pruning_index(&meta_snapshot).await?;
         save_meta(
             &self.store,
             &meta_snapshot,
