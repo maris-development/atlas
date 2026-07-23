@@ -73,6 +73,20 @@ impl StatColumn {
         self.present.set(row, true);
     }
 
+    /// Sets one cell to a single scalar value: present, with a point range
+    /// `[value, value]`. Used for attribute columns, where each dataset carries
+    /// one value (so `min == max`), giving range pruning on attributes.
+    pub(crate) fn set_scalar(&mut self, row: usize, value: StatVal) {
+        if row >= self.rows() {
+            return;
+        }
+        self.present.set(row, true);
+        self.stats_valid.set(row, true);
+        self.min[row] = Some(value.clone());
+        self.max[row] = Some(value);
+        self.row_count[row] = 1;
+    }
+
     /// Writes one cell from a freshly computed statistic.
     ///
     /// `min`/`max` are stored as-is; `stats_valid` stays unset when the source

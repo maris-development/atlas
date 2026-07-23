@@ -10,7 +10,7 @@ use crate::{
     config::{Codec, MetaFormat, StoreConfig, TypeMismatchPolicy},
     dataset::{ArrayCache, DatasetView, GLOBAL_ATTRS_ARRAY, PendingAttrs, open_dataset_view},
     meta::{StoreMeta, load_meta, save_meta},
-    pruning::{ColumnKey, ColumnSummary, PruningIndex, StatColumn},
+    pruning::{ColumnKey, ColumnSummary, PruningIndex, StatColumn, StatVal},
 };
 use std::collections::HashMap;
 
@@ -343,27 +343,50 @@ impl Atlas {
                     }
                 }
             }
-            // Attribute columns record presence, straight from the in-memory
-            // schema (no I/O). Attribute *values* live in the `.af` files — read
-            // them here if range pruning on attributes is ever needed.
+            // Attribute columns carry one value per dataset, read from the `.af`
+            // file that holds them: dataset-global attributes live in the
+            // reserved `_global` file, per-array attributes in the array's own.
+            // Each becomes a point range `[value, value]`, so a caller can range-
+            // prune on attributes (scalar values); list-valued attributes are
+            // marked present without a range.
             ColumnKey::GlobalAttr(k) => {
-                let meta = self.meta.lock();
-                for (ordinal, _, schema) in meta.live_datasets() {
-                    if schema.global_attrs.contains_key(k) {
-                        column.mark_present(ordinal);
-                    }
-                }
+                self.fill_attr_column(&mut column, GLOBAL_ATTRS_ARRAY, k, name_to_row).await?;
             }
             ColumnKey::ArrayAttr(array, k) => {
-                let meta = self.meta.lock();
-                for (ordinal, _, schema) in meta.live_datasets() {
-                    if schema.array_attrs.get(array).is_some_and(|m| m.contains_key(k)) {
-                        column.mark_present(ordinal);
-                    }
-                }
+                self.fill_attr_column(&mut column, array, k, name_to_row).await?;
             }
         }
         Ok(column)
+    }
+
+    /// Fills `column` from attribute `key` on the array file `file`, one value
+    /// per dataset (`_global` for dataset-global attributes, the array name for
+    /// per-array ones). `attribute_index` returns every dataset's value for the
+    /// key in one read; scalars become a point range, lists mark presence only.
+    async fn fill_attr_column(
+        &self,
+        column: &mut StatColumn,
+        file: &str,
+        key: &str,
+        name_to_row: &HashMap<String, usize>,
+    ) -> Result<()> {
+        let codec = self.file_codec(file);
+        let handle = self.cache.get_or_insert(&self.store, file, &codec);
+        let Some(arc) = handle.get_existing().await? else {
+            return Ok(());
+        };
+        let guard = arc.read().await;
+        for (name, value) in guard.attribute_index(key) {
+            let Some(&row) = name_to_row.get(&name) else { continue };
+            match value {
+                Some(v) => match StatVal::scalar_from_attribute(v) {
+                    Some(scalar) => column.set_scalar(row, scalar),
+                    None => column.mark_present(row),
+                },
+                None => {} // this dataset doesn't carry the attribute
+            }
+        }
+        Ok(())
     }
 
     /// Every column's collection-wide min/max and present count, folded from the

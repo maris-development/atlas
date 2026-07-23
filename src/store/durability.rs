@@ -127,7 +127,7 @@ impl Atlas {
     /// Codec to open a physical file with: the store default for the global
     /// attributes file, otherwise the array's recorded codec (any dataset that
     /// declares it), falling back to the store codec.
-    fn file_codec(&self, file: &str) -> Codec {
+    pub(super) fn file_codec(&self, file: &str) -> Codec {
         if file == GLOBAL_ATTRS_ARRAY {
             return self.codec;
         }

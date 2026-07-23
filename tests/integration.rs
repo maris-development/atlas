@@ -1291,6 +1291,52 @@ async fn pruning_index_tracks_attribute_presence() {
     assert_eq!(units.present_rows(), vec![0, 1, 2]);
 }
 
+/// Attribute columns carry each dataset's value as a point range, so a client
+/// can range-prune on an array's attribute the same way it does on array data.
+#[tokio::test]
+async fn pruning_index_range_prunes_on_array_attribute_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    // Per-array attribute `year` on `v`, plus a list-valued `valid_range`.
+    for (name, year) in [("ds0", 2019i64), ("ds1", 2021), ("ds2", 2023)] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.define_array::<i32>("v", vec!["i".into()], vec![1], None, None)
+            .await
+            .unwrap();
+        ds.set_array_attribute("v", "year", Attr::Int64(year)).unwrap();
+        ds.set_array_attribute("v", "valid_range", Attr::Float32List(vec![0.0, 100.0]))
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+
+    let key = ColumnKey::array_attr("v", "year");
+    let idx = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+    let year = idx.view(&key).unwrap();
+
+    // Each dataset's value is a point range [year, year].
+    assert_eq!(year.min(0), Some(&StatVal::Int(2019)));
+    assert_eq!(year.max(0), Some(&StatVal::Int(2019)));
+    assert_eq!(year.min(2), Some(&StatVal::Int(2023)));
+
+    // Range pruning: datasets whose year is after 2020.
+    let after_2020 = year.candidates(|_, hi| hi > &StatVal::Int(2020));
+    assert_eq!(
+        after_2020,
+        vec![atlas.dataset_row("ds1").unwrap(), atlas.dataset_row("ds2").unwrap()]
+    );
+
+    // A list-valued attribute is present but carries no scalar range.
+    let range_key = ColumnKey::array_attr("v", "valid_range");
+    let idx2 = atlas.pruning_index(std::slice::from_ref(&range_key)).await.unwrap();
+    let vr = idx2.view(&range_key).unwrap();
+    assert_eq!(vr.present_rows(), vec![0, 1, 2]);
+    assert_eq!(vr.min(0), None, "list-valued attribute has no point range");
+}
+
 /// Querying the index for a dataset created but not yet flushed returns a
 /// present row with no statistics, rather than a missing row or an error.
 #[tokio::test]
