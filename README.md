@@ -26,6 +26,7 @@ Each dataset is a named group of N-dimensional arrays with typed attributes — 
 ```text
 my_store/
 ├── atlas.json               ← interned per-dataset schema + attribute-key namespace (JSON)
+├── pruning.idx              ← columnar min/max/count index across all datasets (see below)
 ├── _global/
 │   └── data.af         ← dataset-level (global) attribute values, one entry per dataset
 ├── temperature/
@@ -36,7 +37,7 @@ my_store/
     └── data.af
 ```
 
-`atlas.json` holds only the **schema** of the collection. Attribute **values** live in the `.af` files: per-variable attributes on the variable's own file, and dataset-level attributes in the reserved `_global` file.
+`atlas.json` holds only the **schema** of the collection. Attribute **values** live in the `.af` files: per-variable attributes on the variable's own file, and dataset-level attributes in the reserved `_global` file. `pruning.idx` is a derived, columnar statistics index — everything you need to prune a query to a handful of candidate datasets without opening a single `.af` file.
 
 ---
 
@@ -44,7 +45,7 @@ my_store/
 
 `atlas.json` is read **once** when the store is opened or created. Every subsequent mutation — `create_dataset`, `define_array`, `set_attribute`, `set_array_attribute`, `delete_array`, `delete_dataset` — only touches in-memory state; array writes buffer inside the per-array in-memory layer and attribute writes buffer in a pending-attribute map. **Nothing reaches disk until `Atlas::flush()` (or `Atlas::close()`).** Dropping an `Atlas` without flushing abandons every pending in-memory write.
 
-A single `Atlas::flush()` drains the buffered attributes into their `.af` files, walks every cached `ArrayFile` (writing deltas + stats), and then serialises the in-memory schema to `atlas.json`. This gives one durability boundary for the whole store: N datasets ⇒ one delta file per touched array name (not one per dataset) and one `atlas.json` rewrite (not N).
+A single `Atlas::flush()` drains the buffered attributes into their `.af` files, walks every cached `ArrayFile` (writing deltas + stats), fills and writes the `pruning.idx` statistics index, and then serialises the in-memory schema to `atlas.json`. This gives one durability boundary for the whole store: N datasets ⇒ one delta file per touched array name (not one per dataset) and one `atlas.json` rewrite (not N).
 
 `DatasetView` is a borrowed handle into the atlas's shared meta — it has no `flush()` of its own.
 
@@ -56,7 +57,7 @@ A single `Atlas::flush()` drains the buffered attributes into their `.af` files,
 
 The schema is a plain JSON file written on `Atlas::flush()` / `Atlas::close()`. It stores:
 
-- **Store version** — for format upgrades. The current version is `2`; stores written by an older atlas are rejected on open (re-export to upgrade).
+- **Store version** — for format upgrades. The current version is `3`; stores written by an older atlas are rejected on open with a clear `Error::UnsupportedVersion` (re-export to upgrade). Version 3 added the per-dataset **row ordinals + tombstone mask** that back the pruning index.
 - **Interned schema pool** — each *distinct* per-dataset schema is stored once and referenced by index. A dataset's schema is its array schemas (per array: dtype, shape, chunk shape, named dimensions, codec) plus its **attribute-key namespace** (the names of its global and per-variable attribute keys). A collection of thousands of homogeneous datasets stores its schema a single time.
 - **Dataset registry** — a map of dataset name → schema-pool index.
 - **Merged schema** — a collection-wide summary listing every unique array (with its dtype widened across all datasets, its dimensions, and its per-variable attribute types) and every global attribute type. Descriptive only — reads always use each dataset's own schema — but handy for tools that want one view of "what's in here." Also exposed programmatically via `Atlas::merged_schema()`.
@@ -85,6 +86,52 @@ Each array variable gets its own subdirectory with a single `data.af` binary fil
 - **Attribute values** — per-variable attributes (e.g. `units`) are stored in the footer of the variable's own `data.af`, keyed by dataset. Dataset-level (global) attributes live the same way in the reserved `_global/data.af`. Atlas's `Attr` type mirrors `array-format`'s `AttributeValue` (bool, sized ints/uints, `f32`/`f64`, string, binary, and typed lists) plus a nanosecond timestamp variant stored as an RFC 3339 string.
 - **Persisted statistics** — on `Atlas::flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Cells equal to the array's fill value are tallied in `null_count` and excluded from `min`/`max` (NaN fills match NaN cells by bit pattern). Statistics survive store reopening.
 - **In-memory caches** — a 256 MiB decoded block cache and a 64 MiB raw I/O cache sit in front of the object store for repeated reads.
+
+### `pruning.idx`
+
+The per-array `.af` stats above answer "what's the min/max of `temperature` in *this* dataset?" one dataset at a time. `pruning.idx` answers the **cross-dataset** question — "which of my 10 000 datasets could possibly contain a value above 25?" — as a single vectorised scan, without opening any `.af` file.
+
+It is a flattened, **columnar** index, written at the store root on every `flush()`:
+
+- **One logical row per dataset**, positional — row *i* is the dataset at ordinal *i*. Deleted datasets keep their slot (see [Deletes](#deletes-and-compaction) below) and are hidden by a liveness mask, so a row number never changes underneath a cached index.
+- **One column per array, per global attribute, and per (array, attribute) pair.** Each column holds, for every dataset: a `present` bit, a `stats_valid` bit, `min`, `max`, `row_count`, and `null_count`. Datasets that don't declare that array/attribute are **explicit gaps** (`present = false`), so columns stay aligned no matter how heterogeneous the collection is.
+- **Compacted and column-addressable.** Sparsity is the norm (~26 % density on a real 10 000-dataset collection), so on disk each column stores values only for its present rows, keyed by the bitmap. Columns are compressed individually (Zstd by default, via `StoreConfig::pruning_compression`) and located through a footer directory — reading 2 of 200 columns fetches ~2/200ths of the file via ranged reads, never the whole thing.
+- **Guarded against staleness.** The footer carries a `meta_epoch` that must match `atlas.json`; an index left behind by a crash between the two writes is rejected (`Error::CorruptIndex`) rather than silently mis-attributing rows.
+
+The read API is a two-step funnel — rule columns out from the footer alone, then fetch only the survivors:
+
+```rust
+use atlas::{ColumnKey, StatVal};
+
+// Footer only — every column's collection-wide min/max, no column data fetched.
+for (key, summary) in store.column_summaries().await? {
+    // e.g. skip a column whose global max can't satisfy the predicate.
+    let _ = summary.might_match(|_, hi| hi > &StatVal::Float(25.0));
+}
+
+// Fetch just the columns you need. The returned index is self-describing:
+// it carries the liveness mask and the row↔name mapping.
+let key = ColumnKey::array("temperature");
+let index = store.pruning_index(std::slice::from_ref(&key)).await?;
+if let Some(view) = index.view(&key) {
+    // Deleted and absent rows are already excluded.
+    for row in view.candidates(|_, hi| hi > &StatVal::Float(25.0)) {
+        println!("candidate: {}", index.dataset_name(row).unwrap());
+    }
+}
+```
+
+`min`/`max` keep the type the statistic was computed with (string min/max are lexicographic bytes; timestamps are integer nanoseconds); a column's collection-wide *declared* type is the merged dtype from `atlas.json`. **Attribute columns currently record presence only** — which datasets carry the key — not attribute values; filtering on an attribute's *value* through the index isn't wired up yet.
+
+---
+
+## Deletes and compaction
+
+`delete_dataset` and `delete_array` are **logical**. A deleted dataset is *tombstoned* — its slot stays in `atlas.json` (so every later dataset keeps its row ordinal) and a liveness bit is cleared; its entries in the shared `.af` files are marked deleted but the bytes remain. Reads, `list_datasets`, the merged schema, and the pruning index all skip tombstoned datasets, so a delete is invisible to consumers immediately, but nothing is reclaimed yet.
+
+`Atlas::compact()` is the garbage collector. It rewrites every cached `.af` file with the tombstoned regions dropped, **renumbers** the surviving datasets to close the ordinal holes, and rebuilds the pruning index against the new numbering. It is the only operation that changes a dataset's row ordinal — so a row number cached from before a compact is stale afterwards.
+
+Re-creating a deleted name reuses its slot (and pruning-index row), starting from a clean schema — the revived dataset never inherits the previous occupant's stats.
 
 ---
 
@@ -149,8 +196,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | **Array** | An N-dimensional typed array with named dimensions and an optional chunk shape. |
 | **Attribute** | A typed scalar attached to a dataset (metadata, not array data). |
 | **Array file** | One `data.af` file per variable name, shared across all datasets that define that variable. |
-| **Flush** | `Atlas::flush()` — the single durability boundary. Persists every cached array file and rewrites `atlas.json` from the in-memory `StoreMeta`. Must be called explicitly (or via `Atlas::close()` / Python's `with atlas:`). |
-| **Compact** | `Atlas::compact()` rewrites every cached `.af` file to reclaim space after deletes. |
+| **Pruning index** | `pruning.idx` — a columnar min/max/count index across all datasets. Query it with `Atlas::pruning_index(&[ColumnKey])` / `column_summaries()` to prune to candidate datasets without reading array data. |
+| **Flush** | `Atlas::flush()` — the single durability boundary. Persists every cached array file, the pruning index, and rewrites `atlas.json` from the in-memory `StoreMeta`. Must be called explicitly (or via `Atlas::close()` / Python's `with atlas:`). |
+| **Compact** | `Atlas::compact()` rewrites every cached `.af` file to reclaim space after deletes, and renumbers dataset row ordinals. |
 | **StoreConfig** | Configuration passed to `Atlas::create`. Currently holds the compression `Codec`. |
 | **Codec** | Compression codec for new array blocks: `Codec::Zstd` (default), `Codec::Lz4`, or `Codec::Uncompressed`. Persisted in `atlas.json`; `open` reads it automatically. |
 
@@ -215,6 +263,7 @@ Reading `temperature` for 1 000 datasets means opening exactly **one file**. Thi
 | Cross-dataset column scan | Slow (N file opens) | Slow (N directory opens) | Fast (1 file open) |
 | Partial reads | Yes | Yes | Yes |
 | Statistics (min/max/nulls) | No | No | Yes (persisted on flush) |
+| Cross-dataset stat pruning | No | No | Yes (`pruning.idx`, vectorised) |
 | Self-describing metadata | Yes | Yes | Yes (`atlas.json`) |
 | Language support | C/Python/Julia/… | Python/Java/… | Rust |
 | Mutable after write | Limited | Yes | Yes (chunked overwrites + compact) |
@@ -262,9 +311,11 @@ Two caches sit in front of the object store:
 
 The decoded cache means repeated reads of the same chunk cost only a hash-map lookup. Both caches are shared across all `DatasetView`s that open the same `Atlas`.
 
-### Persisted statistics
+### Persisted statistics and pruning
 
 Min, max, null count, and row count are computed and persisted on every `Atlas::flush()`. Downstream systems can read these statistics from the opened `DatasetView` without touching array data at all — useful for query planning, dashboards, or data-quality checks.
+
+For **cross-dataset** query planning, the [`pruning.idx`](#pruningidx) index turns "which datasets could match?" into a vectorised scan over compacted, column-addressed statistics. A footer-only `column_summaries()` rules whole columns out for free; `pruning_index(&[…])` then fetches just the requested columns via ranged reads. On a real 10 000-dataset collection the whole index is ~0.3 MiB compressed, and a single-column query reads it in a couple of milliseconds — so a query engine can prune a fleet of datasets to a handful of candidates before opening a single `.af` file.
 
 ### Compression
 
@@ -280,7 +331,7 @@ Choose LZ4 when decompression throughput matters more than storage size (e.g. la
 
 ### Write path
 
-Writes are buffered in-memory across the whole atlas. Calling `Atlas::flush()` compresses and writes every modified block across every cached array file, then rewrites `atlas.json` atomically (a single `PUT`). The write path scales with the number of modified chunks, not the number of datasets, and N consecutive `add_xarray_dataset` / `create_dataset` calls amortise to a single flush.
+Writes are buffered in-memory across the whole atlas. Attribute writes buffer in a shared, **interned** pending map — identical values (a NetCDF collection is ~94 % duplicate attribute values) are stored once and shared, so the buffer stays small during a large ingest. Calling `Atlas::flush()` compresses and writes every modified block across every cached array file, writes the pruning index, then rewrites `atlas.json` atomically (a single `PUT`). The write path scales with the number of modified chunks, not the number of datasets, and N consecutive `add_xarray_dataset` / `create_dataset` calls amortise to a single flush.
 
 ### Compaction
 

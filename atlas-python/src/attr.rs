@@ -8,19 +8,19 @@ pub fn py_to_attr(value: &Bound<'_, PyAny>, dtype_hint: Option<&str>) -> PyResul
         return py_to_attr_typed(value, hint);
     }
 
-    if let Ok(b) = value.downcast::<PyBool>() {
+    if let Ok(b) = value.cast::<PyBool>() {
         return Ok(Attr::Bool(b.is_true()));
     }
-    if value.downcast::<PyString>().is_ok() {
+    if value.cast::<PyString>().is_ok() {
         return Ok(Attr::String(value.extract::<String>()?));
     }
-    if value.downcast::<PyBytes>().is_ok() {
+    if value.cast::<PyBytes>().is_ok() {
         return Ok(Attr::Binary(value.extract::<Vec<u8>>()?));
     }
-    if value.downcast::<PyInt>().is_ok() {
+    if value.cast::<PyInt>().is_ok() {
         return Ok(Attr::Int64(value.extract::<i64>()?));
     }
-    if value.downcast::<PyFloat>().is_ok() {
+    if value.cast::<PyFloat>().is_ok() {
         return Ok(Attr::Float64(value.extract::<f64>()?));
     }
     Err(PyValueError::new_err(format!(

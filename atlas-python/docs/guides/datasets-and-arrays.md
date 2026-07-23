@@ -56,6 +56,27 @@ jan = atlas.open_dataset("jan_2024")
 atlas.delete_dataset("feb_2024")
 ```
 
+## Deleting datasets
+
+`delete_dataset` is **logical**. The dataset immediately disappears from
+`list_datasets()`, reads, the merged schema, and the pruning index — but under
+the hood it is *tombstoned*: its slot stays in `atlas.json` and its bytes stay
+in the shared array files. This keeps every other dataset's **row ordinal
+stable** (`dataset_row(name)` never shifts under you, which is what lets a
+cached [pruning index](stats.md) stay valid across a delete).
+
+```python
+atlas.delete_dataset("feb_2024")
+atlas.dataset_exists("feb_2024")   # False — invisible immediately
+atlas.row_slots()                  # still counts the dead slot until compact
+```
+
+Call [`atlas.compact()`](durability.md) to actually reclaim the space: it
+rewrites the array files without the tombstoned regions and **renumbers** the
+surviving datasets to close the ordinal holes — the only operation that changes
+a row ordinal. Re-creating a deleted name reuses its slot with a clean schema
+(the revived dataset never inherits the old one's data or stats).
+
 ## Declaring an array
 
 `define_array` records the schema (dtype, dims, shape, chunking, fill

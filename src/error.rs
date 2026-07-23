@@ -17,11 +17,6 @@ pub enum Error {
     /// An array with this name was already defined in the dataset.
     #[error("array already exists: {0}")]
     ArrayAlreadyExists(String),
-    /// `Atlas::open` / `open_path` was called against a location with no
-    /// metadata file (neither `atlas.json` nor any of the `atlas.msgpack*`
-    /// variants).
-    #[error("store not found at path")]
-    StoreNotFound,
     /// Dataset or array name failed validation. Names must be non-empty,
     /// cannot contain `/`, `..`, or `.`, and cannot start with `_`.
     #[error("invalid name '{0}': must be non-empty, no '/', no '..', no leading '_'")]
@@ -41,6 +36,22 @@ pub enum Error {
         /// The incompatible new type being inserted.
         new: String,
     },
+    /// The store's on-disk metadata (`atlas.json` / `atlas.msgpack`) is
+    /// internally inconsistent — e.g. a dataset references a schema index that
+    /// doesn't exist, or a tombstone ordinal is out of range. Not raised for
+    /// mere parse failures (those surface as [`Error::Meta`] / [`Error::MetaDecode`]).
+    #[error("corrupt store metadata: {0}")]
+    CorruptMetadata(String),
+    /// The `pruning.idx` file is malformed, or stale relative to the metadata
+    /// (its epoch doesn't match). A stale index is recoverable — flush to
+    /// rebuild it.
+    #[error("corrupt or stale pruning index: {0}")]
+    CorruptIndex(String),
+    /// An internal invariant was violated — a spawned read task failed, or a
+    /// buffer had an unexpected shape. Indicates a bug in atlas rather than bad
+    /// input, and shouldn't occur in normal use.
+    #[error("internal error: {0}")]
+    Internal(String),
     /// Underlying `array-format` failure — see the wrapped error for the
     /// specific block/codec/storage problem.
     #[error("array format error: {0}")]

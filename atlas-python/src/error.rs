@@ -1,5 +1,5 @@
 use pyo3::exceptions::{
-    PyFileExistsError, PyFileNotFoundError, PyKeyError, PyOSError, PyRuntimeError, PyValueError,
+    PyFileExistsError, PyKeyError, PyOSError, PyRuntimeError, PyValueError,
 };
 use pyo3::PyErr;
 
@@ -20,12 +20,16 @@ pub fn to_py_err(err: atlas::Error) -> PyErr {
         atlas::Error::InvalidName(name) => {
             PyValueError::new_err(format!("invalid name: {name}"))
         }
-        atlas::Error::StoreNotFound => PyFileNotFoundError::new_err("store not found at path"),
         e @ (atlas::Error::UnsupportedVersion { .. } | atlas::Error::TypeMismatch { .. }) => {
             PyValueError::new_err(e.to_string())
         }
         atlas::Error::Io(e) => PyOSError::new_err(e.to_string()),
-        e @ (atlas::Error::ObjectStore(_)
+        // On-disk inconsistency or an atlas-internal invariant violation: a
+        // runtime failure the caller can't fix by changing arguments.
+        e @ (atlas::Error::CorruptMetadata(_)
+        | atlas::Error::CorruptIndex(_)
+        | atlas::Error::Internal(_)
+        | atlas::Error::ObjectStore(_)
         | atlas::Error::ArrayFormat(_)
         | atlas::Error::Meta(_)
         | atlas::Error::MetaEncode(_)

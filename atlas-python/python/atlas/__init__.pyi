@@ -20,6 +20,17 @@ AtlasSource = Union[str, "os.PathLike[str]", "_obstore_store.ObjectStore"]
 
 __version__: str
 
+def init_tracing(filter: Optional[str] = None) -> None:
+    """Install a `tracing` subscriber that writes atlas's internal logs to stderr.
+
+    `filter` is an [`env_logger`/`tracing`-style directive](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
+    (e.g. `"atlas=debug"`); when omitted, the `ATLAS_LOG` / `RUST_LOG`
+    environment variables are consulted, defaulting to `"info"`. Idempotent —
+    safe to call more than once; only the first call installs the subscriber.
+    Raises `ValueError` if `filter` is not a valid directive.
+    """
+    ...
+
 class Atlas:
     """A directory-based store for many named datasets of N-dimensional arrays."""
 
@@ -99,6 +110,66 @@ class Atlas:
         "global_attributes": {key: dtype}}`` — every unique array and attribute
         with its type widened across all datasets. Descriptive only.
         """
+        ...
+
+    def pruning_index(
+        self,
+        arrays: Optional[list[str]] = None,
+        global_attrs: Optional[list[str]] = None,
+        array_attrs: Optional[list[tuple[str, str]]] = None,
+    ) -> dict[str, Any]:
+        """Flattened statistics for **only** the requested columns.
+
+        Columns are addressed by ``arrays`` (array names), ``global_attrs``
+        (dataset-level attribute keys), and ``array_attrs`` (``(array, key)``
+        pairs). In the result, an array column is keyed by its name, a global
+        attribute by its key, and a per-array attribute by ``"array:key"``.
+
+        Returns ``{"rows", "datasets", "live", "columns"}``. Each entry of
+        ``columns`` holds numpy arrays over the full row space: ``present``,
+        ``stats_valid``, ``min``, ``max``, ``row_count``, ``null_count``.
+        ``row_count`` is 0 for a dataset that doesn't declare the column.
+
+        Statistics keep the type they were computed with, so ``min``/``max``
+        come back as int64, uint64, float64, or a list of ``bytes | None``
+        depending on what the column actually holds. For a column's
+        collection-wide declared type, use `merged_schema()`. **Attribute
+        columns currently carry presence only** — ``present`` marks which
+        datasets have the key, but ``stats_valid`` is False and ``min``/``max``
+        are unset.
+
+        Row ``i`` is the dataset at ordinal ``i`` (see `dataset_row`);
+        ``datasets[i]`` names it, or is ``None`` for a deleted slot. Datasets
+        that don't declare a column are explicit gaps (``present`` is False).
+        Always ``&`` in ``live`` to exclude deleted datasets.
+
+        Only the named columns are fetched from storage, so the cost is
+        independent of how many other columns the collection has. Raises
+        `RuntimeError` if the on-disk index is stale relative to the metadata
+        (flush to rebuild it) or corrupt.
+        """
+        ...
+
+    def column_summaries(self) -> dict[str, Any]:
+        """Every column's ``{"min", "max", "present_count"}``, read from the
+        index footer alone — no column data is fetched.
+
+        Use it to rule a column out before requesting it: if its
+        collection-wide range can't satisfy a predicate, no dataset can.
+        """
+        ...
+
+    def dataset_row(self, name: str) -> Optional[int]:
+        """This dataset's fixed row ordinal in the pruning index.
+
+        Stable across deletions — a deleted dataset keeps its slot so no other
+        dataset's row moves. Only `compact()` renumbers.
+        """
+        ...
+
+    def row_slots(self) -> int:
+        """Total row slots including tombstoned ones — the pruning index's
+        height. Larger than the number of live datasets until `compact()`."""
         ...
 
     def dataset_exists(self, name: str) -> bool: ...
@@ -324,9 +395,14 @@ class DatasetView:
         ...
 
     def array_stats(self, name: str) -> Optional[dict[str, Any]]:
-        """Persisted statistics or `None` if not yet computed.
+        """Persisted statistics, or `None` if the array isn't in this dataset or
+        hasn't been flushed yet.
 
         After `flush()` returns `{"row_count", "null_count", "min", "max"}`.
+        `min`/`max` keep the array's own type: `int`/`float` for numeric arrays,
+        `bytes` for string arrays (lexicographic order), and `int` nanoseconds
+        since the epoch for `timestamp_nanoseconds` arrays. `min`/`max` are
+        `None` for dtypes with no natural ordering (e.g. lists).
         """
         ...
 

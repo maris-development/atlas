@@ -40,6 +40,11 @@ with atlas.Atlas.create("/tmp/my_store", codec="zstd") as store:
 - **Bulk cross-dataset APIs** — `open_as_many_xarray_dataset` and
   `read_array_across_stacked` collapse N per-dataset reads into one PyO3
   call, sharing a single file handle.
+- **Cross-dataset pruning** — a columnar min/max/count index
+  (`store.pruning_index(...)` / `column_summaries()`) prunes "which of my
+  10 000 datasets could match this predicate?" to a handful of candidates
+  with a single vectorised scan, without opening any array file. See
+  [Stats and scans](guides/stats.md).
 - **Sync API, GIL-released** — a multi-threaded tokio runtime backs every
   blocking call; the GIL is released so other Python threads can run.
 - **Local fs or cloud storage** — pass a path string for local, or an

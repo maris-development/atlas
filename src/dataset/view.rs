@@ -1,48 +1,21 @@
-use std::{collections::HashMap, sync::Arc};
+//! [`DatasetView`]: the handle for reading and writing one dataset.
 
-use array_format::{ArrayElement, ArrayStats, DType, DeltaCache, FillValue};
+use std::sync::Arc;
+
+use array_format::{ArrayElement, ArrayStats, DType, FillValue};
 use indexmap::IndexMap;
 use ndarray::{ArcArray, ArrayView, IxDyn};
 use object_store::ObjectStore;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use tracing::{debug, instrument, trace, warn};
 
+use super::{ArrayCache, PendingAttrs};
 use crate::{
     Error, Result,
-    array::AtlasArray,
     config::{Codec, TypeMismatchPolicy},
     meta::{DatasetSchema, StoreMeta},
-    schema::{ArraySchema, Attr, attr_dtype, widen_dtype},
+    schema::{ArraySchema, Attr, widen_dtype},
 };
-
-/// Merge the type of `array`/attribute across every dataset **except**
-/// `exclude`, so a (re)insert can be checked against the rest of the
-/// collection. `pick` extracts the relevant type from a dataset's schema.
-///
-/// Folds exactly like [`crate::meta::compute_merged`]: compatible types widen,
-/// and a type that can't merge leaves the accumulator alone so the
-/// **first-seen** type wins. Keeping these two in step matters — once a
-/// mismatching dataset is stored (under `TypeMismatchPolicy::Warn`), a
-/// last-wins fold here would silently adopt the odd type out and stop
-/// reporting further mismatches against it.
-fn merged_other<F>(meta: &StoreMeta, exclude: &str, mut pick: F) -> Option<DType>
-where
-    F: FnMut(&DatasetSchema) -> Option<DType>,
-{
-    let mut acc: Option<DType> = None;
-    for (name, schema) in &meta.datasets {
-        if name == exclude {
-            continue;
-        }
-        if let Some(t) = pick(schema) {
-            acc = Some(match acc {
-                None => t,
-                Some(a) => widen_dtype(&a, &t).unwrap_or(a),
-            });
-        }
-    }
-    acc
-}
 
 /// Check `new` against the type the collection already records.
 ///
@@ -51,6 +24,11 @@ where
 /// they don't, the value is still stored under this dataset's own type and the
 /// merged schema keeps the first-seen type — [`TypeMismatchPolicy`] only
 /// decides whether that is reported as a warning or an error.
+///
+/// The `existing` type comes from [`StoreMeta`]'s incrementally-maintained type
+/// index rather than a scan over every dataset; it folds first-seen-wins to
+/// match the collection's merged schema, so a stored mismatch never becomes the
+/// reference type that later inserts are checked against.
 fn check_type_alignment(
     policy: TypeMismatchPolicy,
     kind: &str,
@@ -88,94 +66,6 @@ fn check_type_alignment(
 /// collides with a user array (see [`crate::validate_name`]).
 pub(crate) const GLOBAL_ATTRS_ARRAY: &str = "_global";
 
-/// Buffered attribute writes, applied to the `.af` files at flush time.
-///
-/// Setting an attribute never touches disk: it lands here and is drained into
-/// the array files by [`Atlas::flush`](crate::Atlas::flush) /
-/// [`Atlas::compact`](crate::Atlas::compact), preserving atlas's single
-/// durability boundary. Keyed by physical array-file name (`_global` for
-/// dataset-global attrs, else the array name) and dataset name.
-#[derive(Default)]
-pub(crate) struct PendingAttrs {
-    entries: HashMap<(String, String), IndexMap<String, Attr>>,
-}
-
-impl PendingAttrs {
-    fn set(&mut self, file: &str, dataset: &str, key: &str, value: Attr) {
-        self.entries
-            .entry((file.to_string(), dataset.to_string()))
-            .or_default()
-            .insert(key.to_string(), value);
-    }
-
-    fn get(&self, file: &str, dataset: &str, key: &str) -> Option<Attr> {
-        self.entries
-            .get(&(file.to_string(), dataset.to_string()))
-            .and_then(|m| m.get(key).cloned())
-    }
-
-    /// Drops every buffered write for one `(file, dataset)` pair.
-    fn remove(&mut self, file: &str, dataset: &str) {
-        self.entries.remove(&(file.to_string(), dataset.to_string()));
-    }
-
-    /// Drops every buffered write for `dataset` across all files.
-    pub(crate) fn remove_dataset(&mut self, dataset: &str) {
-        self.entries.retain(|(_, ds), _| ds != dataset);
-    }
-
-    /// Snapshot of all buffered writes as `((file, dataset), key→value)`,
-    /// consuming the buffer. Used by the flush-time drain.
-    pub(crate) fn drain_all(&mut self) -> Vec<((String, String), IndexMap<String, Attr>)> {
-        self.entries.drain().collect()
-    }
-}
-
-/// Shared lazy-handle map: array name → `Arc<AtlasArray>`. Cloned by reference
-/// from `Atlas` into every `DatasetView`, so all views observe the same
-/// initialization state. The map lock (`parking_lot::RwLock`) is never held
-/// across an `await` point; `AtlasArray` defers its actual I/O via
-/// `tokio::sync::OnceCell` so each underlying file opens at most once.
-pub(crate) struct ArrayCache {
-    pub(crate) files: RwLock<HashMap<String, Arc<AtlasArray>>>,
-    pub(crate) delta: Arc<DeltaCache>,
-}
-
-impl ArrayCache {
-    pub(crate) fn new(delta: Arc<DeltaCache>) -> Self {
-        Self {
-            files: RwLock::new(HashMap::new()),
-            delta,
-        }
-    }
-
-    /// Returns the lazy handle for `array_name`, registering a new one if
-    /// absent. Does **not** open or create the underlying file — that happens
-    /// on the first `AtlasArray::get().await`.
-    pub(crate) fn get_or_insert(
-        &self,
-        store: &Arc<dyn ObjectStore>,
-        array_name: &str,
-        codec: &Codec,
-    ) -> Arc<AtlasArray> {
-        if let Some(arc) = self.files.read().get(array_name) {
-            return arc.clone();
-        }
-        let mut guard = self.files.write();
-        guard
-            .entry(array_name.to_string())
-            .or_insert_with(|| {
-                Arc::new(AtlasArray::new(
-                    store.clone(),
-                    codec.clone(),
-                    array_name.to_string(),
-                    self.delta.clone(),
-                ))
-            })
-            .clone()
-    }
-}
-
 /// A borrowed handle to one dataset within an [`Atlas`](crate::Atlas).
 ///
 /// Carries no independent state — every mutation (`define_array`,
@@ -200,6 +90,15 @@ pub struct DatasetView {
     codec: Codec,
     /// How to report a type that can't merge with the collection's existing type.
     on_type_mismatch: TypeMismatchPolicy,
+}
+
+/// Interning hook: once a view goes away the dataset is fully written, so its
+/// schema can be deduplicated against the rest of the collection. Datasets that
+/// share a layout (an ingest of like-shaped files) then share one allocation.
+impl Drop for DatasetView {
+    fn drop(&mut self) {
+        self.atlas_meta.lock().seal_dataset(&self.name);
+    }
 }
 
 impl DatasetView {
@@ -228,9 +127,8 @@ impl DatasetView {
     pub fn schema(&self) -> DatasetSchema {
         self.atlas_meta
             .lock()
-            .datasets
-            .get(&self.name)
-            .cloned()
+            .live_schema(&self.name)
+            .map(|s| (**s).clone())
             .unwrap_or_default()
     }
 
@@ -244,8 +142,7 @@ impl DatasetView {
     pub fn list_arrays(&self) -> Vec<String> {
         self.atlas_meta
             .lock()
-            .datasets
-            .get(&self.name)
+            .live_schema(&self.name)
             .map(|d| d.arrays.keys().cloned().collect())
             .unwrap_or_default()
     }
@@ -258,17 +155,12 @@ impl DatasetView {
     /// Errors with [`Error::TypeMismatch`] if another dataset already uses this
     /// global key with a type that can't widen to this value's type.
     pub fn set_attribute(&mut self, key: &str, value: Attr) -> Result<()> {
-        let ty = attr_dtype(&value);
+        let ty = value.dtype();
         {
             let mut meta = self.atlas_meta.lock();
-            let existing = merged_other(&meta, &self.name, |s| {
-                s.global_attrs.get(key).map(|d| d.0.clone())
-            });
+            let existing = meta.other_global_attr_dtype(&self.name, key);
             check_type_alignment(self.on_type_mismatch, "attribute", key, existing, &ty)?;
-            meta.datasets
-                .entry(self.name.clone())
-                .or_default()
-                .register_global_attr(key, ty);
+            meta.record_global_attr(&self.name, key, ty);
         }
         self.pending_attrs
             .lock()
@@ -293,24 +185,18 @@ impl DatasetView {
     /// Buffered until flush, which writes it into `<array>/data.af`. Errors
     /// with [`Error::ArrayNotFound`] if the array isn't declared here.
     pub fn set_array_attribute(&mut self, array: &str, key: &str, value: Attr) -> Result<()> {
-        let ty = attr_dtype(&value);
+        let ty = value.dtype();
         {
             let mut meta = self.atlas_meta.lock();
             let present = meta
-                .datasets
-                .get(&self.name)
+                .live_schema(&self.name)
                 .is_some_and(|d| d.arrays.contains_key(array));
             if !present {
                 return Err(Error::ArrayNotFound(array.to_string()));
             }
-            let existing = merged_other(&meta, &self.name, |s| {
-                s.array_attrs.get(array).and_then(|m| m.get(key)).map(|d| d.0.clone())
-            });
+            let existing = meta.other_array_attr_dtype(&self.name, array, key);
             check_type_alignment(self.on_type_mismatch, "array attribute", key, existing, &ty)?;
-            meta.datasets
-                .entry(self.name.clone())
-                .or_default()
-                .register_array_attr(array, key, ty);
+            meta.record_array_attr(&self.name, array, key, ty);
         }
         self.pending_attrs.lock().set(array, &self.name, key, value);
         Ok(())
@@ -338,8 +224,7 @@ impl DatasetView {
     pub fn array_meta(&self, array: &str) -> Option<ArraySchema> {
         self.atlas_meta
             .lock()
-            .datasets
-            .get(&self.name)
+            .live_schema(&self.name)
             .and_then(|d| d.arrays.get(array).cloned())
     }
 
@@ -379,16 +264,13 @@ impl DatasetView {
         let new_dtype = T::DTYPE.clone();
         {
             let meta = self.atlas_meta.lock();
-            if let Some(ds) = meta.datasets.get(&self.name) {
-                if ds.arrays.contains_key(array) {
+            if let Some(ds) = meta.live_schema(&self.name)
+                && ds.arrays.contains_key(array) {
                     return Err(Error::ArrayAlreadyExists(array.to_string()));
                 }
-            }
             // Reject a dtype that can't merge with the same array name in other
             // datasets (e.g. an int32 array here vs a string array elsewhere).
-            let existing = merged_other(&meta, &self.name, |s| {
-                s.arrays.get(array).map(|a| a.dtype.clone())
-            });
+            let existing = meta.other_array_dtype(&self.name, array);
             check_type_alignment(self.on_type_mismatch, "array", array, existing, &new_dtype)?;
         }
 
@@ -409,14 +291,11 @@ impl DatasetView {
             shape,
             chunk_shape: actual_chunk,
             dimension_names: dims,
-            codec: self.codec.clone(),
+            codec: self.codec,
         };
-        let mut meta = self.atlas_meta.lock();
-        meta.datasets
-            .entry(self.name.clone())
-            .or_default()
-            .arrays
-            .insert(array.to_string(), schema);
+        self.atlas_meta
+            .lock()
+            .record_array(&self.name, array, schema);
         Ok(())
     }
 
@@ -542,11 +421,7 @@ impl DatasetView {
         arc.write().await.delete(&self.name)?;
         // Drop any buffered per-variable attribute writes for this array.
         self.pending_attrs.lock().remove(array, &self.name);
-        let mut meta = self.atlas_meta.lock();
-        if let Some(ds_meta) = meta.datasets.get_mut(&self.name) {
-            ds_meta.arrays.shift_remove(array);
-            ds_meta.array_attrs.shift_remove(array);
-        }
+        self.atlas_meta.lock().unrecord_array(&self.name, array);
         debug!("deleted array");
         Ok(())
     }
@@ -589,9 +464,9 @@ impl DatasetView {
     /// otherwise the array's recorded codec (falling back to the store codec).
     fn file_codec(&self, file: &str) -> Codec {
         if file == GLOBAL_ATTRS_ARRAY {
-            self.codec.clone()
+            self.codec
         } else {
-            self.array_codec(file).unwrap_or_else(|| self.codec.clone())
+            self.array_codec(file).unwrap_or(self.codec)
         }
     }
 
@@ -600,9 +475,8 @@ impl DatasetView {
     fn array_codec(&self, array: &str) -> Option<Codec> {
         self.atlas_meta
             .lock()
-            .datasets
-            .get(&self.name)
-            .and_then(|d| d.arrays.get(array).map(|s| s.codec.clone()))
+            .live_schema(&self.name)
+            .and_then(|d| d.arrays.get(array).map(|s| s.codec))
     }
 }
 
@@ -617,7 +491,7 @@ pub(crate) async fn open_dataset_view(
 ) -> Result<DatasetView> {
     {
         let meta = atlas_meta.lock();
-        if !meta.datasets.contains_key(name) {
+        if !meta.is_live(name) {
             return Err(Error::DatasetNotFound(name.to_string()));
         }
     }
@@ -635,6 +509,7 @@ pub(crate) async fn open_dataset_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use array_format::DeltaCache;
     use object_store::memory::InMemory;
 
     fn make_store() -> Arc<dyn ObjectStore> {
@@ -643,8 +518,7 @@ mod tests {
 
     fn shared_meta_with(name: &str) -> Arc<Mutex<StoreMeta>> {
         let mut meta = StoreMeta::default();
-        meta.datasets
-            .insert(name.to_string(), DatasetSchema::default());
+        meta.add_dataset(name);
         Arc::new(Mutex::new(meta))
     }
 
@@ -1061,18 +935,20 @@ mod tests {
                 .unwrap();
 
             // Drain the buffer into the .af files the way Atlas::flush does.
-            for ((file, ds), attrs) in pending.lock().drain_all() {
+            // Bind the drained Vec so the lock is released before the awaits.
+            let drained = pending.lock().drain_all();
+            for ((file, ds), attrs) in drained {
                 let codec = Codec::default();
                 let handle = cache.get_or_insert(&store, &file, &codec);
                 let arc = handle.get().await.unwrap();
                 let mut guard = arc.write().await;
                 if guard.get_array(&ds).is_err() {
                     guard
-                        .define_array::<u8>(ds.clone(), vec![], vec![], None, None)
+                        .define_array::<u8>(ds.to_string(), vec![], vec![], None, None)
                         .unwrap();
                 }
                 for (k, v) in attrs {
-                    guard.set_attribute(&ds, &k, v.into()).unwrap();
+                    guard.set_attribute(&ds, &k, (*v).clone().into()).unwrap();
                 }
             }
             flush_initialized(&cache).await;
@@ -1106,8 +982,8 @@ mod tests {
         let cache = test_cache();
         let shared = Arc::new(Mutex::new({
             let mut m = StoreMeta::default();
-            m.datasets.insert("ds_a".into(), DatasetSchema::default());
-            m.datasets.insert("ds_b".into(), DatasetSchema::default());
+            m.add_dataset("ds_a");
+            m.add_dataset("ds_b");
             m
         }));
         let pending = Arc::new(Mutex::new(PendingAttrs::default()));

@@ -7,7 +7,9 @@
 ///
 /// Also reused for metadata compression via
 /// [`StoreConfig::meta_compression`] — the same three options apply.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum Codec {
     /// Zstd compression (default). Best compression ratio at moderate speed.
     #[default]
@@ -16,6 +18,31 @@ pub enum Codec {
     Lz4,
     /// No compression. Fastest write path, no size reduction.
     Uncompressed,
+}
+
+impl Codec {
+    /// Compress `bytes` with this codec. Used for whole-file metadata and
+    /// pruning-index blocks, not array chunks (those go through `array_format`).
+    pub(crate) fn compress(self, bytes: Vec<u8>) -> crate::Result<Vec<u8>> {
+        Ok(match self {
+            Codec::Uncompressed => bytes,
+            // zstd default level (3) — good ratio at low CPU. These payloads are
+            // small, so even level 19 would be sub-millisecond.
+            Codec::Zstd => zstd::stream::encode_all(bytes.as_slice(), 0)?,
+            // lz4_flex compression is infallible; the size prefix lets decode
+            // recover the output length without scanning.
+            Codec::Lz4 => lz4_flex::compress_prepend_size(&bytes),
+        })
+    }
+
+    /// Reverse [`compress`](Self::compress).
+    pub(crate) fn decompress(self, bytes: &[u8]) -> crate::Result<Vec<u8>> {
+        Ok(match self {
+            Codec::Uncompressed => bytes.to_vec(),
+            Codec::Zstd => zstd::stream::decode_all(bytes)?,
+            Codec::Lz4 => lz4_flex::decompress_size_prepended(bytes)?,
+        })
+    }
 }
 
 /// On-disk encoding for the store's metadata file.
@@ -105,11 +132,25 @@ pub struct StoreConfig {
     /// (`atlas.json` / `atlas.msgpack`). Only consulted by `create`; `open`
     /// detects compression from the filename suffix on disk.
     pub meta_compression: Codec,
+    /// Compression applied to each column block of the pruning index. Defaults
+    /// to [`Codec::Zstd`].
+    ///
+    /// Unlike `meta_compression`, this defaults to compressed: the index is
+    /// only ever machine-read, so the human-readable argument for leaving
+    /// `atlas.json` uncompressed doesn't apply. Blocks are compressed
+    /// individually, so ranged single-column reads keep working whatever this
+    /// is set to, and the index footer records the codec used — a reader
+    /// adapts without being told.
+    ///
+    /// Per-session like `on_type_mismatch`: it governs what a flush *writes*,
+    /// and is not persisted outside the index itself.
+    pub pruning_compression: Codec,
 }
 
 // Manual Default — `meta_compression` defaults to `Uncompressed`, not
 // `Codec::default()` (which is `Zstd`), so new stores keep the legacy
 // `atlas.json` / `atlas.msgpack` filenames unless the caller opts in.
+// `pruning_compression` does default to `Zstd`; see its docs.
 impl Default for StoreConfig {
     fn default() -> Self {
         Self {
@@ -117,6 +158,7 @@ impl Default for StoreConfig {
             on_type_mismatch: TypeMismatchPolicy::default(),
             meta_format: MetaFormat::default(),
             meta_compression: Codec::Uncompressed,
+            pruning_compression: Codec::Zstd,
         }
     }
 }
