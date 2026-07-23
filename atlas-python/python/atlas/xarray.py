@@ -36,6 +36,13 @@ if TYPE_CHECKING:
 _COORDS_ATTR = "_pyatlas_coords"
 _JSON_PREFIX = "json:"
 
+# Per-array marker attribute for variables that were `timedelta64` on the way in.
+# Atlas has no native duration type, so a timedelta is stored as int64
+# nanoseconds (the same int64 view datetime64 uses) and tagged with this
+# attribute; its value is the unit to reconstruct on read. The read path pops
+# it so it never surfaces as a user-visible attribute.
+_TIMEDELTA_ATTR = "_pyatlas_timedelta"
+
 _NUMPY_TO_ATLAS = {
     np.dtype("int8"): "int8",
     np.dtype("int16"): "int16",
@@ -54,6 +61,11 @@ _NUMPY_TO_ATLAS = {
 def _np_to_atlas_dtype(np_dtype: np.dtype) -> str:
     if np_dtype in _NUMPY_TO_ATLAS:
         return _NUMPY_TO_ATLAS[np_dtype]
+    # timedelta64 (any unit) has no native atlas type; it's stored as int64
+    # nanoseconds and tagged with `_TIMEDELTA_ATTR` so the read path restores
+    # the duration dtype — the datetime64 parallel.
+    if np_dtype.kind == "m":
+        return "int64"
     # Object (Python str/bytes) and fixed-size byte/unicode strings all
     # become variable-length atlas strings.
     if np_dtype.kind in ("O", "S", "U"):
@@ -137,10 +149,17 @@ def _normalize_fill_value(value: Any, np_dtype: np.dtype) -> Any:
     if value is None:
         return None
     if isinstance(value, np.ndarray) and value.ndim == 0:
-        value = value.item() if np_dtype.kind != "M" else value.view(np.int64).item()
+        if np_dtype.kind == "M":
+            value = value.view(np.int64).item()
+        elif np_dtype.kind == "m":  # timedelta64 -> int64 nanoseconds
+            value = value.astype("timedelta64[ns]").view(np.int64).item()
+        else:
+            value = value.item()
     elif isinstance(value, np.generic):
         if isinstance(value, np.datetime64):
             return value.astype("datetime64[ns]").view(np.int64).item()
+        if isinstance(value, np.timedelta64):
+            return value.astype("timedelta64[ns]").view(np.int64).item()
         value = value.item()
     if np_dtype.kind in ("O", "S", "U") and isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
@@ -187,7 +206,7 @@ def _resolve_fill_value(
 
     if np_dtype.kind == "f":
         return float("nan")
-    if np_dtype.kind == "M":  # datetime64 -> NaT, stored as the i64::MIN sentinel
+    if np_dtype.kind in ("M", "m"):  # datetime64/timedelta64 -> NaT (i64::MIN sentinel)
         return _NAT_INT64
     if np_dtype.kind in ("O", "S", "U"):  # string -> "" sentinel for missing cells
         return ""
@@ -330,7 +349,8 @@ def _write_xarray_to_view(
     # makes the on-disk file layout predictable.
     for var_name in coord_names + [str(n) for n in ds.data_vars.keys()]:
         var = ds[var_name]
-        atlas_dtype = _np_to_atlas_dtype(np.dtype(var.dtype))
+        np_dtype = np.dtype(var.dtype)
+        atlas_dtype = _np_to_atlas_dtype(np_dtype)
         dims = [str(d) for d in var.dims]
         shape = [int(s) for s in var.shape]
 
@@ -353,7 +373,7 @@ def _write_xarray_to_view(
         var_attrs = dict(var.attrs)
         resolved_fill = _resolve_fill_value(
             var_name,
-            np.dtype(var.dtype),
+            np_dtype,
             var_attrs.pop("_FillValue", None),
             fill_value,
         )
@@ -367,6 +387,12 @@ def _write_xarray_to_view(
             fill_value=resolved_fill,
         )
 
+        # Tag timedelta64 arrays (stored as int64 ns) so the read path can
+        # restore the duration dtype. Values are normalised to ns below, so
+        # the recorded unit is always "ns".
+        if np_dtype.kind == "m":
+            view.set_array_attribute(var_name, _TIMEDELTA_ATTR, "ns")
+
         # For string arrays, missing (None/NaN) cells can't be stored as null,
         # so they're substituted with the resolved string fill (default "").
         str_fill = resolved_fill if isinstance(resolved_fill, str) else ""
@@ -379,6 +405,10 @@ def _write_xarray_to_view(
             # numpy datetime64 view to int64 without copying.
             if block.dtype.kind == "M":
                 block = block.view(np.int64)
+            # timedelta64 -> int64 nanoseconds (normalise the unit first, then
+            # a zero-copy view). Restored to a duration on read via the marker.
+            elif block.dtype.kind == "m":
+                block = block.astype("timedelta64[ns]").view(np.int64)
             elif atlas_dtype == "string":
                 block, n = _fill_missing_strings(block, str_fill)
                 n_filled_strings += n
@@ -426,6 +456,19 @@ def _atlas_to_numpy_dtype(atlas_dtype: str) -> np.dtype:
     raise NotImplementedError(
         f"atlas dtype {atlas_dtype!r} is not supported on the dask read path"
     )
+
+
+def _as_timedelta(arr: Any, unit: str) -> Any:
+    """View an int64 array (numpy or dask) as ``timedelta64[unit]``.
+
+    A same-itemsize reinterpretation — the on-disk int64 nanoseconds become a
+    duration without copying. Dask-backed reads are transformed lazily so the
+    chunk-by-chunk read graph is preserved.
+    """
+    td_dtype = np.dtype(f"timedelta64[{unit}]")
+    if _is_dask_array(arr):
+        return arr.map_blocks(lambda b: b.view(td_dtype), dtype=td_dtype)
+    return np.asarray(arr).view(td_dtype)
 
 
 def _dask_chunks_for(shape: Sequence[int], chunk_shape: Sequence[int]) -> tuple:
@@ -573,14 +616,29 @@ def _view_to_xarray(view: "DatasetView", force_lazy: bool = False) -> "xr.Datase
         ):
             continue
         meta = view.array_meta(name)
-        if (
-            meta is not None
-            and meta["dtype"] == "timestamp_nanoseconds"
-            and fv == _NAT_INT64
+        # NaT sentinel (i64::MIN) on a datetime column, or on a timedelta column
+        # stored as int64 — self-describing in the data, so skip the attr.
+        is_timedelta = _TIMEDELTA_ATTR in per_var_attrs.get(name, {})
+        if fv == _NAT_INT64 and (
+            (meta is not None and meta["dtype"] == "timestamp_nanoseconds")
+            or is_timedelta
         ):
             continue
         per_var_attrs.setdefault(name, {})
         per_var_attrs[name]["_FillValue"] = fv
+
+    # Restore timedelta64 arrays: stored as int64 ns + the `_TIMEDELTA_ATTR`
+    # marker. View the int64 data back as a duration and drop the marker so it
+    # doesn't surface as a user-visible attribute (i64::MIN reads back as NaT).
+    for name in array_names:
+        unit = per_var_attrs.get(name, {}).pop(_TIMEDELTA_ATTR, None)
+        if unit is None:
+            continue
+        target = data_vars if name in data_vars else coords
+        if name not in target:
+            continue
+        dims, arr, extra = target[name]
+        target[name] = (dims, _as_timedelta(arr, str(unit)), extra)
 
     # Inject per-var attrs into the (dims, data, attrs) triples
     def _with_attrs(name: str, triple: tuple) -> tuple:
@@ -664,9 +722,23 @@ def _write_xarray_new_dataset(
 
     Both `atlas.add_xarray_dataset` and the `ds.atlas.write` accessor route through
     this function.
+
+    The write is atomic: if populating the view fails partway (e.g. an
+    unsupported dtype), the just-created dataset is rolled back with
+    `delete_dataset` so a later `flush()`/`close()` can't persist a half-written
+    record. Nothing reaches disk until flush regardless, so this only cleans up
+    the in-memory store.
     """
     view = atlas.create_dataset(name)
-    _write_xarray_to_view(view, ds, chunks=chunks, fill_value=fill_value)
+    try:
+        _write_xarray_to_view(view, ds, chunks=chunks, fill_value=fill_value)
+    except BaseException:
+        try:
+            atlas.delete_dataset(name)
+        except Exception:
+            # Best-effort rollback; surface the original failure regardless.
+            pass
+        raise
 
 
 # --- xarray accessor ----------------------------------------------------------
