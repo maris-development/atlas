@@ -530,6 +530,70 @@ def test_datetime_nat_default_fill():
         assert "_FillValue" not in ds_back["time_obs"].attrs
 
 
+def test_timedelta_roundtrip():
+    """timedelta64 has no native atlas type; it's stored as int64 ns + a marker
+    attribute and restored to a duration dtype on read."""
+    deltas = (
+        np.array([1, 2, 3, 4], dtype="timedelta64[s]").astype("timedelta64[ns]")
+    )
+    arr = xr.DataArray(deltas, dims=["t"], attrs={"long_name": "sampling gap"})
+    ds = xr.Dataset({"gap": arr})
+
+    with tempfile.TemporaryDirectory() as d:
+        with atlas.Atlas.create(d) as store:
+            store.add_xarray_dataset(ds, "ds")
+
+        store2 = atlas.Atlas.open(d)
+        # Stored as int64 under the hood.
+        assert store2.open_dataset("ds").array_meta("gap")["dtype"] == "int64"
+
+        ds_back = store2.open_as_xarray_dataset("ds")
+        assert ds_back["gap"].dtype == np.dtype("timedelta64[ns]")
+        np.testing.assert_array_equal(ds_back["gap"].values, deltas)
+        # The internal marker never surfaces as a user-visible attribute.
+        assert "_pyatlas_timedelta" not in ds_back["gap"].attrs
+        assert ds_back["gap"].attrs == {"long_name": "sampling gap"}
+
+
+def test_timedelta_nat_default_fill():
+    """A timedelta var with NaT cells defaults to a NaT fill (recorded as null),
+    round-tripping with no spurious `_FillValue`."""
+    deltas = np.array([10, "NaT", 30, "NaT"], dtype="timedelta64[ns]")
+    ds = xr.Dataset({"gap": xr.DataArray(deltas, dims=["t"])})
+
+    with tempfile.TemporaryDirectory() as d:
+        with atlas.Atlas.create(d) as store:
+            store.add_xarray_dataset(ds, "ds")
+
+        store2 = atlas.Atlas.open(d)
+        assert store2.open_dataset("ds").array_stats("gap")["null_count"] == 2
+        ds_back = store2.open_as_xarray_dataset("ds")
+        assert ds_back["gap"].dtype == np.dtype("timedelta64[ns]")
+        np.testing.assert_array_equal(ds_back["gap"].values, deltas)
+        assert "_FillValue" not in ds_back["gap"].attrs
+
+
+def test_failed_insert_rolls_back_dataset():
+    """An insert that fails partway (unsupported dtype after a valid var) must
+    not leave a half-written dataset that a later flush would persist."""
+    ds = xr.Dataset(
+        {
+            "ok": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"]),
+            "bad": xr.DataArray(np.array([True, False, True, False]), dims=["x"]),
+        }
+    )
+    with tempfile.TemporaryDirectory() as d:
+        with atlas.Atlas.create(d) as store:
+            with pytest.raises(NotImplementedError):
+                store.add_xarray_dataset(ds, "ds")
+            # Rolled back: the name is gone from the in-memory store, so the
+            # __exit__ flush persists nothing for it.
+            assert "ds" not in store.list_datasets()
+
+        # And nothing was persisted to disk either.
+        assert "ds" not in atlas.Atlas.open(d).list_datasets()
+
+
 def test_missing_strings_filled_with_warning():
     """A string var with None/NaN cells is written after substituting the string
     fill (default ""), and a warning is emitted naming the count."""
