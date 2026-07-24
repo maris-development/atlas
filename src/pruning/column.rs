@@ -68,34 +68,23 @@ impl StatColumn {
         self.min.len()
     }
 
-    pub(crate) fn resize(&mut self, rows: usize) {
-        self.present.resize(rows);
-        self.stats_valid.resize(rows);
-        self.min.resize(rows, None);
-        self.max.resize(rows, None);
-        self.row_count.resize(rows, 0);
-        self.null_count.resize(rows, 0);
-    }
-
-    /// Wipes one row.
-    ///
-    /// Used when a slot is revived by a new dataset, so it can never surface
-    /// the previous occupant's statistics.
-    pub(crate) fn clear_row(&mut self, row: usize) {
-        if row >= self.rows() {
-            return;
-        }
-        self.present.set(row, false);
-        self.stats_valid.set(row, false);
-        self.min[row] = None;
-        self.max[row] = None;
-        self.row_count[row] = 0;
-        self.null_count[row] = 0;
-    }
-
     /// Records that the dataset at `row` declares this array/attribute.
     pub(crate) fn mark_present(&mut self, row: usize) {
         self.present.set(row, true);
+    }
+
+    /// Sets one cell to a single scalar value: present, with a point range
+    /// `[value, value]`. Used for attribute columns, where each dataset carries
+    /// one value (so `min == max`), giving range pruning on attributes.
+    pub(crate) fn set_scalar(&mut self, row: usize, value: StatVal) {
+        if row >= self.rows() {
+            return;
+        }
+        self.present.set(row, true);
+        self.stats_valid.set(row, true);
+        self.min[row] = Some(value.clone());
+        self.max[row] = Some(value);
+        self.row_count[row] = 1;
     }
 
     /// Writes one cell from a freshly computed statistic.
@@ -330,17 +319,6 @@ mod tests {
         assert!(column.present.get(0), "the dataset does declare it");
         assert!(!column.stats_valid.get(0), "but there is no range");
         assert_eq!(column.row_count[0], 6);
-    }
-
-    #[test]
-    fn clear_row_wipes_everything() {
-        let mut column = column_of(2);
-        column.set_stats(0, &stats(5, 9, 4, 1));
-        column.clear_row(0);
-        assert!(!column.present.get(0));
-        assert!(!column.stats_valid.get(0));
-        assert_eq!(column.min[0], None);
-        assert_eq!(column.row_count[0], 0);
     }
 
     #[test]

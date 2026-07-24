@@ -10,8 +10,9 @@ use crate::{
     config::{Codec, MetaFormat, StoreConfig, TypeMismatchPolicy},
     dataset::{ArrayCache, DatasetView, GLOBAL_ATTRS_ARRAY, PendingAttrs, open_dataset_view},
     meta::{StoreMeta, load_meta, save_meta},
-    pruning::{ColumnKey, ColumnSummary, PruningIndex, PruningStore},
+    pruning::{ColumnKey, ColumnSummary, PruningIndex, StatColumn, StatVal},
 };
+use std::collections::HashMap;
 
 /// Handle to an opened or newly created atlas store.
 ///
@@ -26,16 +27,13 @@ use crate::{
 pub struct Atlas {
     store: Arc<dyn ObjectStore>,
     meta: Arc<Mutex<StoreMeta>>,
-    /// Write-side copy of the pruning index, kept aligned with `meta` as
-    /// datasets and arrays are declared and filled in at flush.
-    ///
-    /// `None` until a mutation needs it — a store opened purely to *query* the
-    /// index never materializes this, and reads go through
-    /// [`Atlas::pruning_index`], which fetches only the columns asked for.
-    pruning: Arc<Mutex<Option<PruningIndex>>>,
     /// Attribute writes buffered until [`Atlas::flush`], keeping mutations
     /// off-disk and attribute setters non-blocking.
     pending_attrs: Arc<Mutex<PendingAttrs>>,
+    /// Cached `dataset name → ordinal` map for the on-demand pruning-index
+    /// pivot. Rebuilt lazily and invalidated whenever the dataset set changes,
+    /// so a query doesn't pay to rebuild it (~O(datasets)) on every call.
+    ordinal_map: Arc<Mutex<Option<Arc<HashMap<String, usize>>>>>,
     cache: Arc<ArrayCache>,
     codec: Codec,
     /// How type mismatches across datasets are reported. Per-session, not
@@ -43,9 +41,6 @@ pub struct Atlas {
     on_type_mismatch: TypeMismatchPolicy,
     meta_format: MetaFormat,
     meta_compression: Codec,
-    /// Codec for pruning-index column blocks; see
-    /// [`StoreConfig::pruning_compression`].
-    pruning_compression: Codec,
 }
 
 mod bulk_read;
@@ -87,14 +82,13 @@ impl Atlas {
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
-            pruning: Arc::new(Mutex::new(None)),
             pending_attrs: Arc::new(Mutex::new(PendingAttrs::default())),
+            ordinal_map: Arc::new(Mutex::new(None)),
             cache: default_cache(),
             codec,
             on_type_mismatch: config.on_type_mismatch,
             meta_format,
             meta_compression,
-            pruning_compression: config.pruning_compression,
         })
     }
 
@@ -108,14 +102,13 @@ impl Atlas {
         Ok(Self {
             store,
             meta: Arc::new(Mutex::new(meta)),
-            pruning: Arc::new(Mutex::new(None)),
             pending_attrs: Arc::new(Mutex::new(PendingAttrs::default())),
+            ordinal_map: Arc::new(Mutex::new(None)),
             cache: default_cache(),
             codec: config.codec,
             on_type_mismatch: config.on_type_mismatch,
             meta_format: config.meta_format,
             meta_compression: config.meta_compression,
-            pruning_compression: config.pruning_compression,
         })
     }
 
@@ -185,22 +178,16 @@ impl Atlas {
     #[instrument(skip(self))]
     pub async fn create_dataset(&mut self, name: &str) -> Result<DatasetView> {
         crate::validate_name(name)?;
-        let ordinal = {
+        {
             let mut meta = self.meta.lock();
             if meta.is_live(name) {
                 return Err(Error::DatasetAlreadyExists(name.to_string()));
             }
-            // Reuses the slot (and pruning-index row) if this name was
-            // previously tombstoned, so ordinals stay stable.
-            meta.add_dataset(name)
-        };
-        // Keep the index exactly as long as the dataset list from the moment
-        // the dataset exists: append (or clear, for a revived slot) its row now,
-        // and let the flush fill in the values.
-        self.ensure_pruning_loaded().await?;
-        if let Some(index) = self.pruning.lock().as_mut() {
-            index.reset_row(ordinal);
+            // Reuses a previously-tombstoned slot for this name so ordinals stay
+            // stable (the pruning index reads current stats, so nothing to reset).
+            meta.add_dataset(name);
         }
+        *self.ordinal_map.lock() = None; // dataset set changed
         debug!("created dataset");
         Ok(DatasetView::new(
             self.store.clone(),
@@ -245,6 +232,7 @@ impl Atlas {
         };
         // Drop any buffered (not-yet-flushed) attribute writes for this dataset.
         self.pending_attrs.lock().remove_dataset(name);
+        *self.ordinal_map.lock() = None; // dataset set changed
         debug!(arrays = dataset_meta.arrays.len(), "deleting dataset");
         for (array_name, schema) in &dataset_meta.arrays {
             let handle = self
@@ -302,62 +290,143 @@ impl Atlas {
         self.meta.lock().row_slots()
     }
 
-    /// Loads the write-side index if it isn't loaded yet, then aligns its row
-    /// count with the dataset list.
+    /// Assembles the pruning index for **only** the given columns, **on demand**
+    /// from the array files' own statistics — there is no persisted index.
     ///
-    /// Only mutations need this; queries go through
-    /// [`pruning_index`](Self::pruning_index), which never materializes the
-    /// whole file.
-    async fn ensure_pruning_loaded(&self) -> Result<()> {
-        if self.pruning.lock().is_none() {
-            let loaded = PruningStore::new(self.store.clone()).load_all().await?;
-            *self.pruning.lock() = Some(loaded);
-        }
-        // A dataset created since the index was written contributes a row that
-        // is simply absent everywhere, which is the honest answer for something
-        // not yet flushed. Keeps `rows == row_slots()` true at all times.
-        let target = self.meta.lock().row_slots();
-        if let Some(index) = self.pruning.lock().as_mut() {
-            index.grow_to(target);
-        }
-        Ok(())
-    }
-
-    /// Reads the pruning index for **only** the given columns.
+    /// Each array column costs one `StatsFile` read of that array's `.af` file,
+    /// pivoted into a flat length-N column by dataset ordinal; attribute columns
+    /// cost nothing beyond the in-memory schema. The result is a flat, columnar
+    /// table — every column has one row per dataset (matching
+    /// [`dataset_row`](Self::dataset_row)) — self-describing via its liveness
+    /// mask (so [`PruningIndex::view`] hides deleted rows) and row↔name mapping.
+    /// Datasets written but not yet flushed have no committed stats and read
+    /// back as absent.
     ///
-    /// Two round trips regardless of collection size: one ranged read of the
-    /// file tail for the footer, then one batched ranged read covering just
-    /// those columns' blocks. Asking for 2 of 166 columns transfers roughly
-    /// 2/166ths of the file — the reason the format is column-addressed.
-    ///
-    /// Rows are positional: row `i` is the dataset at ordinal `i`, matching
-    /// [`dataset_row`](Self::dataset_row). The returned index is
-    /// self-describing — it carries the liveness mask (so
-    /// [`PruningIndex::view`] hides deleted datasets for you) and the row↔name
-    /// mapping ([`PruningIndex::dataset_name`]).
-    ///
-    /// Returns an empty index if the store has never been flushed.
+    /// Columns are built in parallel (each reads an independent array file), and
+    /// the `name → ordinal` pivot map is cached across calls, so the per-call
+    /// cost is dominated by the requested columns' stats — not the collection.
     pub async fn pruning_index(&self, columns: &[ColumnKey]) -> Result<PruningIndex> {
-        let (epoch, live, names) = {
+        let name_to_row = self.ordinal_map();
+        let (rows, live, names) = {
             let meta = self.meta.lock();
-            (meta.meta_epoch, meta.live_mask(), meta.names_by_row())
+            (meta.row_slots(), meta.live_mask(), meta.names_by_row())
         };
-        let mut index = PruningStore::new(self.store.clone())
-            .read_columns(columns, epoch, live)
-            .await?;
+
+        // Dedup while preserving request order.
+        let mut seen = std::collections::HashSet::new();
+        let unique: Vec<ColumnKey> =
+            columns.iter().filter(|k| seen.insert((*k).clone())).cloned().collect();
+
+        let mut index = PruningIndex::with_rows(rows);
+        index.set_live(live);
         index.set_dataset_names(names);
+        for (key, column) in self.build_columns(unique, rows, name_to_row).await? {
+            index.insert_column(key, column);
+        }
         Ok(index)
     }
 
-    /// Every column's key and collection-wide min/max — read from the footer
-    /// alone, without fetching a single column block.
+    /// The cached `dataset name → ordinal` map, rebuilt from `meta` on first use
+    /// after any change to the dataset set (create / delete / compact).
+    fn ordinal_map(&self) -> Arc<HashMap<String, usize>> {
+        if let Some(map) = self.ordinal_map.lock().as_ref() {
+            return map.clone();
+        }
+        let map = {
+            let meta = self.meta.lock();
+            let mut m = HashMap::with_capacity(meta.live_count());
+            for (ordinal, name, _) in meta.live_datasets() {
+                m.insert(name.clone(), ordinal);
+            }
+            m
+        };
+        let arc = Arc::new(map);
+        *self.ordinal_map.lock() = Some(arc.clone());
+        arc
+    }
+
+    /// Builds the given columns concurrently — each reads an independent array
+    /// file, so they run as separate tasks (bounded to the CPU count so a wide
+    /// request can't open too many files at once).
+    async fn build_columns(
+        &self,
+        keys: Vec<ColumnKey>,
+        rows: usize,
+        name_to_row: Arc<HashMap<String, usize>>,
+    ) -> Result<Vec<(ColumnKey, StatColumn)>> {
+        let limit = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+        let sem = Arc::new(tokio::sync::Semaphore::new(limit));
+        let mut tasks = Vec::with_capacity(keys.len());
+        for key in keys {
+            let permit = sem
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| Error::Internal(format!("pruning semaphore closed: {e}")))?;
+            let store = self.store.clone();
+            let cache = self.cache.clone();
+            let meta = self.meta.clone();
+            let codec = self.codec;
+            let n2r = name_to_row.clone();
+            tasks.push(tokio::spawn(async move {
+                let _permit = permit;
+                let column = build_column(&store, &cache, &meta, codec, &key, rows, &n2r).await?;
+                Ok::<_, Error>((key, column))
+            }));
+        }
+        let mut out = Vec::with_capacity(tasks.len());
+        for task in tasks {
+            out.push(
+                task.await
+                    .map_err(|e| Error::Internal(format!("pruning column task failed: {e}")))??,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Every column's collection-wide min/max and present count, folded from the
+    /// array files' statistics.
     ///
-    /// Use it to skip columns whose global range can't satisfy a predicate
-    /// before deciding what to pass to [`pruning_index`](Self::pruning_index);
-    /// see [`ColumnSummary::might_match`].
+    /// Unlike [`pruning_index`](Self::pruning_index) this touches *every* column,
+    /// so its cost scales with the whole collection — use it to decide which
+    /// columns are worth a full read (see [`ColumnSummary::might_match`]), not on
+    /// a hot path.
     pub async fn column_summaries(&self) -> Result<Vec<(ColumnKey, ColumnSummary)>> {
-        let epoch = self.meta.lock().meta_epoch;
-        PruningStore::new(self.store.clone()).summaries(epoch).await
+        let name_to_row = self.ordinal_map();
+        let (keys, live) = {
+            let meta = self.meta.lock();
+            let mut keys: Vec<ColumnKey> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            let mut push = |k: ColumnKey| {
+                if seen.insert(k.clone()) {
+                    keys.push(k);
+                }
+            };
+            for (_, _, schema) in meta.live_datasets() {
+                for array in schema.arrays.keys() {
+                    push(ColumnKey::array(array));
+                }
+                for a in schema.global_attrs.keys() {
+                    push(ColumnKey::global_attr(a));
+                }
+                for (array, attrs) in &schema.array_attrs {
+                    for a in attrs.keys() {
+                        push(ColumnKey::array_attr(array, a));
+                    }
+                }
+            }
+            (keys, meta.live_mask())
+        };
+
+        let rows = live.len();
+        let built = self.build_columns(keys, rows, name_to_row).await?;
+        Ok(built
+            .into_iter()
+            .map(|(key, column)| {
+                let summary = column.summarize(&live);
+                (key, summary)
+            })
+            .collect())
     }
 
     /// Distinct array names across all datasets in this store, sorted.
@@ -410,6 +479,82 @@ fn default_cache() -> Arc<ArrayCache> {
         64 * 1024 * 1024,
     ));
     Arc::new(ArrayCache::new(delta))
+}
+
+/// Builds one flat pruning column of length `rows` from the array files. A free
+/// function (owns only `Arc`s and refs) so it can run as an independent task —
+/// see [`Atlas::build_columns`].
+async fn build_column(
+    store: &Arc<dyn ObjectStore>,
+    cache: &Arc<ArrayCache>,
+    meta: &Arc<Mutex<StoreMeta>>,
+    default_codec: Codec,
+    key: &ColumnKey,
+    rows: usize,
+    name_to_row: &HashMap<String, usize>,
+) -> Result<StatColumn> {
+    let mut column = StatColumn::new(rows);
+    match key {
+        // Array data stats: read the array's `.af` StatsFile and scatter each
+        // entry into its dataset's ordinal row.
+        ColumnKey::Array(array) => {
+            let codec = meta.lock().array_file_codec(array).unwrap_or(default_codec);
+            let handle = cache.get_or_insert(store, array, &codec);
+            if let Some(arc) = handle.get_existing().await? {
+                let guard = arc.read().await;
+                if let Some(stats) = guard.stats() {
+                    for entry in stats.entries() {
+                        if let Some(&row) = name_to_row.get(&entry.name) {
+                            column.set_stats(row, entry);
+                        }
+                    }
+                }
+            }
+        }
+        // Attribute columns carry one value per dataset: dataset-global
+        // attributes live in the reserved `_global` file, per-array ones in the
+        // array's own. Scalars become a point range `[value, value]` (so a
+        // caller can range-prune on them); list-valued attributes mark presence.
+        ColumnKey::GlobalAttr(k) => {
+            fill_attr_column(&mut column, store, cache, default_codec, GLOBAL_ATTRS_ARRAY, k, name_to_row)
+                .await?;
+        }
+        ColumnKey::ArrayAttr(array, k) => {
+            let codec = meta.lock().array_file_codec(array).unwrap_or(default_codec);
+            fill_attr_column(&mut column, store, cache, codec, array, k, name_to_row).await?;
+        }
+    }
+    Ok(column)
+}
+
+/// Fills `column` from attribute `key` on the array file `file`, one value per
+/// dataset. `attribute_index` returns every dataset's value for the key in one
+/// read; scalars become a point range, lists mark presence only.
+async fn fill_attr_column(
+    column: &mut StatColumn,
+    store: &Arc<dyn ObjectStore>,
+    cache: &Arc<ArrayCache>,
+    codec: Codec,
+    file: &str,
+    key: &str,
+    name_to_row: &HashMap<String, usize>,
+) -> Result<()> {
+    let handle = cache.get_or_insert(store, file, &codec);
+    let Some(arc) = handle.get_existing().await? else {
+        return Ok(());
+    };
+    let guard = arc.read().await;
+    for (name, value) in guard.attribute_index(key) {
+        let Some(&row) = name_to_row.get(&name) else { continue };
+        match value {
+            Some(v) => match StatVal::scalar_from_attribute(v) {
+                Some(scalar) => column.set_scalar(row, scalar),
+                None => column.mark_present(row),
+            },
+            None => {} // this dataset doesn't carry the attribute
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
