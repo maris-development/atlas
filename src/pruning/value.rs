@@ -1,6 +1,6 @@
 //! Statistic values and their ordering.
 
-use array_format::StatValue;
+use array_format::{AttributeValue, StatValue};
 use serde::{Deserialize, Serialize};
 
 /// A minimum or maximum, in the type the statistic was computed with.
@@ -66,6 +66,34 @@ impl PartialOrd for StatVal {
 }
 
 impl StatVal {
+    /// A scalar attribute value as a `StatVal`, or `None` for a list-valued
+    /// attribute (which has no single point for range pruning). An attribute is
+    /// one value per dataset, so its pruning cell is a point range `[v, v]`.
+    ///
+    /// Widths collapse to the index's variants: any signed int → `Int`, any
+    /// unsigned int (and `Bool` as 0/1) → `UInt`, either float → `Float`, and
+    /// `String`/`Binary` → `Bytes` (lexicographic).
+    pub(crate) fn scalar_from_attribute(value: &AttributeValue) -> Option<StatVal> {
+        use AttributeValue as A;
+        Some(match value {
+            A::Bool(b) => StatVal::UInt(*b as u64),
+            A::Int8(x) => StatVal::Int(*x as i64),
+            A::Int16(x) => StatVal::Int(*x as i64),
+            A::Int32(x) => StatVal::Int(*x as i64),
+            A::Int64(x) => StatVal::Int(*x),
+            A::UInt8(x) => StatVal::UInt(*x as u64),
+            A::UInt16(x) => StatVal::UInt(*x as u64),
+            A::UInt32(x) => StatVal::UInt(*x as u64),
+            A::UInt64(x) => StatVal::UInt(*x),
+            A::Float32(x) => StatVal::Float(*x as f64),
+            A::Float64(x) => StatVal::Float(*x),
+            A::String(s) => StatVal::Bytes(s.as_bytes().to_vec()),
+            A::Binary(b) => StatVal::Bytes(b.clone()),
+            // List-valued attributes carry no scalar range.
+            _ => return None,
+        })
+    }
+
     /// The smaller of two values; keeps `self` when they aren't comparable.
     pub(crate) fn min_with(self, other: StatVal) -> StatVal {
         match self.partial_cmp(&other) {

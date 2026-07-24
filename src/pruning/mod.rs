@@ -35,20 +35,16 @@
 
 mod bitmap;
 mod column;
-mod format;
-mod io;
 mod value;
 
 use std::collections::HashMap;
 
-use array_format::ArrayStats;
 use serde::{Deserialize, Serialize};
 
 pub use column::{ColumnSummary, ColumnView, StatColumn};
 pub use value::StatVal;
 
 pub(crate) use bitmap::Bitmap;
-pub(crate) use io::PruningStore;
 
 /// Which array or attribute a column describes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -76,37 +72,24 @@ impl ColumnKey {
     }
 }
 
-/// Wraps a message as a pruning-index error (malformed or stale on disk).
-pub(crate) fn invalid(msg: impl Into<String>) -> crate::Error {
-    crate::Error::CorruptIndex(msg.into())
-}
-
-/// The pruning index for a collection.
+/// The pruning index for a collection: a flat, columnar view of every array's
+/// and attribute's statistics across all datasets, **built on demand** for the
+/// requested columns from the array files' own statistics — there is no
+/// persisted index. See [`Atlas::pruning_index`](crate::Atlas::pruning_index).
 ///
-/// Two shapes, same type:
-///
-/// - **Write side** — held in memory beside the store metadata and kept aligned
-///   continuously. A null row is appended the instant a dataset is created, so
-///   `rows() == StoreMeta::row_slots()` holds at every point, not only after a
-///   flush.
-/// - **Read side** — returned by
-///   [`Atlas::pruning_index`](crate::Atlas::pruning_index) carrying only the
-///   columns asked for, plus the liveness mask. Reach for
-///   [`view`](Self::view) rather than [`column`](Self::column): it applies the
-///   masks so deleted and absent rows can't leak into a result.
+/// Reach for [`view`](Self::view) rather than [`column`](Self::column): it
+/// applies the liveness mask so deleted and absent rows can't leak into a
+/// result.
 #[derive(Debug, Clone, Default)]
 pub struct PruningIndex {
     rows: usize,
     columns: HashMap<ColumnKey, StatColumn>,
-    /// Insertion order, so the encoded file is deterministic.
+    /// Insertion order, so column iteration is deterministic.
     order: Vec<ColumnKey>,
-    meta_epoch: u64,
-    /// Liveness per row slot. Empty on the write side, where the mask lives in
-    /// the store metadata; populated on the read side.
+    /// Liveness per row slot: `false` where the dataset was deleted.
     live: Vec<bool>,
-    /// Dataset name per row slot, `None` for tombstones. Empty on the write
-    /// side; populated on the read side so the index is self-describing —
-    /// row ↔ name without a second call to the store.
+    /// Dataset name per row slot, `None` for tombstones — so the index is
+    /// self-describing: row ↔ name without a second call to the store.
     dataset_names: Vec<Option<String>>,
 }
 
@@ -126,11 +109,6 @@ impl PruningIndex {
     /// Row slots covered, tombstones included.
     pub fn rows(&self) -> usize {
         self.rows
-    }
-
-    /// The metadata epoch this index was built against.
-    pub fn meta_epoch(&self) -> u64 {
-        self.meta_epoch
     }
 
     /// Column keys present in this index, in encode order.
@@ -191,11 +169,7 @@ impl PruningIndex {
         self.columns.get(key)
     }
 
-    // ── Write side ──────────────────────────────────────────────────────
-
-    pub(crate) fn set_meta_epoch(&mut self, epoch: u64) {
-        self.meta_epoch = epoch;
-    }
+    // ── Read-time assembly ──────────────────────────────────────────────
 
     pub(crate) fn set_live(&mut self, live: Vec<bool>) {
         self.live = live;
@@ -208,108 +182,21 @@ impl PruningIndex {
         self.dataset_names = names;
     }
 
-    pub(crate) fn iter_columns(&self) -> impl Iterator<Item = (&ColumnKey, &StatColumn)> {
-        self.order
-            .iter()
-            .filter_map(|key| self.columns.get(key).map(|column| (key, column)))
-    }
-
-    /// Adds an already-decoded column, for assembling a partial index.
+    /// Adds a built column to the index. Columns are built on demand from the
+    /// array files' statistics (see [`Atlas::pruning_index`]), so this is how
+    /// the read-time builder assembles the flat table.
     pub(crate) fn insert_column(&mut self, key: ColumnKey, column: StatColumn) {
         if !self.columns.contains_key(&key) {
             self.order.push(key.clone());
         }
         self.columns.insert(key, column);
     }
-
-    /// Appends a null row for a newly created dataset.
-    ///
-    /// Every column gains an absent cell, so the index is never shorter than
-    /// the dataset list.
-    pub(crate) fn push_row(&mut self) -> usize {
-        let row = self.rows;
-        self.rows += 1;
-        for column in self.columns.values_mut() {
-            column.resize(self.rows);
-        }
-        row
-    }
-
-    /// Grows to `rows` slots, appending null rows.
-    pub(crate) fn grow_to(&mut self, rows: usize) {
-        while self.rows < rows {
-            self.push_row();
-        }
-    }
-
-    /// Clears a row, for a slot being reused by a new dataset.
-    pub(crate) fn reset_row(&mut self, row: usize) {
-        for column in self.columns.values_mut() {
-            column.clear_row(row);
-        }
-    }
-
-    /// Ensures a column exists, back-filled as absent for every existing row.
-    ///
-    /// A column introduced at dataset 9 999 still spans all 10 000 rows — the
-    /// column-wise counterpart of appending a null row.
-    pub(crate) fn ensure_column(&mut self, key: &ColumnKey) {
-        match self.columns.get_mut(key) {
-            Some(column) => column.resize(self.rows),
-            None => {
-                self.columns.insert(key.clone(), StatColumn::new(self.rows));
-                self.order.push(key.clone());
-            }
-        }
-    }
-
-    /// Records that the dataset at `row` declares this array/attribute.
-    pub(crate) fn set_present(&mut self, key: &ColumnKey, row: usize) {
-        if let Some(column) = self.columns.get_mut(key) {
-            column.resize(self.rows);
-            column.mark_present(row);
-        }
-    }
-
-    /// Writes one cell's statistics.
-    pub(crate) fn set_stats(&mut self, key: &ColumnKey, row: usize, stats: &ArrayStats) {
-        if let Some(column) = self.columns.get_mut(key) {
-            column.resize(self.rows);
-            column.set_stats(row, stats);
-        }
-    }
-
-    /// Encodes the whole index, stamped with `meta_epoch`.
-    ///
-    /// `live` selects the rows that feed the footer summaries, so a deleted
-    /// dataset can't widen a column's advertised range.
-    pub(crate) fn encode(
-        &self,
-        meta_epoch: u64,
-        codec: crate::config::Codec,
-        live: &[bool],
-    ) -> crate::Result<Vec<u8>> {
-        format::write(self.iter_columns(), self.rows, meta_epoch, codec, live)
-    }
-
-    /// Decodes a whole index, every column materialized.
-    pub(crate) fn decode(bytes: &[u8]) -> crate::Result<Self> {
-        let footer = format::read_footer(bytes)?;
-        let mut index = PruningIndex::with_rows(footer.row_count);
-        index.set_meta_epoch(footer.meta_epoch);
-        for key in footer.keys() {
-            let column = footer.decode_column_at(bytes, &key)?;
-            index.insert_column(key, column);
-        }
-        Ok(index)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Codec;
-    use array_format::StatValue;
+    use array_format::{ArrayStats, StatValue};
 
     fn stats(min: i64, max: i64, rows: u64, nulls: u64) -> ArrayStats {
         ArrayStats {
@@ -321,143 +208,57 @@ mod tests {
         }
     }
 
-    fn index_with_rows(n: usize) -> PruningIndex {
-        let mut index = PruningIndex::new();
-        index.grow_to(n);
+    /// Build a column the way the on-demand read path does: a fresh `StatColumn`
+    /// scattered by ordinal, then `insert_column`.
+    fn index_with_temp(rows: usize, cells: &[(usize, ArrayStats)]) -> PruningIndex {
+        let mut column = StatColumn::new(rows);
+        for (row, s) in cells {
+            column.set_stats(*row, s);
+        }
+        let mut index = PruningIndex::with_rows(rows);
+        index.insert_column(ColumnKey::array("temp"), column);
         index
     }
 
     #[test]
-    fn rows_are_null_until_filled() {
-        let mut index = index_with_rows(3);
-        let key = ColumnKey::array("temp");
-        index.ensure_column(&key);
-
-        let column = index.column(&key).unwrap();
-        assert_eq!(column.present.len(), 3);
-        assert_eq!(column.present.count_set(), 0, "nothing declared yet");
-    }
-
-    #[test]
-    fn late_column_is_back_filled() {
-        let mut index = index_with_rows(100);
-        let key = ColumnKey::array("rare");
-        index.ensure_column(&key);
-        index.set_stats(&key, 99, &stats(1, 2, 10, 0));
-
-        let column = index.column(&key).unwrap();
-        assert_eq!(column.present.len(), 100);
-        assert_eq!(column.present.count_set(), 1);
+    fn assembled_column_scatters_by_ordinal() {
+        let index = index_with_temp(100, &[(99, stats(1, 2, 10, 0))]);
+        let column = index.column(&ColumnKey::array("temp")).unwrap();
+        assert_eq!(column.present_mask().iter().filter(|b| **b).count(), 1);
         assert!(column.present.get(99) && !column.present.get(0));
     }
 
     #[test]
-    fn push_row_extends_every_existing_column() {
-        let mut index = index_with_rows(2);
-        let a = ColumnKey::array("a");
-        let b = ColumnKey::global_attr("b");
-        index.ensure_column(&a);
-        index.ensure_column(&b);
-        index.push_row();
-
-        assert_eq!(index.rows(), 3);
-        for key in [&a, &b] {
-            assert_eq!(index.column(key).unwrap().present.len(), 3);
-        }
-    }
-
-    #[test]
-    fn reset_row_wipes_the_previous_occupant() {
-        let mut index = index_with_rows(2);
-        let key = ColumnKey::array("temp");
-        index.ensure_column(&key);
-        index.set_stats(&key, 0, &stats(5, 9, 4, 1));
-
-        index.reset_row(0);
-        let column = index.column(&key).unwrap();
-        assert!(!column.present.get(0));
-        assert_eq!(column.row_count[0], 0);
-    }
-
-    #[test]
     fn values_keep_their_source_type() {
-        let mut index = index_with_rows(2);
-        let key = ColumnKey::array("mixed");
-        index.ensure_column(&key);
-        index.set_stats(&key, 0, &stats(-3, 7, 10, 0));
-        index.set_stats(
-            &key,
-            1,
-            &ArrayStats {
-                name: "mixed".into(),
-                min: Some(StatValue::Float(0.5)),
-                max: Some(StatValue::Float(9.25)),
-                row_count: 10,
-                null_count: 0,
-            },
+        let index = index_with_temp(
+            2,
+            &[
+                (0, stats(-3, 7, 10, 0)),
+                (
+                    1,
+                    ArrayStats {
+                        name: "temp".into(),
+                        min: Some(StatValue::Float(0.5)),
+                        max: Some(StatValue::Float(9.25)),
+                        row_count: 10,
+                        null_count: 0,
+                    },
+                ),
+            ],
         );
-
-        let column = index.column(&key).unwrap();
+        let column = index.column(&ColumnKey::array("temp")).unwrap();
         assert_eq!(column.min[0], Some(StatVal::Int(-3)), "int stays int");
         assert_eq!(column.min[1], Some(StatVal::Float(0.5)), "float stays float");
     }
 
-    /// The view is what most callers should touch, so it must be reachable
-    /// straight off a decoded index.
+    /// The view folds in the liveness mask, hiding deleted and absent rows.
     #[test]
     fn view_applies_the_live_mask() {
-        let mut index = index_with_rows(3);
-        let key = ColumnKey::array("t");
-        index.ensure_column(&key);
-        index.set_stats(&key, 0, &stats(1, 5, 2, 0));
-        index.set_stats(&key, 1, &stats(100, 200, 2, 0));
+        let mut index = index_with_temp(3, &[(0, stats(1, 5, 2, 0)), (1, stats(100, 200, 2, 0))]);
         index.set_live(vec![true, false, true]);
 
-        let view = index.view(&key).unwrap();
+        let view = index.view(&ColumnKey::array("temp")).unwrap();
         assert_eq!(view.present_rows(), vec![0]);
         assert_eq!(view.candidates(|_, hi| hi > &StatVal::Int(50)), Vec::<usize>::new());
-    }
-
-    #[test]
-    fn encode_decode_roundtrip() {
-        let mut index = index_with_rows(5);
-        let a = ColumnKey::array("temp");
-        let b = ColumnKey::global_attr("cruise");
-        index.ensure_column(&a);
-        index.ensure_column(&b);
-        index.set_stats(&a, 0, &stats(1, 9, 4, 1));
-        index.set_stats(&a, 3, &stats(-2, 2, 4, 0));
-        index.set_stats(
-            &b,
-            3,
-            &ArrayStats {
-                name: "cruise".into(),
-                min: Some(StatValue::Bytes(b"CS6151".to_vec())),
-                max: Some(StatValue::Bytes(b"CS6151".to_vec())),
-                row_count: 1,
-                null_count: 0,
-            },
-        );
-        index.set_meta_epoch(7);
-
-        let live = vec![true; 5];
-        for codec in [Codec::Uncompressed, Codec::Zstd, Codec::Lz4] {
-            let bytes = index.encode(7, codec, &live).unwrap();
-            let back = PruningIndex::decode(&bytes).unwrap();
-
-            assert_eq!(back.rows(), 5);
-            assert_eq!(back.meta_epoch(), 7);
-            assert_eq!(back.column(&a).unwrap(), index.column(&a).unwrap());
-            assert_eq!(back.column(&b).unwrap(), index.column(&b).unwrap());
-        }
-    }
-
-    #[test]
-    fn decode_rejects_corrupt_input() {
-        assert!(PruningIndex::decode(b"tiny").is_err());
-        let mut bytes = index_with_rows(1).encode(0, Codec::Uncompressed, &[true]).unwrap();
-        let last = bytes.len() - 1;
-        bytes[last] ^= 0xff; // break the trailing magic
-        assert!(PruningIndex::decode(&bytes).is_err());
     }
 }

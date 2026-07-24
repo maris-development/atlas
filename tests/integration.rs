@@ -1081,6 +1081,42 @@ async fn pruning_index_reads_only_requested_columns() {
     );
 }
 
+/// The pruning index is built on demand from the array files — nothing is
+/// persisted for it, and a freshly reopened store (no index cache) still serves
+/// it from the stats alone.
+#[tokio::test]
+async fn pruning_index_is_built_on_demand_without_persistence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default())
+        .await
+        .unwrap();
+    for (name, v) in [("a", 5i32), ("b", 50), ("c", 500)] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.define_array::<i32>("temp", vec!["i".into()], vec![1], None, None).await.unwrap();
+        ds.write_array("temp", vec![0], ndarray::Array::from_vec(vec![v]).into_dyn().view())
+            .await
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+
+    // No pruning index is written — the stats live in the array file only.
+    assert!(!tmp.path().join("pruning.idx").exists());
+    assert!(!tmp.path().join("pruning").exists());
+    assert!(tmp.path().join("temp").join("data.af").exists());
+
+    // A reopened store (cold — no in-memory index) serves the flat column from
+    // the array stats on demand.
+    let reopened = Atlas::open(store, prefix).await.unwrap();
+    let key = ColumnKey::array("temp");
+    let idx = reopened.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+    let view = idx.view(&key).unwrap();
+    assert_eq!(idx.rows(), 3);
+    assert_eq!(view.max(reopened.dataset_row("b").unwrap()), Some(&StatVal::Int(50)));
+    assert_eq!(view.candidates(|_, hi| hi > &StatVal::Int(100)),
+               vec![reopened.dataset_row("c").unwrap()]);
+}
+
 /// Every value in the index must agree with the per-dataset stats API it
 /// summarizes — including where the holes are.
 #[tokio::test]
@@ -1141,80 +1177,6 @@ async fn pruning_index_matches_per_dataset_stats() {
     }
 }
 
-/// Proof that a column read is genuinely selective: corrupt one column's bytes
-/// on disk, and reading a *different* column must still succeed.
-///
-/// A whole-file read would decode the damaged block and fail, so this fails
-/// loudly if `pruning_index` ever regresses to loading everything.
-#[tokio::test]
-async fn reading_one_column_does_not_touch_another() {
-    let tmp = tempfile::tempdir().unwrap();
-    let (store, prefix) = make_store(&tmp);
-    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
-        .await
-        .unwrap();
-
-    for d in 0..8 {
-        let mut ds = atlas.create_dataset(&format!("ds{d}")).await.unwrap();
-        for a in 0..8 {
-            let name = format!("arr{a}");
-            ds.define_array::<i64>(&name, vec!["i".into()], vec![4], None, None)
-                .await
-                .unwrap();
-            ds.write_array(
-                &name,
-                vec![0],
-                ndarray::Array::from_vec(vec![d as i64, a as i64, 11, 13])
-                    .into_dyn()
-                    .view(),
-            )
-            .await
-            .unwrap();
-        }
-    }
-    atlas.flush().await.unwrap();
-
-    let idx_path = tmp.path().join("pruning.idx");
-    let original = std::fs::read(&idx_path).unwrap();
-
-    // Find where arr0's block sits by reading it cleanly first, then scribble
-    // over the front of the file — arr0 is the first column written, so its
-    // block starts right after the 8-byte header.
-    let first = atlas
-        .pruning_index(&[ColumnKey::array("arr0")])
-        .await
-        .unwrap();
-    assert!(first.column(&ColumnKey::array("arr0")).is_some());
-
-    let mut damaged = original.clone();
-    for byte in damaged.iter_mut().skip(8).take(64) {
-        *byte ^= 0xff;
-    }
-    std::fs::write(&idx_path, &damaged).unwrap();
-
-    // A later column is still readable, because its bytes were never fetched.
-    let late = atlas
-        .pruning_index(&[ColumnKey::array("arr7")])
-        .await
-        .unwrap();
-    let column = late
-        .column(&ColumnKey::array("arr7"))
-        .expect("a column beyond the damage must still load");
-    assert_eq!(column.present_mask().iter().filter(|b| **b).count(), 8);
-
-    // ...and the damaged column itself does fail, confirming the corruption
-    // was real rather than landing in padding.
-    assert!(
-        atlas
-            .pruning_index(&[ColumnKey::array("arr0")])
-            .await
-            .is_err(),
-        "the corrupted column must fail to decode"
-    );
-}
-
-/// A revived dataset must not inherit the previous occupant's pruning stats —
-/// the row is reset when the slot is reused.
 #[tokio::test]
 async fn pruning_row_is_reset_when_a_dataset_is_revived() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1327,6 +1289,52 @@ async fn pruning_index_tracks_attribute_presence() {
     // Every dataset set the per-array `units` attribute.
     let units = idx.view(&ColumnKey::array_attr("v", "units")).expect("units column");
     assert_eq!(units.present_rows(), vec![0, 1, 2]);
+}
+
+/// Attribute columns carry each dataset's value as a point range, so a client
+/// can range-prune on an array's attribute the same way it does on array data.
+#[tokio::test]
+async fn pruning_index_range_prunes_on_array_attribute_values() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (store, prefix) = make_store(&tmp);
+    let mut atlas = Atlas::create(store, prefix, StoreConfig::default())
+        .await
+        .unwrap();
+
+    // Per-array attribute `year` on `v`, plus a list-valued `valid_range`.
+    for (name, year) in [("ds0", 2019i64), ("ds1", 2021), ("ds2", 2023)] {
+        let mut ds = atlas.create_dataset(name).await.unwrap();
+        ds.define_array::<i32>("v", vec!["i".into()], vec![1], None, None)
+            .await
+            .unwrap();
+        ds.set_array_attribute("v", "year", Attr::Int64(year)).unwrap();
+        ds.set_array_attribute("v", "valid_range", Attr::Float32List(vec![0.0, 100.0]))
+            .unwrap();
+    }
+    atlas.flush().await.unwrap();
+
+    let key = ColumnKey::array_attr("v", "year");
+    let idx = atlas.pruning_index(std::slice::from_ref(&key)).await.unwrap();
+    let year = idx.view(&key).unwrap();
+
+    // Each dataset's value is a point range [year, year].
+    assert_eq!(year.min(0), Some(&StatVal::Int(2019)));
+    assert_eq!(year.max(0), Some(&StatVal::Int(2019)));
+    assert_eq!(year.min(2), Some(&StatVal::Int(2023)));
+
+    // Range pruning: datasets whose year is after 2020.
+    let after_2020 = year.candidates(|_, hi| hi > &StatVal::Int(2020));
+    assert_eq!(
+        after_2020,
+        vec![atlas.dataset_row("ds1").unwrap(), atlas.dataset_row("ds2").unwrap()]
+    );
+
+    // A list-valued attribute is present but carries no scalar range.
+    let range_key = ColumnKey::array_attr("v", "valid_range");
+    let idx2 = atlas.pruning_index(std::slice::from_ref(&range_key)).await.unwrap();
+    let vr = idx2.view(&range_key).unwrap();
+    assert_eq!(vr.present_rows(), vec![0, 1, 2]);
+    assert_eq!(vr.min(0), None, "list-valued attribute has no point range");
 }
 
 /// Querying the index for a dataset created but not yet flushed returns a

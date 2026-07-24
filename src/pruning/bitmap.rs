@@ -22,21 +22,6 @@ impl Bitmap {
         }
     }
 
-    /// Number of bits.
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    /// Appends one bit.
-    pub fn push(&mut self, value: bool) {
-        if self.len.is_multiple_of(8) {
-            self.bits.push(0);
-        }
-        let index = self.len;
-        self.len += 1;
-        self.set(index, value);
-    }
-
     /// Reads bit `index`; out of range reads as `false`.
     pub fn get(&self, index: usize) -> bool {
         if index >= self.len {
@@ -63,13 +48,6 @@ impl Bitmap {
     pub fn count_set(&self) -> usize {
         self.bits.iter().map(|b| b.count_ones() as usize).sum()
     }
-
-    /// Grows to `len` bits, filling with `false`. Never shrinks.
-    pub(crate) fn resize(&mut self, len: usize) {
-        while self.len < len {
-            self.push(false);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -78,11 +56,10 @@ mod tests {
 
     #[test]
     fn set_get_and_count() {
-        let mut bits = Bitmap::zeros(0);
+        let mut bits = Bitmap::zeros(20);
         for i in 0..20 {
-            bits.push(i % 3 == 0);
+            bits.set(i, i % 3 == 0);
         }
-        assert_eq!(bits.len(), 20);
         assert_eq!(bits.count_set(), 7);
         assert!(bits.get(0) && bits.get(3) && !bits.get(1));
 
@@ -93,29 +70,15 @@ mod tests {
         assert!(!bits.get(100), "out of range reads as unset");
     }
 
-    /// `count_set` counts whole bytes at a time, so it must ignore the padding
-    /// bits in the final partial byte.
     #[test]
-    fn count_set_ignores_trailing_padding() {
-        let mut bits = Bitmap::zeros(0);
-        for _ in 0..3 {
-            bits.push(true);
+    fn set_beyond_length_is_ignored() {
+        let mut bits = Bitmap::zeros(3);
+        for i in 0..3 {
+            bits.set(i, true);
         }
-        assert_eq!(bits.len(), 3);
         assert_eq!(bits.count_set(), 3);
-
         // Setting beyond the length must not create phantom bits.
         bits.set(7, true);
         assert_eq!(bits.count_set(), 3);
-    }
-
-    #[test]
-    fn resize_pads_with_unset() {
-        let mut bits = Bitmap::zeros(2);
-        bits.set(1, true);
-        bits.resize(5);
-        assert_eq!(bits.len(), 5);
-        assert_eq!(bits.count_set(), 1);
-        assert!(bits.get(1));
     }
 }
