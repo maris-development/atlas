@@ -1,87 +1,101 @@
 # Atlas
 
-Python bindings to **[`atlas-rust`](https://github.com/maris-development/atlas)** — the
-Rust core that powers ATLAS (Aggregated Tensor Large Array Store). Think of it as a *"zip"
-for N-dimensional data*: store thousands of NetCDF / Zarr-style datasets in one
-high-performance collection, then read any of them back as NumPy or
-[xarray](https://docs.xarray.dev).
+Python bindings to **[`atlas-rust`](https://github.com/maris-development/atlas)** —
+ATLAS (Aggregated Tensor Large Array Store). Think of it as a *zip for
+N-dimensional data*: thousands of NetCDF-style datasets in one immutable file,
+written from [xarray](https://docs.xarray.dev), with a catalogue you can read
+back in a single request.
 
 ```python
-import numpy as np
 import atlas
+import xarray as xr
 
-with atlas.Atlas.create("/tmp/my_store", codec="zstd") as store:
-    ds = store.create_dataset("jan_2024")
-    ds.define_array(
-        "temperature",
-        dtype="float32",
-        dims=["lat", "lon"],
-        shape=[8, 16],
-        chunk_shape=[4, 8],
-    )
-    ds.write_array("temperature", start=[0, 0],
-                   data=np.full((8, 16), 20.0, dtype=np.float32))
-    ds.set_attribute("month", 1)
-# `with` exit == store.close() == single flush to disk
+with atlas.AtlasWriter.create("/tmp/weather", codec="zstd") as w:
+    for path in nc_files:
+        w.add_xarray_dataset(xr.open_dataset(path), name=path.stem)
+
+collection = atlas.Atlas.open("/tmp/weather")
+collection.list_datasets()          # every dataset, from one range read
+collection.attributes("jan_2024")   # its attributes, no further I/O
 ```
+
+## The shape of it
+
+A collection is **one write-once file**. Every dataset occupies a contiguous
+byte range; a footer at the end records where each one lives, along with its
+schema and attributes.
+
+```text
+my_collection/
+├── data.atlas      ATLS │ segment │ segment │ … │ footer │ trailer
+└── deleted.mask    optional
+```
+
+That buys two things:
+
+- **Metadata is one read.** Opening fetches the footer and nothing else. Listing
+  datasets, inspecting schemas, and reading attributes are then free — for ten
+  datasets or a million.
+- **Data is fetched by the chunk.** Reading a region of an array fetches only
+  the chunks it overlaps.
+
+And it costs one: a collection **cannot be modified after it is written**. No
+append, no in-place update, no compaction. To change a dataset you rewrite the
+collection. The one exception is deleting a dataset, which writes a small mask
+file and never touches the container.
+
+## Python writes; Rust reads data
+
+From Python you build collections and read their **metadata**: dataset names,
+array names, dtypes, shapes, chunk shapes, fill values, attributes. There is no
+`read_array` — array data is read through the Rust API.
+
+That split is deliberate. Building collections from xarray and serving a
+catalogue of what they hold is what Python is good for here; pulling array bytes
+through the GIL never was.
 
 ## What's here
 
-- **Multi-dataset stores** — one `Atlas` directory holds many named
-  datasets, each with their own arrays and attributes.
-- **Shared physical arrays** — N datasets that all declare `temperature`
-  share one `temperature/data.af` file, so the 1000th dataset is just an
-  append.
-- **Compression** — zstd / lz4 / uncompressed array codecs and json /
-  msgpack metadata, optionally compressed.
-- **xarray + dask integration** — `atlas.add_xarray_dataset(ds, name)` to
-  ingest, `atlas.open_as_xarray_dataset(name)` to read back. Dask-backed variables
-  stream chunk-by-chunk on write and come back lazily on read.
-- **Bulk cross-dataset APIs** — `open_as_many_xarray_dataset` and
-  `read_array_across_stacked` collapse N per-dataset reads into one PyO3
-  call, sharing a single file handle.
-- **Cross-dataset pruning** — a columnar min/max/count index
-  (`store.pruning_index(...)` / `column_summaries()`) prunes "which of my
-  10 000 datasets could match this predicate?" to a handful of candidates
-  with a single vectorised scan, without opening any array file. See
-  [Stats and scans](guides/stats.md).
-- **Sync API, GIL-released** — a multi-threaded tokio runtime backs every
-  blocking call; the GIL is released so other Python threads can run.
-- **Local fs or cloud storage** — pass a path string for local, or an
-  [obstore](https://github.com/developmentseed/obstore) handle for S3 /
-  GCS / Azure / HTTP via `pip install "atlas-python[cloud]"`. The full
-  read / write / flush / compact / bulk-read API works identically against
-  either. See [Cloud storage](guides/cloud-storage.md).
+- **One file, many datasets** — a collection holds thousands of named datasets,
+  each with its own arrays and attributes.
+- **xarray + dask ingest** — `add_xarray_dataset(ds, name)` maps a whole
+  `xr.Dataset` across. Dask-backed variables stream block by block, so a dataset
+  larger than memory writes without trouble.
+- **numpy arrays** — the low-level `write_array` takes a C-contiguous ndarray,
+  zero-copy for numeric dtypes.
+- **Free metadata** — schemas and attributes come from the footer that opening
+  already read. Filtering a fleet of datasets by an attribute costs no I/O.
+- **Compression** — zstd, lz4, or none. Blocks record their own codec, so a
+  reader is never told which was used.
+- **Local or cloud** — a path string, or an
+  [obstore](https://github.com/developmentseed/obstore) handle for S3 / GCS /
+  Azure / HTTP via `pip install "atlas-python[cloud]"`. See
+  [Cloud storage](guides/cloud-storage.md).
+- **Sync API, GIL released** — a multi-threaded tokio runtime backs every
+  blocking call, so other Python threads keep running.
 
 ## How does this compare to Zarr / netCDF?
 
-netCDF and Zarr both put one logical "dataset" in one file (or one chunk
-directory); a fleet of N similar datasets becomes N stores. Atlas inverts
-that layout — **one** store, **N** datasets, with arrays of the same name
-sharing a physical file across all of them. This is the design choice that
-makes atlas dramatically faster on "many small datasets, same schema"
-workloads and on cross-dataset slice reads.
+netCDF and Zarr put one logical dataset in one file or one chunk directory, so a
+fleet of N similar datasets becomes N stores — N sets of metadata to open, N
+handles, N objects to list. Atlas puts all N in one file with one footer, which
+is what makes "many small datasets, same schema" cheap to catalogue.
 
-See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the head-to-head, and
-[Benchmarks](benchmarks.md) for the numbers.
+See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the head-to-head.
 
 ## Next steps
 
 - [**Installation**](installation.md) — install the wheel, or build from source.
-- [**Quickstart**](quickstart.md) — first store in five minutes.
+- [**Quickstart**](quickstart.md) — first collection in five minutes.
 - [**Guides**](guides/datasets-and-arrays.md) — the mental model, dtypes,
-  attributes, xarray, dask, bulk reads, stats.
-- [**API reference**](reference/atlas.md) — auto-generated from the
-  source-level docstrings.
+  attributes, xarray, dask, cloud storage.
+- [**API reference**](reference/atlas.md) — generated from the source docstrings.
 
 ## Status
 
-- Local filesystem **and** any [`object_store`](https://docs.rs/object_store)
-  backend (S3 / GCS / Azure / HTTP / local) via the optional
-  [obstore](https://github.com/developmentseed/obstore) dependency.
-  `pip install "atlas-python[cloud]"` enables it; see
-  [Cloud storage (S3, GCS, Azure)](guides/cloud-storage.md).
-- Lazy dask reads use the threaded scheduler only; `.compute()` before
-  crossing into distributed/multiprocessing schedulers.
-- `bool`, `binary`, `list[...]`, `fixed_size_list[...,N]` are reserved for
-  a later release as array element types.
+- Local filesystem and any [`object_store`](https://docs.rs/object_store)
+  backend (S3 / GCS / Azure / HTTP) via the optional obstore dependency.
+- Array data is read from Rust only. Python is metadata-only on the read side.
+- `bool`, `binary`, `list[...]`, and `fixed_size_list[...,N]` are not yet
+  available as array element types from Python. All of them work as *attribute*
+  values.

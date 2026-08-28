@@ -1,9 +1,7 @@
 # `DatasetView`
 
-A typed handle into a single dataset within an [`Atlas`](atlas.md).
-Mutations go through `define_array` / `write_array` / `set_attribute` /
-`delete_array` and are buffered into the parent atlas's in-memory state
-until [`Atlas.flush()`](atlas.md#atlas.Atlas.flush).
+A read-only view of one dataset in an [`Atlas`](atlas.md). Every method is
+answered from the collection footer, so none of them touch the store.
 
 ::: atlas.DatasetView
     options:

@@ -1,108 +1,120 @@
-# 3. Data Model
+# Data model
 
-## Datasets and arrays
+## Collection, dataset, array
 
-A **dataset** is a named collection of **arrays** (N-dimensional, typed) plus
-attributes. Think of one NetCDF file → one dataset; its variables → arrays.
-
-```
-   dataset "GL_PR_BO_JLKU"
-   ├── array  TIME       datetime64[ns]   dims: [time]
-   ├── array  LATITUDE   float32          dims: [time]
-   ├── array  TEMP       float64          dims: [time, depth]
-   ├── attr   platform_code = "BO"        (dataset-global)
-   └── TEMP.units = "degree_Celsius"      (per-array attribute)
-```
-
-## Array-name sharing (the core idea)
-
-Two datasets that declare an array with the **same name** are stored in the
-**same physical file**, keyed by dataset name. The store holds *N* physical
-arrays where *N* = number of distinct array names, regardless of dataset count.
-
-```
-   ds "jan"  ── TEMP, PSAL ──┐
-   ds "feb"  ── TEMP, PSAL ──┤──►  TEMP/data.af   { jan, feb, mar }
-   ds "mar"  ── TEMP, PSAL ──┘     PSAL/data.af   { jan, feb, mar }
+```text
+collection                      one data.atlas file
+├── dataset "jan_2024"          one segment inside it
+│   ├── array "temperature"     f32, [4, 8], chunked [2, 4]
+│   ├── array "lat"             f64, [4]
+│   └── attributes              month=1, source="buoy"
+└── dataset "feb_2024"
+    ├── array "temperature"
+    └── …
 ```
 
-This is what makes "read one variable across all datasets" and the pruning
-index cheap: the variable's data (and stats) are already gathered in one file.
+A **dataset** is what a NetCDF file or an `xarray.Dataset` holds: a set of named
+N-dimensional arrays that share dimensions, plus attributes. A **collection**
+holds many datasets, and is the unit of a file.
 
-**Corollary — normalize names.** If `jan` calls it `TEMP` and `feb` calls it
-`TEMP_SBE`, they don't co-locate — you get a file per variant. For heterogeneous
-ingest (per-file/station-specific names), map names to a shared schema *before*
-writing. A store with a handful of shared array names scales to millions of
-datasets; a store with per-dataset-unique names does not.
+An **array** is typed, shaped, chunked, and belongs to exactly one dataset. Two
+datasets may both declare `temperature`; those are separate arrays that happen
+to share a name. Nothing is shared between them — not bytes, not schema
+identity beyond interning, not dimensions.
 
-## Ordinals — a dataset's fixed row number
+> This is the sharpest break from atlas 0.14, where a physical file was keyed by
+> array *name* and every dataset that used that name wrote an entry into it. That
+> layout made array-name normalization load-bearing: datasets inventing unique
+> variable names produced one small file each and exhausted file descriptors.
+> A single container removes the whole concern.
 
-Every dataset has an **ordinal**: its position in the insertion-ordered dataset
-list. The ordinal is a dataset's row in every cross-dataset view (the pruning
-index, `read_array_across`).
+## Ordinals
 
-```
-   ordinal   0        1        2        3
-   dataset   ds0      ds1      ds2      ds3
-```
+A dataset's position in the footer is its **ordinal**, assigned in write order
+and fixed for the life of the container. It is the identity the deletion mask
+refers to.
 
-Ordinals are **stable**: deleting a dataset *tombstones* its slot (a liveness
-bit flips to false) rather than removing it, so no later dataset's ordinal
-shifts. The one operation that renumbers is [`compact`](write-path.md), which
-drops tombstones and closes the gaps.
+Ordinals never shift. Deleting a dataset does not renumber the others, because
+there is no operation that could — the footer is immutable. An ordinal you
+recorded a year ago still names the same dataset.
 
-```
-   delete ds1:
-   ordinal   0        1(dead)  2        3
-   dataset   ds0      —        ds2      ds3      ← ds2, ds3 keep ordinals 2, 3
+## Arrays
 
-   compact:
-   ordinal   0        1        2
-   dataset   ds0      ds2      ds3               ← renumbered, gaps closed
-```
+| Property | Meaning |
+|---|---|
+| `dtype` | Element type |
+| `shape` | Logical shape, one entry per axis |
+| `chunk_shape` | Storage granularity. Equal to `shape` means one chunk |
+| `dimension_names` | One per axis, in `shape` order |
+| `fill_value` | What a read returns for elements never written |
+
+### Chunking
+
+Chunk shape is what makes a partial read cheap: reading a region fetches only
+the chunks it overlaps. An array stored as one chunk is read whole or not at
+all.
+
+Declaring an array does not allocate anything. Write into whatever part of it
+you like, in any order and any number of slabs, aligned or not — partially
+covered chunks are handled for you. Regions never written cost no bytes and read
+back as the fill value.
+
+### Types
+
+Scalars: `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`, `Float32`, `Float64`,
+`String`, `Binary`, `TimestampNs`.
+Nested: `List<T>`, `FixedSizeList<T, n>`.
+
+Strings and lists are variable length: an offsets buffer plus concatenated
+values. `TimestampNs` is nanoseconds since the Unix epoch, stored as `i64`.
+
+Not every type is reachable from Python. `Bool` arrays are not supported by
+`array-format`; `Binary` and the nested types are not yet exposed in the
+bindings. All of them round-trip in the footer as *attribute* values.
+
+### No type reconciliation
+
+Two datasets may declare the same array name with unrelated types — `int32` in
+one, `string` in another — and both are stored as declared. There is no merged
+schema, no widening, and no mismatch policy.
+
+Atlas 0.14 had all three, because it co-located same-named arrays in one
+physical file and had to agree on a type. With one segment per dataset there is
+nothing to reconcile. A reader that wants a collection-wide view builds it from
+the per-dataset schemas, which are all in the footer.
 
 ## Attributes
 
-Two scopes, both key→value:
+Two scopes:
 
-- **Dataset-global** (`set_attribute`) — e.g. `platform_code`, `cruise_id`.
-  Stored on the dataset's entry in `_global/data.af`.
-- **Per-array** (`set_array_attribute`) — e.g. `units`, `valid_range`.
-  Stored on the array's entry in `<array>/data.af`.
+- **Dataset-level** — annotates the whole dataset. `title`, `month`, `source`.
+- **Per-array** — annotates one array. `units`, `long_name`.
 
-Values are scalars or lists (`Attr`): bool, ints, floats, string, binary, and
-list variants. The pruning index can range-prune on **scalar** attribute values
-(a per-dataset value becomes a point range `[v, v]`); list-valued attributes are
-tracked as present without a range.
+Both hold a typed value: any scalar type above, or a homogeneous list of one.
+Both preserve the order they were set in. Setting a key twice replaces the
+value.
 
-## The type system
+Values live in the footer, not in the segments, so reading them costs nothing
+beyond the open. See [format.md](format.md#attributes-live-here-not-in-the-segments).
 
-Atlas array dtypes (`DType`):
+### Timestamps are a real type
 
-```
-   UInt8/16/32/64   Int8/16/32/64   Float32/64
-   String           TimestampNs (nanoseconds since epoch)
-   List { child }
-```
+`Attr::TimestampNanoseconds` has its own wire tag. In 0.14 timestamps were
+stored as RFC 3339 strings and recovered by trying to parse every string back,
+which meant a string that looked like a date silently became a timestamp. That
+guess is gone: a string stays a string.
 
-The numpy/xarray mapping (in `atlas-python`) covers these plus
-`datetime64[ns]` → `TimestampNs` and `timedelta64` → `Int64` (+ a marker for
-round-trip). Object/bytes/unicode → `String`.
+## What a collection cannot do
 
-### Type widening across datasets
+Worth stating plainly, since each of these existed in 0.14:
 
-Datasets sharing an array name may disagree on exact dtype; Atlas computes a
-**merged type** for the collection:
+| Not available | Instead |
+|---|---|
+| Append a dataset to a finished collection | Rewrite it |
+| Modify an array | Rewrite the collection |
+| Add an array to an existing dataset | Rewrite the collection |
+| Reclaim space from a deleted dataset | Rewrite the collection |
+| Compact | Nothing to compact — there are no layers |
+| Flush | No durability boundary; the file exists or it does not |
 
-```
-   widen(Int32, Int64)      = Int64
-   widen(Int32, Float32)    = Float64   (int + float promotes to f64)
-   widen(UInt16, UInt32)    = UInt32
-   widen(String, TimestampNs) = String  (timestamps render as strings)
-   widen(List<Int8>, List<Int16>) = List<Int16>   (element-wise)
-```
-
-Incompatible combinations (e.g. a numeric vs. a string array under the same
-name) are **rejected at define time** under `TypeMismatchPolicy::Error`, or
-warned under `::Warn`. The merged schema is what `merged_schema()` and the
-pruning index's collection-wide summaries report.
+Deleting a dataset is the one post-write operation, and it only writes the mask.

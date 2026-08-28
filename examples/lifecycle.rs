@@ -35,7 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ds.define_array::<f64>("elevation", vec!["x".into()], vec![4], None, None)
             .await?;
         let elevation = Array1::from_vec(vec![10.0f64, 20.0, 30.0, 40.0]).into_dyn();
-        ds.write_array("elevation", vec![0], elevation.view()).await?;
+        ds.write_array("elevation", vec![0], elevation.view())
+            .await?;
 
         ds.set_attribute("region", Attr::String(name.to_string()));
         ds.set_array_attribute("grid", "units", Attr::String("celsius".into()))?;
@@ -76,8 +77,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // The first call that needs data opens the segment. This one reads a
     // single chunk, not the whole array.
-    let corner = north.read_array::<f32>("grid", vec![0, 0], vec![2, 2]).await?;
-    println!("  north/grid[0..2, 0..2] = {:?}\n", corner.as_slice().unwrap());
+    let corner = north
+        .read_array::<f32>("grid", vec![0, 0], vec![2, 2])
+        .await?;
+    println!(
+        "  north/grid[0..2, 0..2] = {:?}\n",
+        corner.as_slice().unwrap()
+    );
 
     // ── Delete ───────────────────────────────────────────────────────
 

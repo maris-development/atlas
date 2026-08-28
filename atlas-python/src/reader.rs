@@ -181,11 +181,7 @@ impl PyDatasetView {
     }
 
     /// The attributes of one array, in the order they were set.
-    fn array_attributes<'py>(
-        &self,
-        py: Python<'py>,
-        array: &str,
-    ) -> PyResult<Bound<'py, PyDict>> {
+    fn array_attributes<'py>(&self, py: Python<'py>, array: &str) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         for (k, v) in &self.inner.array_attributes(array) {
             dict.set_item(k, attr_to_py(py, v)?)?;

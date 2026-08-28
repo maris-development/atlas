@@ -55,9 +55,8 @@ pub(crate) fn log_chunk_event(
 #[pyo3(signature = (filter=None))]
 pub(crate) fn init_tracing(filter: Option<&str>) -> PyResult<()> {
     let env_filter = match filter {
-        Some(directive) => EnvFilter::try_new(directive).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("invalid filter: {e}"))
-        })?,
+        Some(directive) => EnvFilter::try_new(directive)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("invalid filter: {e}")))?,
         None => EnvFilter::try_from_env("ATLAS_LOG")
             .or_else(|_| EnvFilter::try_from_default_env())
             .unwrap_or_else(|_| EnvFilter::new("info")),

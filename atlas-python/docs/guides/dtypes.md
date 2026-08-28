@@ -3,8 +3,8 @@
 ## Array dtypes
 
 Pass these as the `dtype=` argument to
-[`DatasetView.define_array`](../reference/dataset-view.md). The numpy type
-on the right is what `write_array` / `read_array` expect and return.
+[`DatasetWriter.define_array`](../reference/dataset-writer.md). The numpy type
+on the right is what `write_array` expects.
 
 | atlas dtype | numpy dtype | Range / notes |
 |---|---|---|
@@ -52,10 +52,12 @@ ds.define_array("label", dtype="string", ..., fill_value="UNKNOWN")
   is allowed.
 - String arrays: Python `str`.
 
-Reading an **unwritten** cell returns the fill value. Any **written** cell
-equal to the fill value is counted as a null in
-[`array_stats`](stats.md) — this is how the null count works for
-`NaN`-filled float arrays.
+An unwritten cell reads back as the fill value and costs no bytes on disk.
+`array_fill_value` reports it:
+
+```python
+collection.dataset("jan").array_fill_value("temp")   # nan
+```
 
 When ingesting via [`add_xarray_dataset`](xarray.md#fill-values-and-missing-data)
 you don't pass these by hand — float arrays default to a `NaN` fill, datetimes
@@ -70,8 +72,6 @@ implicitly). The numpy round-trip is a 0-D ndarray:
 ```python
 ds.define_array("scale", dtype="float64", dims=[], shape=[])
 ds.write_array("scale", start=[], data=np.array(3.14, dtype=np.float64))
-
-scalar = ds.read_array("scale")     # -> np.ndarray, shape=(), dtype=float64
 ```
 
 0-D arrays are useful for things like NetCDF `TRAJECTORY` identifiers or
@@ -81,16 +81,17 @@ single-value metadata that's logically *array data*, not an attribute.
 
 | Type | Status |
 |---|---|
-| `bool` arrays | **Attribute-only** this release (limitation of the underlying `array-format` crate). |
-| `binary` (variable-length bytes) | Reserved; not exposed yet. |
-| `list[...]` (variable-length list of T) | Reserved; not exposed yet. |
-| `fixed_size_list[..., N]` | Reserved; not exposed yet. |
+| `bool` arrays | **Attribute-only** — the underlying `array-format` crate does not support them as array elements. |
+| `binary` (variable-length bytes) | Attribute-only; not exposed as an array type yet. |
+| `list[...]` | Attribute-only; not exposed as an array type yet. |
+| `fixed_size_list[..., N]` | Not exposed yet. |
 
-If you need a packed bool array today, use `uint8` and document the
-convention.
+All four work as [attribute](attributes.md) values. If you need a packed bool
+array today, use `uint8` and document the convention.
 
-## Compatibility with numpy operations
+## Reading values
 
-The numpy arrays that come back from `read_array` are owned buffers, not
-views into the atlas-managed memory. You can mutate / reshape / `astype`
-them freely; the next `read_array` call returns a fresh buffer.
+Not from Python — array data is read through the Rust API. The dtype table
+above still tells you what a Rust `read_array::<T>` will hand back:
+`"float32"` is `f32`, `"timestamp_nanoseconds"` is `TimestampNs`, `"string"`
+is `String`. See [Reading data](reading-data.md).

@@ -45,7 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let grid = ArrayD::from_shape_fn(IxDyn(&[LAT, LON]), |i| {
             (month as f32) + (i[0] as f32) * 0.1 + (i[1] as f32) * 0.01
         });
-        ds.write_array("temperature", vec![0, 0], grid.view()).await?;
+        ds.write_array("temperature", vec![0, 0], grid.view())
+            .await?;
 
         ds.define_array::<f32>(
             "precipitation",
@@ -61,7 +62,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
         ds.set_attribute("month", Attr::Int64(month as i64));
-        ds.set_attribute("title", Attr::String(format!("2024-{month:02} monthly mean")));
+        ds.set_attribute(
+            "title",
+            Attr::String(format!("2024-{month:02} monthly mean")),
+        );
         ds.set_array_attribute("temperature", "units", Attr::String("celsius".into()))?;
         ds.set_array_attribute("precipitation", "units", Attr::String("mm".into()))?;
         ds.finish().await?;
@@ -95,17 +99,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             TimestampNs(1_200_000_000_000_000_000),
         ])
         .into_dyn();
-        ds.write_array("installed", vec![0], installed.view()).await?;
+        ds.write_array("installed", vec![0], installed.view())
+            .await?;
         ds.finish().await?;
         println!("  wrote 'stations'");
     }
 
     w.finish().await?;
 
-    let size = store
-        .head(&prefix.clone().join("data.atlas"))
-        .await?
-        .size;
+    let size = store.head(&prefix.clone().join("data.atlas")).await?.size;
     println!("  {} bytes at {prefix}/data.atlas\n", size);
 
     // ── Read ─────────────────────────────────────────────────────────
@@ -133,16 +135,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let window = jan
         .read_array::<f32>("temperature", vec![10, 20], vec![2, 2])
         .await?;
-    println!("  jan/temperature[10..12, 20..22] = {:?}", window.as_slice().unwrap());
+    println!(
+        "  jan/temperature[10..12, 20..22] = {:?}",
+        window.as_slice().unwrap()
+    );
 
     // Unwritten regions come back as the fill value, with no stored bytes.
     let dry = jan
         .read_array::<f32>("precipitation", vec![20, 0], vec![1, 4])
         .await?;
-    println!("  jan/precipitation[20, 0..4] = {:?} (never written)", dry.as_slice().unwrap());
+    println!(
+        "  jan/precipitation[20, 0..4] = {:?} (never written)",
+        dry.as_slice().unwrap()
+    );
 
     let stations = atlas.dataset("stations")?;
-    let names = stations.read_array::<String>("name", vec![], vec![]).await?;
+    let names = stations
+        .read_array::<String>("name", vec![], vec![])
+        .await?;
     println!("  stations: {:?}", names.as_slice().unwrap());
 
     // ── Delete ───────────────────────────────────────────────────────

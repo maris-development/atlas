@@ -1,19 +1,18 @@
-# Dask streaming and lazy reads
+# Dask streaming
 
-Atlas integrates with dask at both ends of the pipeline:
+Dask-backed variables stream into a collection one block at a time, so peak
+memory is one block per variable rather than the whole array. This is what makes
+it possible to write a dataset far larger than RAM.
 
-- **Writes** — dask-backed `xr.Dataset` variables stream one block at a
-  time into atlas; peak memory ≈ one chunk per variable.
-- **Reads** — variables stored with `chunk_shape != shape` come back as
-  dask arrays, one task per on-disk chunk.
+This is a write-side integration only. Reading a collection back as a
+dask-backed `xr.Dataset` is not offered; see [Reading data](reading-data.md).
 
 ## Streaming writes
 
-If a variable's `.data` is a `dask.array.Array` (e.g. from
-`xr.open_dataset(path, chunks=...)` or `ds.chunk({...})`),
-`atlas.add_xarray_dataset` / `ds.atlas.write` iterates the dask chunk grid and
-calls `view.write_array(start=..., data=chunk)` once per chunk. The whole
-array is never materialised.
+If a variable's `.data` is a `dask.array.Array` — from
+`xr.open_dataset(path, chunks=...)` or `ds.chunk({...})` —
+`add_xarray_dataset` walks the dask chunk grid and issues one `write_array` per
+block. The array is never materialised whole.
 
 ```python
 import xarray as xr
@@ -21,80 +20,52 @@ import atlas
 
 ds = xr.open_dataset("big.nc", chunks={"time": 100, "lat": -1, "lon": -1})
 
-with atlas.Atlas.create("/tmp/store") as atlas:
-    atlas.add_xarray_dataset(ds, "big")     # streams chunk-by-chunk
+with atlas.AtlasWriter.create("/tmp/collection") as w:
+    w.add_xarray_dataset(ds, "big")     # streams block by block
 ```
 
-The dask chunk shape is also used as the atlas on-disk `chunk_shape`, so
-the layout maps 1:1 with no extra alignment cost. Override per-variable
-with `chunks={"var_name": [...]}`:
+Peak memory is roughly one dask block per variable plus dask's own graph
+overhead. For a 10 GB file chunked at 100 MB, that is 100 MB per variable, not
+10 GB.
+
+Blocks are prefetched on a background thread — batches of 8, two deep — so
+compression and the next block's computation overlap.
+
+## Chunk shape
+
+The dask chunking becomes the on-disk `chunk_shape`, one to one, with no
+realignment. Override per variable to decouple the write-time memory budget from
+the read-side layout:
 
 ```python
-atlas.add_xarray_dataset(ds, "big", chunks={"temperature": [50, 50, 24]})
+w.add_xarray_dataset(ds, "big", chunks={"temperature": [50, 50, 24]})
 ```
 
-This decouples write-time memory budget from read-side chunk layout.
-
-Peak memory ≈ one dask chunk per variable, plus dask's own task graph
-overhead. For a 10 GB chunked NetCDF with 100 MB chunks, you pay 100 MB of
-RAM per variable, not 10 GB.
-
-## Lazy reads
-
-`atlas.open_as_xarray_dataset(name)` returns each variable dask-backed when it was
-stored with non-trivial chunking (`chunk_shape != shape`). The dask
-`chunks` tuple mirrors the on-disk chunk grid one-to-one, and each
-on-disk chunk becomes a **single** dask task. Full-shape arrays and 0-D
-scalars come back eager as numpy.
+Chunk shape is the granularity at which a later reader fetches: a region read
+pulls only the chunks it overlaps. Choose it for how the data will be read, not
+for how it happened to be chunked in memory.
 
 ```python
-ds = xr.open_dataset("big.nc", chunks={"time": 100, "lat": -1, "lon": -1})
-with atlas.Atlas.create("/tmp/store") as atlas:
-    atlas.add_xarray_dataset(ds, "big")
-
-ds_back = atlas.Atlas.open("/tmp/store").open_as_xarray_dataset("big")
-type(ds_back["temperature"].data)        # -> dask.array.Array
-ds_back["temperature"][0:100].compute()  # reads exactly one chunk
+view = atlas.Atlas.open("/tmp/collection").dataset("big")
+view.array_meta("temperature")["chunk_shape"]
 ```
 
-`.compute()` materialises the requested slice. Use xarray's normal
-operators (`isel`, `sel`, `mean`, `map_blocks`, …) to operate lazily.
+## Non-dask variables
 
-## Scheduler restrictions
-
-The dask graph captures the `DatasetView` directly, so dask's default
-**threaded** scheduler works out of the box. Distributed and multiprocessing
-schedulers aren't supported in this release — the `DatasetView` isn't
-picklable across process boundaries.
+A numpy-backed variable is written as a single full-shape block, and stored as
+one chunk unless `chunks=` says otherwise. Eager and lazy variables mix freely
+in one dataset:
 
 ```python
-# Works
-ds_back["temperature"][0:100].compute(scheduler="threads")
-
-# Does NOT work — DatasetView is not picklable
-ds_back["temperature"][0:100].compute(scheduler="processes")
-ds_back["temperature"][0:100].compute(scheduler=Client(...))   # dask.distributed
+ds = xr.Dataset({
+    "eager": xr.DataArray(np.arange(8, dtype=np.int32), dims=["x"]),
+    "lazy":  xr.DataArray(dask_array.arange(8, dtype=np.int32, chunks=2), dims=["x"]),
+})
+# eager -> chunk_shape [8]; lazy -> chunk_shape [2]
 ```
 
-If you need cross-process parallelism, either:
+## Scheduler
 
-1. **Materialise first** — `.compute()` (on the threaded scheduler) and
-   hand off numpy arrays to your workers.
-2. **Use the bulk-read APIs** — `Atlas.read_array_across_stacked` and
-   `DatasetView.read_arrays` are PyO3 calls into Rust that return eager
-   numpy arrays, with parallelism handled internally by the tokio runtime.
-   See [Bulk reads](bulk-reads.md).
-
-## When chunking is worth it
-
-| Storage shape | Result |
-|---|---|
-| `chunk_shape == shape` (default) | Whole array stored as one block. Reads are eager numpy. Slice reads decompress the full array. |
-| `chunk_shape != shape` | One block per chunk. Reads come back as dask arrays. Slice reads decompress only the touching chunks. |
-
-For small per-dataset shapes (e.g. the `profile` benchmark case — `(50,
-168)` per variable) chunking adds more overhead than it saves; keep the
-default single-chunk layout. For large per-dataset shapes (e.g. the
-`gridded` case — `(100, 100, 48)`), chunking is what unlocks the
-decompression-only-what-you-touch behaviour. See
-[Benchmarks](../benchmarks.md) for the actual numbers.
+Writing uses dask only to compute blocks, on whatever scheduler is active.
+The default threaded scheduler is fine; the writes themselves happen in Rust
+with the GIL released.

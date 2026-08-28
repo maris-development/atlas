@@ -38,13 +38,8 @@ test = [
     "pytest",
     "netCDF4",
 ]
-bench = [
-    "zarr>=3",
-    "numcodecs",
-    "netCDF4",
-]
 # Optional — installs the `obstore` Python package so that `Atlas.open` /
-# `Atlas.create` can accept an obstore-constructed S3 / GCS / Azure /
+# `AtlasWriter.create` can accept an obstore-constructed S3 / GCS / Azure /
 # HTTP store handle. The path-based local-fs API works without this.
 cloud = [
     "obstore>=0.9",

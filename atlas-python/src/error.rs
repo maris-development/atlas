@@ -1,14 +1,14 @@
+use pyo3::exceptions::{PyFileExistsError, PyKeyError, PyOSError, PyRuntimeError, PyValueError};
 use pyo3::PyErr;
-use pyo3::exceptions::{
-    PyFileExistsError, PyKeyError, PyOSError, PyRuntimeError, PyValueError,
-};
 
 pub fn to_py_err(err: atlas::Error) -> PyErr {
     match err {
         atlas::Error::DatasetNotFound(name) => {
             PyKeyError::new_err(format!("dataset not found: {name}"))
         }
-        atlas::Error::ArrayNotFound(name) => PyKeyError::new_err(format!("array not found: {name}")),
+        atlas::Error::ArrayNotFound(name) => {
+            PyKeyError::new_err(format!("array not found: {name}"))
+        }
         atlas::Error::DatasetAlreadyExists(name) => {
             PyFileExistsError::new_err(format!("dataset already exists: {name}"))
         }

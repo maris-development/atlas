@@ -1,18 +1,19 @@
 # xarray integration
 
-`xarray` and `dask` are required dependencies, and importing `atlas`
-registers an accessor at `xr.Dataset.atlas`, so the integration is on
-without any extra setup.
+`xarray` and `dask` are required dependencies, and importing `atlas` registers
+an accessor at `xr.Dataset.atlas`, so the integration is on with no extra setup.
 
 ```python
 import atlas        # registers ds.atlas on import
 import xarray as xr
 ```
 
+This is the write path. Reading a collection back as an `xr.Dataset` is not
+offered — see [Reading data](reading-data.md) for why.
+
 ## Writing an `xr.Dataset`
 
-Atlas must exist first; you then append `xr.Dataset`s to it. There are
-two equivalent entry points:
+Two equivalent entry points:
 
 ```python
 import numpy as np, xarray as xr, atlas
@@ -28,141 +29,134 @@ ds = xr.Dataset(
     attrs={"month": 1, "station": "KNMI"},
 )
 
-with atlas.Atlas.create("/tmp/store") as atlas:
-    atlas.add_xarray_dataset(ds, "jan_2024")     # method on Atlas
-    ds.atlas.write(atlas, "feb_2024")        # accessor on xr.Dataset (same effect)
+with atlas.AtlasWriter.create("/tmp/collection") as w:
+    w.add_xarray_dataset(ds, "jan_2024")   # method on AtlasWriter
+    ds.atlas.write(w, "feb_2024")          # accessor on xr.Dataset, same effect
 ```
 
-`add_xarray_dataset` doesn't flush — N consecutive calls accumulate and one
-`atlas.flush()` (or the `with` block exit) persists everything. See
-[Bulk ingestion](#bulk-ingestion) below.
+## What lands where
 
-## Reading back
-
-```python
-atlas = atlas.Atlas.open("/tmp/store")
-ds_back = atlas.open_as_xarray_dataset("jan_2024")
-xr.testing.assert_identical(ds, ds_back)     # round-trip is bit-identical
-```
-
-Variables stored with `chunk_shape != shape` come back **dask-backed** (one
-dask task per on-disk chunk); full-shape and 0-D variables come back eager
-as numpy. See [Dask streaming and lazy reads](dask.md).
-
-## Storage conventions
-
-| `xr.Dataset` item | How it's stored in atlas |
+| xarray | atlas |
 |---|---|
-| Each `data_var` and each `coord` | A separate atlas array; `dims` map 1:1 onto atlas dimension names. |
-| `Dataset.attrs` | Atlas dataset attributes, plain keys. |
-| Per-variable `attrs` | Flattened as `{var}.{attr}` at the dataset attribute level. |
-| Per-variable `_FillValue` | Consumed by `define_array` as a typed fill value (**not** flattened as a regular attr). The source `Dataset.attrs` is not mutated. See [Fill values and missing data](#fill-values-and-missing-data). |
-| Coord vs data_var distinction | JSON list in the internal `_pyatlas_coords` attribute. |
-| Non-scalar attr values (list, ndarray, dict) | JSON-encoded with a `json:` string prefix. |
+| coordinate or data variable | an array of the same name |
+| `var.dims` | `dimension_names` |
+| `var.shape` | `shape` |
+| dask chunking | `chunk_shape`, unless `chunks=` overrides it |
+| `var.attrs` | per-array attributes |
+| `ds.attrs` | dataset-level attributes |
+| `_FillValue` | the array's fill value, not an attribute |
+| which variables were coords | the `_pyatlas_coords` marker |
 
-Reading back without the `_pyatlas_coords` marker falls back to a
-"1-D-array-named-after-its-dim-is-a-coord" heuristic, so atlas datasets
-written via the raw `DatasetView` API still load cleanly into xarray.
+Coordinates are written first, then data variables, so the on-disk order is
+predictable.
 
-## Supported variable dtypes
-
-| numpy dtype | atlas dtype |
-|---|---|
-| `int8`/`int16`/`int32`/`int64`, `uint*`, `float32`/`float64` | matching numeric |
-| `datetime64[ns]` | `timestamp_nanoseconds` (round-trips to `datetime64[ns]`) |
-| `object` (Python `str`/`bytes`), `\|S<n>`, `\|U<n>` | `string` (variable-length; reads return Python `str`) |
-
-0-D scalar variables (e.g. a NetCDF `TRAJECTORY` identifier) round-trip
-natively. See [Supported dtypes](dtypes.md) for the full list and the
-restrictions.
-
-## Bulk ingestion
-
-`add_xarray_dataset` never flushes by itself — N consecutive calls accumulate
-in memory and one flush at the end persists everything. One delta file is
-written per **array name** touched across the whole batch, not one per
-input file:
+Read it back with the collection-level accessors, which decode the conventions:
 
 ```python
-import glob, os
-import atlas, xarray as xr
+collection = atlas.Atlas.open("/tmp/collection")
 
-with atlas.Atlas.create("/tmp/store") as atlas:
-    for nc_path in sorted(glob.glob("*.nc")):
-        name = os.path.splitext(os.path.basename(nc_path))[0]
-        atlas.add_xarray_dataset(xr.open_dataset(nc_path), name)
-# Single flush on `with` exit.
+collection.coords("jan_2024")                           # ['lat', 'lon']
+collection.attributes("jan_2024")                       # {'month': 1, 'station': 'KNMI'}
+collection.array_attributes("jan_2024", "temperature")  # {'units': 'C', 'long_name': ...}
+collection.dataset("jan_2024").array_meta("temperature")
 ```
 
-If the NetCDF files are chunked (`xr.open_dataset(path, chunks=...)`), the
-dask chunks become the atlas on-disk chunks automatically — see
-[Dask streaming and lazy reads](dask.md).
+## dtypes
 
-## Overriding the on-disk chunk shape
+| numpy | atlas | note |
+|---|---|---|
+| int / uint widths, `float32`, `float64` | the same | straight through |
+| `datetime64[ns]` | `timestamp_nanoseconds` | only `[ns]`; convert others first |
+| `timedelta64[*]` | `int64` | normalized to ns, tagged `_pyatlas_timedelta` |
+| `object` / `S` / `U` | `string` | variable-length UTF-8 |
+| anything else | — | `NotImplementedError` |
+
+Atlas has no duration type, so a timedelta becomes int64 nanoseconds plus a
+marker attribute naming the unit. Surrogate-escaped strings — common from
+netCDF backends — are sanitised on the way in.
+
+See [Supported dtypes](dtypes.md).
+
+## Chunking
+
+Precedence, highest first:
+
+1. `chunks={"var": [d0, d1, ...]}` passed to `add_xarray_dataset`
+2. the variable's dask chunking, if it has one
+3. one full-shape chunk
 
 ```python
-atlas.add_xarray_dataset(ds, "jan_2024", chunks={"temperature": [4, 8]})
-ds.atlas.write(atlas, "feb_2024", chunks={"temperature": [4, 8]})
+w.add_xarray_dataset(ds, "jan", chunks={"temperature": [4, 8]})
 ```
 
-This is independent of dask's chunking — the dask chunks are still what
-gets streamed at write time, but the on-disk `chunk_shape` is whatever you
-pass. Pick this when you want a different read-side chunk layout from
-your write-side memory budget.
+Chunking is what makes a later partial read cheap. See [Dask](dask.md).
 
 ## Fill values and missing data
 
-When a NetCDF dataset is opened with `mask_and_scale=True` (xarray's default),
-missing cells become `NaN` (floats) or `NaT` (datetimes) and the original
-`_FillValue` is moved into `var.encoding`. So that atlas records those masked
-cells as **null** (counted in `null_count`, excluded from min/max stats, eligible
-for sparse storage), float and datetime arrays default to a `NaN` / `NaT` fill
-value on write:
+Reading a NetCDF file with `mask_and_scale=True` (xarray's default) leaves `NaN`
+and `NaT` where data is missing, and moves `_FillValue` into `var.encoding`.
+Atlas records those cells as never-written by defaulting each array to a
+sentinel:
+
+| dtype | default fill |
+|---|---|
+| float | `NaN` |
+| `datetime64[ns]` | `NaT` |
+| string | `""` |
+| integer | none |
+
+Override it:
 
 ```python
-atlas.add_xarray_dataset(ds, "jan_2024")   # float vars -> NaN fill, datetime vars -> NaT fill
+w.add_xarray_dataset(ds, "jan", fill_value=-999)                  # every numeric array
+w.add_xarray_dataset(ds, "jan", fill_value={"counts": -1})        # one variable
+w.add_xarray_dataset(ds, "jan", fill_value={"temp": None})        # opt out
 ```
 
-Resolution order for each variable's fill value (highest priority first):
+Missing **string** cells are the one lossy case: atlas cannot store a null
+string, so `None` and `NaN` are replaced with the fill and a `UserWarning` names
+the count.
 
-1. The explicit `fill_value` argument (below).
-2. The variable's CF `_FillValue` attribute, if present in `var.attrs`.
-3. Default: `NaN` for float arrays, `NaT` for `datetime64[ns]` arrays, `""` for
-   string arrays, and none for integer arrays (which have no missing sentinel —
-   give them one via `_FillValue` or the `fill_value` argument if needed).
+## Bulk ingestion
 
-### Missing strings
-
-A string can't hold `NaN`, so missing string cells (`None`/`NaN`, e.g. from
-masking) are **substituted on write** with the resolved string fill — the
-`fill_value` you pass (`fill_value={"s": "N/A"}`), else the variable's
-`_FillValue`, else `""` — and a warning is emitted naming the count. Because the
-same value is declared as the array's fill, those cells are recorded as **null**
-(counted in `null_count`, excluded from min/max), exactly like `NaN`/`NaT` cells.
-
-One caveat with the `""` default: a *genuinely* empty string is indistinguishable
-from a missing one, so it too counts as null. Pass an explicit `fill_value` (e.g.
-`"N/A"`) when your data uses `""` as a real value.
-
-Override with `fill_value` — a bare scalar (applies to numeric arrays) or a
-`{var: scalar}` dict (`None` disables the default for that variable):
+One collection from a directory of files:
 
 ```python
-atlas.add_xarray_dataset(ds, "jan_2024", fill_value={"temperature": -9999.0})
-ds.atlas.write(atlas, "feb_2024", fill_value={"temperature": None})  # no fill
+from pathlib import Path
+
+paths = sorted(Path("/data/nc").glob("*.nc"))
+
+with atlas.AtlasWriter.create("/data/collection") as w:
+    for p in paths:
+        w.add_xarray_dataset(xr.open_dataset(p), name=p.stem)
 ```
 
-A `NaN` fill is not re-emitted as a `_FillValue` attribute on read (it's
-self-describing in the float data); non-NaN fills round-trip as `_FillValue`.
+Nothing is readable until the `with` block exits, and an exception inside it
+abandons the whole collection. To skip bad files instead, catch per file:
 
-## Limitations
+```python
+with atlas.AtlasWriter.create("/data/collection") as w:
+    for p in paths:
+        try:
+            w.add_xarray_dataset(xr.open_dataset(p), name=p.stem)
+        except (NotImplementedError, TypeError) as e:
+            print(f"skipping {p.stem}: {e}")
+```
 
-- **No append-into-existing.** Each call to `add_xarray_dataset` /
-  `ds.atlas.write` creates a *new* atlas dataset. Append-style updates to
-  an existing dataset go through the raw `DatasetView` API.
-- **Threaded scheduler only for lazy reads.** The `DatasetView` captured
-  in the dask graph isn't picklable, so distributed / multiprocessing
-  schedulers don't work. Call `.compute()` before crossing a process
-  boundary, or use the [bulk-read APIs](bulk-reads.md) which return eager
-  numpy.
-- **No `bool` / `binary` / `list` arrays yet** (see [Supported dtypes](dtypes.md)).
+`add_xarray_dataset` is atomic per dataset: one that fails partway — an
+unsupported dtype after several good variables — never enters the collection,
+and the writer carries on.
+
+## Attributes that are not scalars
+
+xarray attrs are often nested dicts, ragged lists, or numpy arrays. Anything
+atlas cannot store natively is JSON-encoded behind a `json:` prefix and decoded
+again by `Atlas.attributes()`:
+
+```python
+ds.attrs = {"nested": {"a": 1, "b": [2, 3]}}
+# ...
+collection.attributes("jan")["nested"]     # {'a': 1, 'b': [2, 3]}
+```
+
+A value that cannot be JSON-serialised raises `TypeError`.

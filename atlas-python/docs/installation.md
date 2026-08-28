@@ -69,16 +69,6 @@ atlas = atlas.Atlas.open(store)
 See [Cloud storage (S3, GCS, Azure)](guides/cloud-storage.md) for the
 full guide.
 
-## Optional: benchmark dependencies
-
-The cross-backend benchmark harness pulls in `zarr` and `netCDF4`:
-
-```bash
-pip install -e "atlas-python[bench]"
-```
-
-See [Benchmarks](benchmarks.md) for how to run them.
-
 ## Tracing / structured logging
 
 `atlas.init_tracing()` enables tracing-subscriber-backed structured
@@ -89,6 +79,6 @@ directive to override the default:
 ```python
 import atlas
 atlas.init_tracing("debug")           # everything
-atlas.init_tracing("atlas_python=info")    # just atlas crate at info+
+atlas.init_tracing("atlas=info")      # just the atlas crate at info+
 atlas.init_tracing()                  # re-read ATLAS_LOG / RUST_LOG env vars
 ```

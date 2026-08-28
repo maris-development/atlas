@@ -1,67 +1,64 @@
-# Atlas — Architecture Documentation
+# Atlas architecture
 
-Atlas (**A**ggregated **T**ensor **L**arge **A**rray **S**tore) is a
-directory-based store for **thousands to millions of named datasets**, each a
-collection of N-dimensional arrays with attributes, backed by object storage
-(local filesystem, S3, …).
+Atlas keeps thousands of named datasets in **one immutable file**. This
+directory explains how, from the top down.
 
-This folder explains how the pieces fit together. Read the docs in order for a
-full picture, or jump to a topic.
+Read in this order:
 
-| # | Doc | What it covers |
-|---|-----|----------------|
-| 1 | [architecture.md](architecture.md) | The crates, the layers, and how a call flows top to bottom |
-| 2 | [storage-layout.md](storage-layout.md) | What's on disk: `atlas.json`, `<array>/data.af`, `_global` |
-| 3 | [data-model.md](data-model.md) | Datasets, arrays, array-name sharing, ordinals, attributes, dtypes |
-| 4 | [metadata.md](metadata.md) | `atlas.json` / `StoreMeta`: schema interning, the type index, tombstones |
-| 5 | [write-path.md](write-path.md) | create → write → flush → compact, buffering, and the durability boundary |
-| 6 | [pruning-index.md](pruning-index.md) | The flat statistics table, **built on demand** from the array files |
-| 7 | [python-xarray.md](python-xarray.md) | The `atlas-python` bindings and the xarray integration |
+| # | Document | What it covers |
+|---|---|---|
+| 1 | [architecture.md](architecture.md) | The layers, and who owns what |
+| 2 | [data-model.md](data-model.md) | Collections, datasets, arrays, attributes |
+| 3 | [format.md](format.md) | The on-disk format, byte for byte |
+| 4 | [write-path.md](write-path.md) | How a collection is built |
+| 5 | [read-path.md](read-path.md) | How one is read, and what it costs |
+| 6 | [python-xarray.md](python-xarray.md) | The Python bindings and the xarray mapping |
+| 7 | [migration.md](migration.md) | Moving a 0.14 store to 0.15 |
 
-## The 10,000-foot view
+## The one idea
 
-```
-        ┌───────────────────────────────────────────────────────────────┐
-        │  Consumers:  Rust API   •   Python (xarray)   •   CLI/notebooks │
-        └───────────────────────────────┬───────────────────────────────┘
-                                        │
-        ┌───────────────────────────────▼───────────────────────────────┐
-        │  atlas-rust  — the store                                        │
-        │                                                                 │
-        │   Atlas         one store: create/open, flush, compact,         │
-        │                 pruning_index (query stats across datasets)     │
-        │   DatasetView   one dataset: define/write/read arrays + attrs   │
-        │   StoreMeta     the schema + ordinals (atlas.json)              │
-        │   Pruning       a flat stats table, assembled on demand         │
-        └───────────────────────────────┬───────────────────────────────┘
-                                        │  typed columnar arrays + stats
-        ┌───────────────────────────────▼───────────────────────────────┐
-        │  array-format — one physical file per array name                │
-        │  chunked · compressed · delta layers · per-dataset statistics   │
-        └───────────────────────────────┬───────────────────────────────┘
-                                        │
-        ┌───────────────────────────────▼───────────────────────────────┐
-        │  object_store —  local FS  •  S3  •  GCS  •  Azure  •  memory    │
-        └───────────────────────────────────────────────────────────────┘
+A collection is a single write-once file. Every dataset occupies a contiguous
+byte range inside it, and a footer at the end records where each one lives
+along with its schema and attributes.
+
+```text
+my_collection/
+├── data.atlas      ATLS │ segment │ segment │ … │ footer │ trailer
+└── deleted.mask    optional: ordinals of deleted datasets
 ```
 
-## The one idea that makes Atlas different
+Two consequences follow from that, and they are most of what makes atlas
+worth using:
 
-**Datasets that share an array name are co-located in one physical file, keyed
-by dataset name.** A thousand sensors that each record `temperature` don't make
-a thousand files — they make **one** `temperature/data.af`, with a thousand
-entries inside. This is what lets Atlas scan a variable *across* datasets
-cheaply, and it's the backbone of the [pruning index](pruning-index.md).
+**Metadata is one read.** Opening a collection fetches the footer and nothing
+else. Listing datasets, inspecting schemas, and reading attributes are then
+free, whether the collection holds ten datasets or a million.
 
-```
-   1,000 datasets ── each declares "temperature" and "salinity" ──►
+**Data is fetched by the chunk.** A segment is a complete, self-describing
+`array-format` file. Reading a region of an array fetches only the chunks that
+region overlaps.
 
-   store/
-   ├── temperature/data.af   ← 1,000 entries (one per dataset)
-   └── salinity/data.af      ← 1,000 entries (one per dataset)
+## What immutability buys
 
-   NOT: store/ds0/…, store/ds1/…, …  (1,000 directories)
-```
+A collection cannot be modified after it is written. There is no append, no
+in-place update, and no compaction. To change a dataset you rewrite the whole
+collection.
 
-See [data-model.md](data-model.md) for why, and [pruning-index.md](pruning-index.md)
-for what it buys you.
+That is a real constraint, and it is the point. What it removes:
+
+- no delta layers to resolve on read
+- no tombstones interleaved with data
+- no ordinal that shifts under a concurrent reader
+- no durability boundary to reason about — the file either has a trailer or it
+  does not exist
+
+The one exception is deletion, which writes a small mask beside the container
+and never touches it. See [format.md](format.md#deletion-mask).
+
+## Where the code lives
+
+The **file format is entirely Rust**. `src/format/` defines the framing, the
+footer, and the deletion mask; nothing outside the `atlas-rust` crate can
+produce or parse a byte of a container. The Python package is a binding layer
+over that, plus the xarray conventions described in
+[python-xarray.md](python-xarray.md).

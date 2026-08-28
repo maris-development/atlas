@@ -76,19 +76,18 @@ nav:
     - vs Zarr / netCDF: vs-zarr-netcdf.md
     - Guides:
           - Datasets and arrays: guides/datasets-and-arrays.md
-          - Durability and flushing: guides/durability.md
-          - Codecs and metadata: guides/codecs-and-meta.md
+          - Immutability: guides/immutability.md
+          - Reading data: guides/reading-data.md
           - Attributes: guides/attributes.md
           - Supported dtypes: guides/dtypes.md
           - xarray integration: guides/xarray.md
-          - Dask streaming and lazy reads: guides/dask.md
-          - Bulk reads: guides/bulk-reads.md
-          - Stats and scans: guides/stats.md
-          - Shared physical arrays: guides/shared-arrays.md
+          - Dask streaming: guides/dask.md
+          - Codecs: guides/codecs.md
           - Cloud storage (S3, GCS, Azure): guides/cloud-storage.md
     - Examples: examples.md
-    - Benchmarks: benchmarks.md
     - API reference:
+          - AtlasWriter: reference/atlas-writer.md
+          - DatasetWriter: reference/dataset-writer.md
           - Atlas: reference/atlas.md
           - DatasetView: reference/dataset-view.md
           - xarray accessor: reference/xarray-accessor.md

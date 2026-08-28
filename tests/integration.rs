@@ -139,8 +139,7 @@ async fn build_bulky_fixture(path: &std::path::Path, datasets: usize, len: usize
         ds.define_array::<f64>("x", vec!["i".into()], vec![len], Some(vec![len / 4]), None)
             .await
             .unwrap();
-        let data =
-            Array1::from_shape_fn(len, |i| (d * len + i) as f64).into_dyn();
+        let data = Array1::from_shape_fn(len, |i| (d * len + i) as f64).into_dyn();
         ds.write_array("x", vec![0], data.view()).await.unwrap();
         ds.set_attribute("index", Attr::Int64(d as i64));
         ds.finish().await.unwrap();
@@ -253,7 +252,10 @@ async fn a_finished_collection_reopens_with_all_its_metadata() {
     build_fixture(tmp.path()).await;
 
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
-    assert_eq!(atlas.list_datasets(), vec!["jan_2024", "feb_2024", "stations"]);
+    assert_eq!(
+        atlas.list_datasets(),
+        vec!["jan_2024", "feb_2024", "stations"]
+    );
     assert_eq!(atlas.dataset_count(), 3);
     // Sorted union across datasets.
     assert_eq!(
@@ -304,7 +306,10 @@ async fn arrays_read_back_the_values_that_were_written() {
     assert_eq!(temp[[0, 0]], 0.0);
     assert_eq!(temp[[3, 7]], 31.0);
 
-    let counts = jan.read_array::<i64>("counts", vec![], vec![]).await.unwrap();
+    let counts = jan
+        .read_array::<i64>("counts", vec![], vec![])
+        .await
+        .unwrap();
     assert_eq!(counts.as_slice().unwrap(), &[10, 20, 30, 40]);
 
     let stations = atlas.dataset("stations").unwrap();
@@ -347,7 +352,10 @@ async fn an_array_that_was_never_written_reads_as_its_fill_value() {
 
     let feb = atlas.dataset("feb_2024").unwrap();
     // Declared, never written, and no explicit fill: zero for an integer.
-    let counts = feb.read_array::<i64>("counts", vec![], vec![]).await.unwrap();
+    let counts = feb
+        .read_array::<i64>("counts", vec![], vec![])
+        .await
+        .unwrap();
     assert_eq!(counts.shape(), &[4]);
     assert_eq!(counts.as_slice().unwrap(), &[0, 0, 0, 0]);
 }
@@ -374,7 +382,10 @@ async fn timestamps_and_date_shaped_strings_stay_distinct() {
             .await
             .unwrap();
         let mut ds = w.add_dataset("d").await.unwrap();
-        ds.set_attribute("when", Attr::TimestampNanoseconds(1_700_000_000_000_000_000));
+        ds.set_attribute(
+            "when",
+            Attr::TimestampNanoseconds(1_700_000_000_000_000_000),
+        );
         ds.set_attribute("looks_like", Attr::String("2023-11-14T22:13:20Z".into()));
         ds.finish().await.unwrap();
         w.finish().await.unwrap();
@@ -397,7 +408,9 @@ async fn timestamps_and_date_shaped_strings_stay_distinct() {
 async fn deleting_a_dataset_hides_it_here_and_after_a_reopen() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
-    let container_before = std::fs::metadata(tmp.path().join("data.atlas")).unwrap().len();
+    let container_before = std::fs::metadata(tmp.path().join("data.atlas"))
+        .unwrap()
+        .len();
 
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
     atlas.delete_dataset("feb_2024").await.unwrap();
@@ -414,10 +427,15 @@ async fn deleting_a_dataset_hides_it_here_and_after_a_reopen() {
     let reopened = Atlas::open_path(tmp.path()).await.unwrap();
     assert_eq!(reopened.list_datasets(), vec!["jan_2024", "stations"]);
     // The deleted dataset's arrays are gone from the union too.
-    assert_eq!(reopened.list_arrays(), vec!["counts", "name", "observed", "temperature"]);
+    assert_eq!(
+        reopened.list_arrays(),
+        vec!["counts", "name", "observed", "temperature"]
+    );
 
     // The container itself never changed.
-    let container_after = std::fs::metadata(tmp.path().join("data.atlas")).unwrap().len();
+    let container_after = std::fs::metadata(tmp.path().join("data.atlas"))
+        .unwrap()
+        .len();
     assert_eq!(container_before, container_after);
     assert!(tmp.path().join("deleted.mask").exists());
 }
@@ -516,14 +534,21 @@ async fn opening_reads_only_the_tail_of_the_container() {
     // Comfortably larger than the 64 KiB tail probe, so "read the tail" and
     // "read the file" are different outcomes.
     build_bulky_fixture(tmp.path(), 8, 4096).await;
-    let container_len = std::fs::metadata(tmp.path().join("data.atlas")).unwrap().len();
-    assert!(container_len > 256 * 1024, "fixture is too small to prove anything");
+    let container_len = std::fs::metadata(tmp.path().join("data.atlas"))
+        .unwrap()
+        .len();
+    assert!(
+        container_len > 256 * 1024,
+        "fixture is too small to prove anything"
+    );
 
     let inner: Arc<dyn ObjectStore> =
         Arc::new(object_store::local::LocalFileSystem::new_with_prefix(tmp.path()).unwrap());
     let counting = CountingStore::new(inner);
 
-    let atlas = Atlas::open(counting.clone(), OsPath::default()).await.unwrap();
+    let atlas = Atlas::open(counting.clone(), OsPath::default())
+        .await
+        .unwrap();
     // One tail read covering trailer and footer, plus a miss on the absent
     // mask.
     assert!(
@@ -546,7 +571,11 @@ async fn opening_reads_only_the_tail_of_the_container() {
     let _ = ds.array_meta("x");
     let _ = ds.attributes();
     let _ = ds.array_attributes("x");
-    assert_eq!(counting.gets(), 0, "metadata access should not touch the store");
+    assert_eq!(
+        counting.gets(),
+        0,
+        "metadata access should not touch the store"
+    );
 }
 
 #[tokio::test]
@@ -557,7 +586,9 @@ async fn reading_one_dataset_touches_only_its_own_segment() {
     let inner: Arc<dyn ObjectStore> =
         Arc::new(object_store::local::LocalFileSystem::new_with_prefix(tmp.path()).unwrap());
     let counting = CountingStore::new(inner);
-    let atlas = Atlas::open(counting.clone(), OsPath::default()).await.unwrap();
+    let atlas = Atlas::open(counting.clone(), OsPath::default())
+        .await
+        .unwrap();
 
     // Ranges the reader is allowed to touch: the tail, and jan's segment.
     let bare = Atlas::open_path(tmp.path()).await.unwrap();
@@ -566,7 +597,10 @@ async fn reading_one_dataset_touches_only_its_own_segment() {
 
     counting.reset();
     let ds = atlas.dataset("jan_2024").unwrap();
-    let counts = ds.read_array::<i64>("counts", vec![], vec![]).await.unwrap();
+    let counts = ds
+        .read_array::<i64>("counts", vec![], vec![])
+        .await
+        .unwrap();
     assert_eq!(counts.as_slice().unwrap(), &[10, 20, 30, 40]);
     let first = counting.gets();
     assert!(first > 0, "a data read must fetch something");
@@ -710,7 +744,11 @@ async fn datasets_staged_concurrently_land_intact() {
     for d in 0..4usize {
         let ds = atlas.dataset(&format!("ds{d}")).unwrap();
         let got = ds.read_array::<i32>("x", vec![], vec![]).await.unwrap();
-        assert_eq!(got[[0]], (d * 1000) as i32, "ds{d} got another dataset's data");
+        assert_eq!(
+            got[[0]],
+            (d * 1000) as i32,
+            "ds{d} got another dataset's data"
+        );
         assert_eq!(got[[255]], (d * 1000 + 255) as i32);
     }
     // Segments still tile the container without gaps or overlap.
@@ -816,7 +854,11 @@ async fn every_codec_produces_a_readable_collection() {
             .read_array::<f64>("x", vec![], vec![])
             .await
             .unwrap();
-        assert_eq!(got.as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0], "codec {codec:?}");
+        assert_eq!(
+            got.as_slice().unwrap(),
+            &[1.0, 2.0, 3.0, 4.0],
+            "codec {codec:?}"
+        );
     }
 }
 
@@ -858,9 +900,15 @@ async fn a_dataset_larger_than_one_block_round_trips() {
     let ds = atlas.dataset("big").unwrap();
     let got = ds.read_array::<f64>("x", vec![], vec![]).await.unwrap();
     assert_eq!(got[[0, 0]], 0.0);
-    assert_eq!(got[[rows - 1, cols - 1]], ((rows - 1) * cols + cols - 1) as f64);
+    assert_eq!(
+        got[[rows - 1, cols - 1]],
+        ((rows - 1) * cols + cols - 1) as f64
+    );
     // And a window from the middle, which must not fetch the whole array.
-    let window = ds.read_array::<f64>("x", vec![30, 100], vec![2, 2]).await.unwrap();
+    let window = ds
+        .read_array::<f64>("x", vec![30, 100], vec![2, 2])
+        .await
+        .unwrap();
     assert_eq!(window[[0, 0]], (30 * cols + 100) as f64);
 }
 
@@ -882,7 +930,9 @@ async fn many_slabs_into_one_array_assemble_correctly() {
             (6, vec![6, 7]),
         ] {
             let block = Array1::from_vec(values).into_dyn();
-            ds.write_array("x", vec![start], block.view()).await.unwrap();
+            ds.write_array("x", vec![start], block.view())
+                .await
+                .unwrap();
         }
         ds.finish().await.unwrap();
         w.finish().await.unwrap();
@@ -904,13 +954,9 @@ async fn a_collection_round_trips_on_an_in_memory_store_under_a_prefix() {
     let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
     let prefix = OsPath::from("collections/2024");
     {
-        let w = AtlasWriter::create(
-            Arc::clone(&store),
-            prefix.clone(),
-            WriterConfig::default(),
-        )
-        .await
-        .unwrap();
+        let w = AtlasWriter::create(Arc::clone(&store), prefix.clone(), WriterConfig::default())
+            .await
+            .unwrap();
         let mut ds = w.add_dataset("d").await.unwrap();
         ds.define_array::<f32>("x", vec!["i".into()], vec![3], None, None)
             .await
@@ -929,7 +975,9 @@ async fn a_collection_round_trips_on_an_in_memory_store_under_a_prefix() {
             .is_ok()
     );
 
-    let atlas = Atlas::open(Arc::clone(&store), prefix.clone()).await.unwrap();
+    let atlas = Atlas::open(Arc::clone(&store), prefix.clone())
+        .await
+        .unwrap();
     let got = atlas
         .dataset("d")
         .unwrap()
@@ -1093,7 +1141,10 @@ async fn a_segment_cut_out_of_the_container_opens_on_its_own() {
     )
     .await
     .unwrap();
-    let direct = file.read_array::<i64>("counts", vec![], vec![]).await.unwrap();
+    let direct = file
+        .read_array::<i64>("counts", vec![], vec![])
+        .await
+        .unwrap();
     assert_eq!(direct.as_slice().unwrap(), expected.as_slice().unwrap());
 }
 
@@ -1107,7 +1158,11 @@ async fn reading_an_array_at_the_wrong_type_is_refused() {
     let jan = atlas.dataset("jan_2024").unwrap();
 
     // temperature is f32.
-    assert!(jan.read_array::<f64>("temperature", vec![], vec![]).await.is_err());
+    assert!(
+        jan.read_array::<f64>("temperature", vec![], vec![])
+            .await
+            .is_err()
+    );
     assert!(matches!(
         jan.read_array::<f32>("missing", vec![], vec![]).await,
         Err(Error::ArrayNotFound(_))

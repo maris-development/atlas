@@ -1,89 +1,148 @@
-# 7. Python & xarray Integration
+# Python bindings and the xarray mapping
 
-`atlas-python` is a thin PyO3 layer over the Rust core plus an xarray
-integration. The split is deliberate:
+## The split
 
-```
-   atlas-python/python/atlas/
-   ├── store.py     Atlas facade — forwards primitives to the Rust core,
-   │                adds the high-level xarray convenience methods
-   └── xarray.py    pure-Python xarray ⇄ atlas conversion (no rebuild to change)
+The file format is Rust. `atlas-python` is a binding layer plus the xarray
+conventions — it holds no format knowledge and cannot produce or parse a byte
+of a container.
 
-   atlas-python/src/    the PyO3 bindings (Rust) exposing the core primitives
-```
+| Layer | Lives in | Does |
+|---|---|---|
+| `atlas._atlas` | `atlas-python/src/*.rs` | PyO3 classes, numpy ⇄ ndarray, Python ⇄ `Attr`, error mapping |
+| `atlas` | `atlas-python/python/atlas/` | The facade, xarray conversion, attribute encoding |
 
-> **The Rust core owns performance; Python owns ergonomics.** The per-chunk write
-> loop runs against the **core** `DatasetView` directly, so the xarray
-> convenience adds no per-chunk overhead. Adding a high-level method is a
-> pure-Python edit — no recompile.
-
-## Writing an xarray Dataset
+Four classes cross the boundary:
 
 ```python
-import atlas, xarray as xr
-
-with atlas.Atlas.create("my_store") as store:
-    for path in nc_paths:
-        ds = xr.open_dataset(path)
-        store.add_xarray_dataset(ds, name=path.stem)   # or: ds.atlas.write(store, name)
-    # store.close() (== flush) runs on __exit__ — the single durability boundary
+AtlasWriter   ──add_dataset()──▶  DatasetWriter    # building
+Atlas         ──dataset()──────▶  DatasetView      # reading metadata
 ```
 
-Each variable/coord becomes an atlas array; coords are recorded so the
-distinction round-trips; dataset attrs → global attributes; per-variable attrs →
-per-array attributes.
+## Writing is full, reading is metadata-only
 
-### dtype mapping
+Python builds collections. It does not read array data back — there is no
+`read_array` on `Atlas` or `DatasetView`, and no
+`open_as_xarray_dataset`. Use the Rust API for data.
 
-| numpy | atlas |
-|-------|-------|
-| int8/16/32/64, uint8/16/32/64, float32/64 | same |
-| `datetime64[ns]` | `TimestampNs` (viewed as int64) |
-| `timedelta64` (any unit) | `Int64` nanoseconds + a `_pyatlas_timedelta` marker, restored to a duration on read |
-| object / bytes / unicode | `String` |
+What Python does get from an open collection: dataset names, array names,
+dtypes, shapes, chunk shapes, dimension names, fill values, and all attributes.
+That is enough to serve a catalogue, and it costs one range read.
 
-Missing values map to typed null sentinels: `NaN` (float), `NaT`/`i64::MIN`
-(datetime & timedelta), `""` (string), so masked cells are recorded as null.
+## Arrays are numpy arrays
 
-### Atomic inserts
-
-`add_xarray_dataset` is transactional: if populating the dataset fails partway
-(e.g. an unsupported dtype), it rolls back the just-created dataset with
-`delete_dataset`, so a later `flush()`/`close()` can't persist a half-written
-record.
-
-### Chunking
-
-Large variables can be opened dask-chunked (`chunks="auto"`); atlas streams them
-chunk-by-chunk into the store instead of loading fully into memory, and the
-on-disk chunk grid mirrors the dask chunks. Full-shape variables come back eager
-as numpy on read; chunked ones come back dask-backed.
-
-## Reading back
+`write_array` takes a C-contiguous numpy `ndarray` whose dtype matches the
+declared one, and reads it zero-copy for every numeric type:
 
 ```python
-store = atlas.Atlas.open("my_store")
-ds  = store.open_as_xarray_dataset("jan")                    # one dataset
-big = store.open_as_many_xarray_dataset(["jan","feb",…],     # many, stacked
-                                        concat_dim="dataset")
+ds.define_array("temperature", dtype="float32", dims=["lat", "lon"], shape=[4, 8])
+ds.write_array("temperature", start=[0, 0], data=np.zeros((4, 8), np.float32))
 ```
 
-`open_as_many_xarray_dataset` uses the Rust `read_array_across` path: it reads
-each variable across all named datasets in one call (sharing a single read lock
-on the physical file), returning a pre-stacked `(N, *shape)` array — much faster
-than N per-dataset round trips.
+The exceptions are strings, which are extracted element by element into a
+`Vec<String>` (unavoidable — Python strings are not a contiguous buffer), and
+`datetime64[ns]`, which is passed as `arr.view(np.int64)`: a zero-copy
+reinterpretation, since numpy distinguishes the dtype kinds where atlas does
+not.
 
-## Bulk ingestion at scale
+## The xarray mapping
 
-For very large runs, the reference `examples`/`batch_to_atlas.py`-style pipeline
-should:
+`add_xarray_dataset(ds, name)` writes coordinates first, then data variables.
 
-- **close each `xr.Dataset` after ingest** — frees the source NetCDF file handle
-  (critical for the lazy `chunks="auto"` path, or you exhaust file descriptors);
-- **raise the OS open-file limit** where possible;
-- **normalize variable names to a shared schema** — the single most important
-  thing for scaling (see [data-model.md](data-model.md)); unique per-file names
-  create one physical array file per dataset, which is the failure mode the
-  layout is designed to avoid.
+| xarray | atlas |
+|---|---|
+| variable | array, named the same |
+| `var.dims` | `dimension_names` |
+| `var.shape` | `shape` |
+| dask chunking | `chunk_shape`, unless `chunks=` overrides |
+| `var.attrs` | per-array attributes |
+| `ds.attrs` | dataset-level attributes |
+| `_FillValue` | the array's fill value, not an attribute |
+| which vars were coords | the `_pyatlas_coords` marker attribute |
 
-See [write-path.md](write-path.md) for what `flush`/`close` actually do.
+### dtypes
+
+Signed and unsigned integer widths and `float32`/`float64` map straight through.
+Beyond that:
+
+| numpy | atlas | note |
+|---|---|---|
+| `datetime64[ns]` | `timestamp_nanoseconds` | only `[ns]` |
+| `timedelta64[*]` | `int64` | normalized to ns, tagged `_pyatlas_timedelta` |
+| `object` / `S` / `U` | `string` | variable length |
+| anything else | — | `NotImplementedError` |
+
+Atlas has no duration type, so a timedelta becomes int64 nanoseconds plus a
+marker attribute naming the unit — the same trick datetime uses, but recorded
+explicitly because the target type is not distinctive.
+
+### Fill values
+
+Reading a NetCDF file with `mask_and_scale=True` leaves `NaN` and `NaT` where
+data is missing, and moves `_FillValue` into `var.encoding`. Atlas records those
+cells as never-written by defaulting each array to a sentinel:
+
+| dtype | default fill |
+|---|---|
+| float | `NaN` |
+| datetime64 | `NaT` (`i64::MIN`) |
+| string | `""` |
+| integer | none |
+
+Override per variable with `fill_value={"var": scalar}`, all at once with a bare
+scalar, or opt out with `{"var": None}`.
+
+Missing string cells are the one lossy case: atlas cannot store a null string,
+so `None`/`NaN` are replaced with the fill and a warning names the count.
+
+### Streaming
+
+A dask-backed variable is written one block at a time — `_iter_blocks` walks the
+chunk grid, prefetching batches of 8 blocks two deep on a background thread — so
+peak memory is one block per variable rather than the whole array. A numpy-backed
+variable is written as a single full-shape block.
+
+### Conventions Rust does not know about
+
+Three things the Python layer writes as ordinary attributes:
+
+- `_pyatlas_coords` — a JSON list of which variables were coordinates
+- `_pyatlas_timedelta` — the unit marker described above
+- a `json:` prefix on any attribute value too complex to store natively
+  (nested dicts, ragged lists), JSON-encoded behind it
+
+A Rust reader sees these as plain string attributes; only Python interprets
+them. They are conventions layered on the format, not part of it —
+`tests/cross_fixture.rs` asserts exactly that by reading them as raw strings.
+
+`Atlas.coords()` and `Atlas.attributes()` decode them; `DatasetView.attributes()`
+returns what is stored.
+
+## Atomicity
+
+`add_xarray_dataset` builds a `DatasetWriter` and aborts it on any exception, so
+a dataset that fails partway — an unsupported dtype after several good variables
+— never enters the collection, and the writer carries on with the next one.
+
+The collection as a whole is atomic in the same way: use `AtlasWriter` as a
+context manager and an exception abandons the write entirely, leaving nothing at
+the target that opens as a collection.
+
+```python
+with atlas.AtlasWriter.create(path) as w:
+    for nc in paths:
+        w.add_xarray_dataset(xr.open_dataset(nc), name=nc.stem)
+# finish() runs on a clean exit; nothing is readable before it
+```
+
+## Errors
+
+| Rust | Python |
+|---|---|
+| `DatasetNotFound`, `ArrayNotFound` | `KeyError` |
+| `DatasetAlreadyExists`, `ArrayAlreadyExists` | `FileExistsError` |
+| `InvalidName`, `NotAnAtlasCollection`, `UnsupportedVersion`, `WriterFinished` | `ValueError` |
+| `Io` | `OSError` |
+| `CorruptCollection`, `CorruptMask`, `Internal`, `ObjectStore`, `ArrayFormat` | `RuntimeError` |
+
+Type and range failures on a fill value raise `TypeError` and `OverflowError`
+before any I/O happens.

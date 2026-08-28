@@ -1,218 +1,255 @@
 # Contributing to ATLAS
 
-Thanks for your interest. This document walks through what the project is, how the pieces fit, and how to set up a development environment.
+What the project is, how the pieces fit, and how to get a development
+environment working.
 
-For end-user docs see the top-level [README.md](README.md) (Rust crate) and [pyatlas/README.md](pyatlas/README.md) (Python bindings).
+For end-user docs see [README.md](README.md) (Rust) and
+[atlas-python/README.md](atlas-python/README.md) (Python).
 
 ---
 
 ## What this is
 
-**ATLAS** (Aggregated Tensor Large Array Store) is a directory-based store for many similarly-shaped, named, N-dimensional arrays. The design goal is fast cross-dataset variable scans — opening a single file to read variable `X` across N datasets, rather than N files.
+**ATLAS** (Aggregated Tensor Large Array Store) keeps thousands of named
+datasets in one immutable file. A dataset is a set of named N-dimensional
+arrays with attributes — the shape a NetCDF file or an `xarray.Dataset` has.
 
-The repository is a Cargo workspace containing two crates:
+The design goal is that *knowing what a collection holds* costs one request,
+however many datasets it holds.
+
+The repository is a Cargo workspace with two crates:
 
 | Crate | Purpose |
-| --- | --- |
-| `atlas` (workspace root) | Rust library implementing the store and on-disk format. |
-| `pyatlas` ([pyatlas/](pyatlas/)) | PyO3 Python bindings + xarray integration. |
+|---|---|
+| `atlas-rust` (workspace root, `[lib] name = "atlas"`) | The format, the writer, the reader |
+| `atlas-python` ([atlas-python/](atlas-python/)) | PyO3 bindings + xarray integration |
 
 ---
 
-## How it works (architecture)
+## Architecture
 
 ### On-disk layout
 
-```
-my_store/
-├── atlas.json               ← dataset registry + per-dataset attributes (JSON)
-├── temperature/
-│   └── data.af              ← ArrayFile: every dataset's "temperature" in one file
-├── pressure/
-│   └── data.af
-└── time/
-    └── data.af
+```text
+my_collection/
+├── data.atlas      ATLS │ segment │ segment │ … │ footer │ trailer
+└── deleted.mask    optional: ordinals of deleted datasets
 ```
 
-Every variable name owns one physical `.af` file shared by all datasets that define it (variable-first). The `.af` format comes from the [`array-format`](https://github.com/robinskil/array-format) crate — it's a columnar, chunk-oriented binary container with per-block compression and persisted statistics.
+One write-once file. Each dataset is a contiguous segment — itself a complete
+[`array-format`](https://github.com/robinskil/array-format) file — and the
+footer records every dataset's name, segment byte range, schema, and attributes.
 
-`atlas.json` is the catalog. It records:
-- Store version, store-level codec.
-- Each dataset: its array schemas (dtype, shape, chunk shape, dimension names) and typed attributes.
+Byte-level detail is in [docs/format.md](docs/format.md). The rest of
+[docs/](docs/) covers the layers, the data model, and the two paths.
 
-### Rust crate (`atlas`)
+**The format is Rust only.** `atlas-python` holds no format knowledge — grep it
+for `ATLS` and you get nothing. One implementation of the bytes, one place for a
+bug to live. Keep it that way.
 
-| File | Role |
-| --- | --- |
-| [src/lib.rs](src/lib.rs) | Public re-exports; `validate_name`; thread-safety asserts. |
-| [src/store.rs](src/store.rs) | The `Atlas` struct: open/create, dataset CRUD, path-based wrappers (`open_path` / `create_path`). |
-| [src/dataset.rs](src/dataset.rs) | The `DatasetView` struct: define/read/write arrays, attributes, flush, compact. Also the shared `ArrayFile` cache. |
-| [src/meta.rs](src/meta.rs) | `atlas.json` (de)serialisation. |
-| [src/schema.rs](src/schema.rs) | `ArraySchema` and the typed `Attr` enum. |
-| [src/config.rs](src/config.rs) | `StoreConfig`, `Codec` (`Zstd` / `Lz4` / `Uncompressed`). |
-| [src/error.rs](src/error.rs) | `Error` / `Result`. |
+### Rust crate
 
-The API is async (tokio). Each physical array file is guarded by a `tokio::sync::RwLock` — reads share, writes are exclusive. The cache map uses `parking_lot::RwLock` and is never held across an `await`.
+| Path | Role |
+|---|---|
+| [src/lib.rs](src/lib.rs) | Public re-exports, `validate_name`, thread-safety asserts |
+| [src/format/mod.rs](src/format/mod.rs) | Container framing: magic, header, trailer |
+| [src/format/footer.rs](src/format/footer.rs) | `CollectionFooter`, `DatasetEntry`, `AttrS`, the interner |
+| [src/format/mask.rs](src/format/mask.rs) | The deletion mask codec |
+| [src/format/segment_store.rs](src/format/segment_store.rs) | `ObjectStore` adapter over one byte range |
+| [src/writer/mod.rs](src/writer/mod.rs) | `AtlasWriter`, `DatasetWriter` |
+| [src/reader/mod.rs](src/reader/mod.rs) | `Atlas`, `DatasetView` |
+| [src/schema/](src/schema/) | `ArraySchema`, `DatasetSchema`, `Attr`, dtype serde |
+| [src/config.rs](src/config.rs) | `Codec`, `WriterConfig` |
+| [src/error.rs](src/error.rs) | `Error` / `Result` |
 
-### Python bindings (`pyatlas`)
+The API is async (tokio). Reads take no locks — the data is immutable. Writes
+share one `tokio::sync::Mutex` over the output stream, held only for a dataset's
+append.
+
+### Python bindings
 
 Mixed Python/Rust maturin layout:
 
-```
-pyatlas/
-├── Cargo.toml               ← cdylib named `_pyatlas`
-├── pyproject.toml           ← maturin build backend
-├── python/pyatlas/
-│   ├── __init__.py          ← re-exports + xarray accessor registration
-│   ├── __init__.pyi         ← type stubs (PEP 561)
-│   ├── py.typed             ← marker
-│   └── xarray.py            ← xarray integration + ds.atlas accessor
+```text
+atlas-python/
+├── Cargo.toml               cdylib named `_atlas`
+├── pyproject.toml           maturin build backend
+├── python/atlas/
+│   ├── __init__.py          re-exports + accessor registration
+│   ├── __init__.pyi         type stubs (PEP 561) — the authoritative contract
+│   ├── py.typed             marker
+│   ├── store.py             the Atlas / AtlasWriter facades
+│   └── xarray.py            xarray write path + ds.atlas accessor
 ├── src/
-│   ├── lib.rs               ← #[pymodule] _pyatlas wiring
-│   ├── runtime.rs           ← shared OnceLock<tokio::Runtime>
-│   ├── error.rs             ← atlas::Error → PyErr mapping
-│   ├── dtype.rs             ← dtype string parsing & DType ↔ name
-│   ├── attr.rs              ← Attr ↔ Python primitive conversion
-│   ├── store.rs             ← PyAtlas (wraps atlas::Atlas)
-│   └── dataset.rs           ← PyDatasetView (wraps atlas::DatasetView)
-├── tests/                   ← pytest tests
-└── examples/                ← runnable example scripts
+│   ├── lib.rs               #[pymodule] wiring
+│   ├── runtime.rs           shared OnceLock<tokio::Runtime>
+│   ├── error.rs             atlas::Error → PyErr
+│   ├── source.rs            AtlasSource (path | obstore handle), codec parsing
+│   ├── dtype.rs             dtype string ⇄ DType
+│   ├── attr.rs              Python value ⇄ Attr
+│   ├── writer.rs            PyAtlasWriter, PyDatasetWriter
+│   └── reader.rs            PyAtlas, PyDatasetView
+├── tests/                   pytest, plus make_fixture.py
+└── examples/                runnable scripts
 ```
 
-Key design points:
-- **Sync Python API, backed by an internal multi-threaded tokio runtime.** Each blocking call uses `py.allow_threads(|| RT.block_on(...))` so other Python threads can run.
-- **Type dispatch via macros.** Atlas's read/write methods are generic over dtype (`T: ArrayElement`); the bindings dispatch at runtime via a `numeric_dispatch!` macro in [pyatlas/src/dataset.rs](pyatlas/src/dataset.rs).
-- **`numpy`-zero-copy on the numeric path.** Python `np.ndarray` ↔ `ndarray::ArrayView` via the `numpy` crate.
-- **xarray integration** lives in [pyatlas/python/pyatlas/xarray.py](pyatlas/python/pyatlas/xarray.py). The `Atlas.add_xarray_dataset` Rust pymethod and the `ds.atlas.write` accessor both delegate to the `_write_xarray_new_dataset` helper. dask-backed variables are streamed one chunk at a time via `arr.blocks[idx].compute()`.
+Key points:
+
+- **Python writes; Rust reads array data.** Python builds collections and reads
+  their *metadata*. There is no `read_array` on the Python side. See
+  [docs/read-path.md](docs/read-path.md) for the reasoning.
+- **Sync Python API over a tokio runtime.** Each blocking call uses
+  `py.detach(|| runtime().block_on(...))` so other Python threads keep running.
+- **numpy zero-copy on the numeric path**, via the `numpy` crate. Strings are
+  the exception — they are extracted element by element.
+- **Type dispatch via macros.** `define_array` / `write_array` are generic over
+  `T: ArrayElement`; the bindings dispatch at runtime through
+  `numeric_dispatch!` in [atlas-python/src/writer.rs](atlas-python/src/writer.rs).
 
 ---
 
 ## Prerequisites
 
 | Tool | Why |
-| --- | --- |
-| **Rust** (stable, 1.85+ for edition 2024 in the atlas crate) | Build the workspace. |
-| **Python ≥ 3.9** | Run / build pyatlas (wheel targets `abi3-py39`). |
-| **`maturin`** | Build the Python extension. `pip install maturin`. |
-
-Install Rust via [rustup.rs](https://rustup.rs). Python 3.13 is what the maintainers develop against.
+|---|---|
+| **Rust** stable, 1.85+ (edition 2024) | Build the workspace |
+| **Python ≥ 3.10** | The wheel targets `abi3-py310` |
+| **`maturin`** | Build the extension. `pip install maturin` |
 
 ---
 
-## Building & testing the Rust crate
+## Rust: build and test
 
 ```bash
-cargo build                       # compile the atlas crate + workspace
-cargo test                        # run all tests (60 in atlas, plus pyatlas check-only)
-cargo test -p atlas               # just the atlas crate (50 unit + 10 integration)
-cargo run --example lifecycle     # try one of the Rust examples
+cargo build --workspace
+cargo test -p atlas-rust
 ```
 
-Examples live in [examples/](examples/) — `lifecycle.rs`, `sensor_fleet.rs`, `weather_store.rs`.
+`cargo test --workspace` does not work: `atlas-python` links
+`pyo3/extension-module`, so its test binary has no libpython to link against.
+Test the core crate; test the bindings through pytest.
+
+On macOS, `cargo build --workspace` also fails to link the cdylib for the same
+reason. Use `cargo check --workspace` for type checking and `maturin develop`
+for a real build.
+
+Examples:
+
+```bash
+cargo run --example lifecycle
+cargo run --example sensor_fleet
+cargo run --example weather_store
+```
 
 ---
 
-## Building & installing the Python library
-
-The Python extension links against libpython, so plain `cargo build -p pyatlas` will fail at link time. Use `maturin develop` (which sets the right flags and installs into the active virtualenv).
-
-### One-time setup
+## Python: build and test
 
 ```bash
-# From the repo root
-python3.13 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip maturin
+
+maturin develop --extras test --manifest-path atlas-python/Cargo.toml
+pytest atlas-python/tests -v
 ```
 
-`pyatlas` already lists `numpy`, `xarray`, and `dask` as required runtime deps, so `maturin develop` will pull them in automatically.
+The install is editable, so changes under `python/atlas/*.py` take effect at
+once. **Rust changes need `maturin develop` again** — otherwise pytest runs
+against the previously built binary.
 
-### Development build
+---
+
+## Test fixtures
+
+Two committed fixtures pin behaviour that a round-trip test would miss.
+
+**`tests/fixtures/golden_v1/`** — a v1 container, read back by
+[tests/golden.rs](tests/golden.rs) with every value asserted. If a change breaks
+compatibility with an existing container, this catches it. Regenerate only when
+you intend to break the format, which means bumping `FORMAT_VERSION`:
 
 ```bash
-cd pyatlas
-maturin develop --release         # builds, then editable-installs into the active venv
+cargo test --test golden -- --ignored regenerate
 ```
 
-After `maturin develop`, the package is editable: changes to `python/pyatlas/*.py` take effect immediately, but Rust changes require re-running `maturin develop`.
+The writer's output is deliberately not compared byte for byte — zstd makes no
+promise of stable output across versions. Only the framing this crate produces
+itself is asserted exactly.
 
-### Building a distributable wheel
+**`tests/fixtures/from_python/`** — written by
+[atlas-python/tests/make_fixture.py](atlas-python/tests/make_fixture.py) and read
+back by [tests/cross_fixture.rs](tests/cross_fixture.rs). This is the only thing
+verifying that the bytes the Python xarray layer writes are the bytes it meant,
+now that pytest cannot read arrays. Regenerate after changing the write path:
 
 ```bash
-cd pyatlas
-maturin build --release           # produces pyatlas-0.1.0-*.whl in target/wheels/
-```
-
-### Verification
-
-```bash
-.venv/bin/python -c "import pyatlas; print(pyatlas.__version__)"
+python atlas-python/tests/make_fixture.py
 ```
 
 ---
 
-## Running the Python tests
+## Common workflows
 
-```bash
-.venv/bin/pip install pytest      # one-time
-.venv/bin/pytest pyatlas/tests/ -v
-```
+### Adding an array dtype
 
-The two test files:
-- [pyatlas/tests/test_smoke.py](pyatlas/tests/test_smoke.py) — exercises the core pyatlas API.
-- [pyatlas/tests/test_xarray.py](pyatlas/tests/test_xarray.py) — xarray accessor + dask streaming.
+1. Confirm `array-format` supports it as an element type.
+2. Add the dispatch arm in `numeric_dispatch!`
+   ([atlas-python/src/writer.rs](atlas-python/src/writer.rs)), or an explicit
+   branch alongside String / TimestampNs.
+3. Extend [atlas-python/src/dtype.rs](atlas-python/src/dtype.rs) to parse the
+   name.
+4. Add it to `_NUMPY_TO_ATLAS` in
+   [atlas-python/python/atlas/xarray.py](atlas-python/python/atlas/xarray.py) if
+   it has a numpy equivalent.
+5. Test in both suites, and extend the cross fixture if it is worth pinning.
 
-After every Rust change re-run `maturin develop` first, otherwise pytest will run against the previously-built binary.
+### Exposing a new method to Python
 
----
-
-## Running the Python examples
-
-Self-contained scripts under [pyatlas/examples/](pyatlas/examples/) that write to temp directories:
-
-```bash
-.venv/bin/python pyatlas/examples/01_basics.py
-.venv/bin/python pyatlas/examples/02_xarray.py
-.venv/bin/python pyatlas/examples/03_dask_streaming.py
-```
-
----
-
-## Common dev workflows
-
-### Adding a new array dtype
-
-1. Add the variant to `atlas::DType` (depends on `array-format` supporting it).
-2. Add the dispatch arm in [pyatlas/src/dataset.rs](pyatlas/src/dataset.rs)'s `numeric_dispatch!` (or the explicit String/Binary branches).
-3. Extend [pyatlas/src/dtype.rs](pyatlas/src/dtype.rs) to parse the new dtype name.
-4. Update [pyatlas/python/pyatlas/xarray.py](pyatlas/python/pyatlas/xarray.py)'s `_NUMPY_TO_ATLAS` map if it has a numpy equivalent.
-5. Add a smoke test in [pyatlas/tests/test_smoke.py](pyatlas/tests/test_smoke.py).
-
-### Exposing a new `DatasetView` / `Atlas` method to Python
-
-1. Implement on the Rust side in [src/store.rs](src/store.rs) or [src/dataset.rs](src/dataset.rs).
-2. Wrap as a pymethod in [pyatlas/src/store.rs](pyatlas/src/store.rs) / [pyatlas/src/dataset.rs](pyatlas/src/dataset.rs). Use `py.allow_threads(|| runtime().block_on(...))` for async calls.
-3. Add the stub in [pyatlas/python/pyatlas/\_\_init\_\_.pyi](pyatlas/python/pyatlas/__init__.pyi).
-4. `cd pyatlas && maturin develop --release`.
-5. Write a test.
+1. Implement it on `Atlas` / `DatasetView` / the writers in `src/`.
+2. Wrap it in [atlas-python/src/reader.rs](atlas-python/src/reader.rs) or
+   [writer.rs](atlas-python/src/writer.rs), releasing the GIL with `py.detach`
+   for anything that blocks.
+3. Add the stub to
+   [atlas-python/python/atlas/\_\_init\_\_.pyi](atlas-python/python/atlas/__init__.pyi)
+   — that file is the contract, not `store.py`.
+4. `maturin develop`, then write a test.
 
 ### Touching the on-disk format
 
-Format changes are breaking — bump the `version` field in `StoreMeta` ([src/meta.rs](src/meta.rs)) and load both versions during `load_meta` until a migration path is clear.
+Any change to the framing, the footer struct, or the mask is **breaking** — the
+footer is compact MessagePack, so field order is part of the format.
+
+1. Bump `FORMAT_VERSION` in [src/format/mod.rs](src/format/mod.rs).
+2. Regenerate the golden fixture and update `tests/golden.rs` to the new
+   version.
+3. Update [docs/format.md](docs/format.md) — it is a specification, not a
+   summary.
+4. Note it in [docs/migration.md](docs/migration.md).
+
+There is no in-place migration path by design. Collections are rewritten.
 
 ---
 
 ## Code style
 
-- Rust: `cargo fmt` before committing; we follow the default rustfmt configuration. `cargo clippy --all-targets` should be clean.
-- Python: top-level scripts and tests use ordinary 4-space indentation and import ordering (stdlib, third-party, local). No formatter is enforced; match the existing style.
-- Comments and docstrings explain *why*, not what — the code already shows what.
+- **Rust**: `cargo fmt` before committing, default rustfmt.
+  `cargo clippy --all-targets` should be clean.
+- **Python**: 4-space indentation, imports grouped stdlib / third-party / local.
+  No formatter is enforced; match what is there.
+- **Comments explain why, not what.** The code already shows what. A comment
+  earns its place by recording a constraint, a trade-off, or a trap — the kind
+  of thing the next reader would otherwise have to rediscover.
+- **Tests are named as claims.** `an_end_past_the_segment_is_clamped_not_leaked`
+  says what it protects; `test_read_3` does not.
 
 ---
 
 ## Pull requests
 
 1. Branch from `main`.
-2. Make sure `cargo test`, `cargo clippy --all-targets`, and `pytest pyatlas/tests/` all pass.
-3. If you change the on-disk format, the public API, or any behaviour visible to end users, update the relevant README.
-4. Keep commits focused; squash trivial fixups before review.
+2. `cargo test -p atlas-rust`, `cargo clippy --all-targets`, and
+   `pytest atlas-python/tests` must pass.
+3. If you change the format, the public API, or user-visible behaviour, update
+   the relevant docs in the same PR.
+4. Keep commits focused; squash fixups before review.

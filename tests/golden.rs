@@ -145,11 +145,17 @@ async fn the_committed_v1_container_still_opens() {
     assert_eq!(window[[0, 0]], 8.0);
     assert_eq!(window[[1, 1]], 15.0);
 
-    let counts = grid.read_array::<i64>("counts", vec![], vec![]).await.unwrap();
+    let counts = grid
+        .read_array::<i64>("counts", vec![], vec![])
+        .await
+        .unwrap();
     assert_eq!(counts.as_slice().unwrap(), &[0, 0, 0, 0]);
 
     let labels = atlas.dataset("labels").unwrap();
-    let names = labels.read_array::<String>("name", vec![], vec![]).await.unwrap();
+    let names = labels
+        .read_array::<String>("name", vec![], vec![])
+        .await
+        .unwrap();
     assert_eq!(names[[0]], "alpha");
     assert_eq!(names[[2]], "gamma");
 }

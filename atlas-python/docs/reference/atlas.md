@@ -1,9 +1,10 @@
 # `Atlas`
 
-The store handle. Holds an in-memory `StoreMeta` and the per-array file
-caches. All mutations are buffered until [`flush()`](#atlas.Atlas.flush);
-see [Durability and flushing](../guides/durability.md) for the full
-contract.
+An open collection, read as metadata. Opening reads the container footer and
+the deletion mask; every method below is then answered from memory.
+
+There is no array read here. Array data is read through the Rust API — see
+[Reading data](../guides/reading-data.md).
 
 ::: atlas.Atlas
     options:

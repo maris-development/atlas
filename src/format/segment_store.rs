@@ -30,7 +30,8 @@ use futures::stream::BoxStream;
 use object_store::path::Path as OsPath;
 use object_store::{
     CopyOptions, GetOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartUpload,
-    ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult,
 };
 
 /// The name `array-format` sees for the segment at `ordinal`. It must end in
@@ -261,19 +262,24 @@ mod tests {
     #[tokio::test]
     async fn bounded_ranges_are_translated() {
         let s = fixture().await;
-        assert_eq!(read(&s, Some(GetRange::Bounded(0..4))).await, [50, 51, 52, 53]);
-        assert_eq!(read(&s, Some(GetRange::Bounded(96..100))).await, [
-            146, 147, 148, 149
-        ]);
+        assert_eq!(
+            read(&s, Some(GetRange::Bounded(0..4))).await,
+            [50, 51, 52, 53]
+        );
+        assert_eq!(
+            read(&s, Some(GetRange::Bounded(96..100))).await,
+            [146, 147, 148, 149]
+        );
     }
 
     #[tokio::test]
     async fn suffix_and_offset_ranges_are_translated() {
         let s = fixture().await;
         // The trailer read that opens every array-format file.
-        assert_eq!(read(&s, Some(GetRange::Suffix(4))).await, [
-            146, 147, 148, 149
-        ]);
+        assert_eq!(
+            read(&s, Some(GetRange::Suffix(4))).await,
+            [146, 147, 148, 149]
+        );
         assert_eq!(read(&s, Some(GetRange::Offset(98))).await, [148, 149]);
     }
 
@@ -313,7 +319,13 @@ mod tests {
         use futures::StreamExt;
         let s = fixture().await;
         assert_eq!(s.list(None).collect::<Vec<_>>().await.len(), 0);
-        assert!(s.list_with_delimiter(None).await.unwrap().objects.is_empty());
+        assert!(
+            s.list_with_delimiter(None)
+                .await
+                .unwrap()
+                .objects
+                .is_empty()
+        );
     }
 
     #[tokio::test]

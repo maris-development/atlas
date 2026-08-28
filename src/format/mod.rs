@@ -186,7 +186,7 @@ mod tests {
             Err(Error::NotAnAtlasCollection { .. })
         ));
         assert!(matches!(
-            check_header(&[b'A', b'T']),
+            check_header(b"AT"),
             Err(Error::NotAnAtlasCollection { .. })
         ));
     }

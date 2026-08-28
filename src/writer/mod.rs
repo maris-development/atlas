@@ -344,7 +344,10 @@ impl DatasetWriter {
         if !self.arrays.contains_key(array) {
             return Err(Error::ArrayNotFound(array.to_string()));
         }
-        self.staging().await?.write_array(array, start, data).await?;
+        self.staging()
+            .await?
+            .write_array(array, start, data)
+            .await?;
         Ok(())
     }
 

@@ -59,7 +59,10 @@ async fn the_python_written_fixture_holds_the_values_python_wrote() {
     assert_eq!(window[[1, 1]], 15.0);
 
     // int64 with no fill.
-    let counts = grid.read_array::<i64>("counts", vec![], vec![]).await.unwrap();
+    let counts = grid
+        .read_array::<i64>("counts", vec![], vec![])
+        .await
+        .unwrap();
     assert_eq!(counts.as_slice().unwrap(), &[10, 20, 30, 40]);
     assert_eq!(grid.array_fill_value("counts"), None);
 
@@ -163,6 +166,9 @@ async fn the_two_python_datasets_share_one_interned_schema() {
     assert_eq!(grid.attributes(), copy.attributes());
 
     // The copy's data is the same.
-    let copy_counts = copy.read_array::<i64>("counts", vec![], vec![]).await.unwrap();
+    let copy_counts = copy
+        .read_array::<i64>("counts", vec![], vec![])
+        .await
+        .unwrap();
     assert_eq!(copy_counts.as_slice().unwrap(), &[10, 20, 30, 40]);
 }

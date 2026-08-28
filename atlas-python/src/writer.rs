@@ -9,16 +9,16 @@ use atlas::{AtlasWriter, DType, DatasetWriter, FillValue, TimestampNs, WriterCon
 use ndarray::{ArrayD, IxDyn};
 use numpy::{PyArrayDyn, PyArrayMethods, PyUntypedArrayMethods};
 use object_store::path::Path as ObjStorePath;
+use pyo3::exceptions::{PyNotImplementedError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyFloat, PyInt, PyString};
-use pyo3::exceptions::{PyNotImplementedError, PyOverflowError, PyTypeError, PyValueError};
 use tokio::sync::Mutex;
 
 use crate::attr::py_to_attr;
 use crate::dtype::{dtype_to_string, parse_dtype};
 use crate::error::to_py_err;
 use crate::runtime::runtime;
-use crate::source::{AtlasSource, parse_codec};
+use crate::source::{parse_codec, AtlasSource};
 
 /// Expand a body for each numeric array dtype `array-format` supports.
 macro_rules! numeric_dispatch {
@@ -96,11 +96,7 @@ impl PyAtlasWriter {
             AtlasSource::ObjectStore(store) => {
                 let store = store.into_dyn();
                 py.detach(|| {
-                    runtime().block_on(AtlasWriter::create(
-                        store,
-                        ObjStorePath::from(""),
-                        config,
-                    ))
+                    runtime().block_on(AtlasWriter::create(store, ObjStorePath::from(""), config))
                 })
                 .map_err(to_py_err)?
             }

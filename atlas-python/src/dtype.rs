@@ -15,9 +15,8 @@ use pyo3::PyResult;
 ///   - `list[<inner>]`
 ///   - `fixed_size_list[<inner>,<n>]`
 pub fn parse_dtype(s: &str) -> PyResult<DType> {
-    parse_dtype_inner(s.trim()).ok_or_else(|| {
-        PyValueError::new_err(format!("unknown dtype string: {s:?}"))
-    })
+    parse_dtype_inner(s.trim())
+        .ok_or_else(|| PyValueError::new_err(format!("unknown dtype string: {s:?}")))
 }
 
 fn parse_dtype_inner(s: &str) -> Option<DType> {
@@ -25,13 +24,18 @@ fn parse_dtype_inner(s: &str) -> Option<DType> {
 
     if let Some(inner) = strip_prefix_suffix(&lower, "list[", "]") {
         let child = parse_dtype_inner(inner)?;
-        return Some(DType::List { child: Box::new(child) });
+        return Some(DType::List {
+            child: Box::new(child),
+        });
     }
     if let Some(inner) = strip_prefix_suffix(&lower, "fixed_size_list[", "]") {
         let (child_str, size_str) = inner.rsplit_once(',')?;
         let child = parse_dtype_inner(child_str.trim())?;
         let size: u32 = size_str.trim().parse().ok()?;
-        return Some(DType::FixedSizeList { child: Box::new(child), size });
+        return Some(DType::FixedSizeList {
+            child: Box::new(child),
+            size,
+        });
     }
 
     Some(match lower.as_str() {

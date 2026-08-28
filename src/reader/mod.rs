@@ -17,9 +17,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use array_format::{
-    ArrayElement, ArrayFile, DeltaCache, FileConfig, FillValue, NoCompression,
-};
+use array_format::{ArrayElement, ArrayFile, DeltaCache, FileConfig, FillValue, NoCompression};
 use indexmap::IndexMap;
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -106,9 +104,7 @@ impl Atlas {
             });
         }
         let probe = format::TAIL_PROBE_SIZE.min(size);
-        let tail = store
-            .get_range(data_path, (size - probe)..size)
-            .await?;
+        let tail = store.get_range(data_path, (size - probe)..size).await?;
         let footer_size = format::decode_trailer(&tail)?;
 
         // The trailer already carries the magic and the version, so it settles
@@ -245,8 +241,8 @@ impl Atlas {
             .ok_or_else(|| Error::DatasetNotFound(name.to_string()))?;
         // Re-read rather than trust the in-memory set, so a deletion made
         // elsewhere since this handle opened is preserved.
-        let mut deleted = Self::read_mask(&self.store, &self.prefix, self.footer.datasets.len())
-            .await?;
+        let mut deleted =
+            Self::read_mask(&self.store, &self.prefix, self.footer.datasets.len()).await?;
         deleted.insert(ordinal);
         let path = child(&self.prefix, MASK_FILE);
         self.store.put(&path, mask::encode(&deleted).into()).await?;

@@ -36,8 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for sensor in 0..N_SENSORS {
         let mut ds = w.add_dataset(&format!("sensor-{sensor:03}")).await?;
 
-        ds.define_array::<f64>("readings", vec!["hour".into()], vec![N_READINGS], None, None)
-            .await?;
+        ds.define_array::<f64>(
+            "readings",
+            vec!["hour".into()],
+            vec![N_READINGS],
+            None,
+            None,
+        )
+        .await?;
         // A rough daily curve, offset per sensor.
         let readings = Array1::from_shape_fn(N_READINGS, |h| {
             20.0 + (h as f64 / 4.0).sin() * 5.0 + sensor as f64 * 0.1
@@ -45,8 +51,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into_dyn();
         ds.write_array("readings", vec![0], readings.view()).await?;
 
-        ds.define_array::<i64>("timestamps", vec!["hour".into()], vec![N_READINGS], None, None)
-            .await?;
+        ds.define_array::<i64>(
+            "timestamps",
+            vec!["hour".into()],
+            vec![N_READINGS],
+            None,
+            None,
+        )
+        .await?;
         let base = 1_700_000_000i64;
         let timestamps =
             Array1::from_shape_fn(N_READINGS, |h| base + (h as i64) * 3_600).into_dyn();

@@ -482,7 +482,10 @@ mod tests {
 
     #[test]
     fn dangling_schema_index_is_corruption() {
-        let f = footer_with(vec![entry("a", 3, 8)], vec![schema(DType::Float32, vec![4])]);
+        let f = footer_with(
+            vec![entry("a", 3, 8)],
+            vec![schema(DType::Float32, vec![4])],
+        );
         let bytes = f.encode().unwrap();
         assert!(matches!(
             CollectionFooter::decode(&bytes),
