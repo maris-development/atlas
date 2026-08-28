@@ -23,7 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // LZ4 decompresses faster than Zstd at the cost of larger files, which
     // suits a read-heavy collection. Blocks record the codec, so a reader is
     // never told which was used.
-    let mut w = AtlasWriter::create_path(
+    let w = AtlasWriter::create_path(
         tmp.path(),
         WriterConfig {
             codec: Codec::Lz4,
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("=== Writing {N_SENSORS} sensors ===");
     for sensor in 0..N_SENSORS {
-        let mut ds = w.add_dataset(&format!("sensor-{sensor:03}"))?;
+        let mut ds = w.add_dataset(&format!("sensor-{sensor:03}")).await?;
 
         ds.define_array::<f64>("readings", vec!["hour".into()], vec![N_READINGS], None, None)
             .await?;

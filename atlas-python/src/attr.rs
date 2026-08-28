@@ -1,7 +1,7 @@
 use atlas::Attr;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyFloat, PyInt, PyList, PyString};
+use pyo3::types::{PyBool, PyBytes, PyFloat, PyInt, PyList, PyString, PyTuple};
 
 pub fn py_to_attr(value: &Bound<'_, PyAny>, dtype_hint: Option<&str>) -> PyResult<Attr> {
     if let Some(hint) = dtype_hint {
@@ -23,9 +23,89 @@ pub fn py_to_attr(value: &Bound<'_, PyAny>, dtype_hint: Option<&str>) -> PyResul
     if value.cast::<PyFloat>().is_ok() {
         return Ok(Attr::Float64(value.extract::<f64>()?));
     }
+    if let Some(list) = py_to_attr_list(value)? {
+        return Ok(list);
+    }
     Err(PyValueError::new_err(format!(
         "unsupported attribute type: {:?}",
         value.get_type().name()?
+    )))
+}
+
+/// A list or tuple of one scalar type, or `None` if `value` is neither.
+///
+/// The element type comes from the first item, and the whole sequence must
+/// match it: an atlas list attribute is homogeneous. An empty sequence has no
+/// type to infer, so it is stored as an empty string list.
+fn py_to_attr_list(value: &Bound<'_, PyAny>) -> PyResult<Option<Attr>> {
+    if value.cast::<PyList>().is_err() && value.cast::<PyTuple>().is_err() {
+        return Ok(None);
+    }
+    let items: Vec<Bound<'_, PyAny>> = value.try_iter()?.collect::<PyResult<_>>()?;
+    let Some(first) = items.first() else {
+        return Ok(Some(Attr::StringList(vec![])));
+    };
+
+    // PyBool before PyInt: `isinstance(True, int)` is True in Python.
+    let mismatch = |want: &str| -> PyErr {
+        PyValueError::new_err(format!(
+            "attribute list must hold one type; expected {want} throughout"
+        ))
+    };
+    if first.cast::<PyBool>().is_ok() {
+        let mut out = Vec::with_capacity(items.len());
+        for item in &items {
+            if item.cast::<PyBool>().is_err() {
+                return Err(mismatch("bool"));
+            }
+            out.push(item.extract::<bool>()?);
+        }
+        return Ok(Some(Attr::BoolList(out)));
+    }
+    if first.cast::<PyInt>().is_ok() {
+        let mut out = Vec::with_capacity(items.len());
+        for item in &items {
+            if item.cast::<PyInt>().is_err() || item.cast::<PyBool>().is_ok() {
+                return Err(mismatch("int"));
+            }
+            out.push(item.extract::<i64>()?);
+        }
+        return Ok(Some(Attr::Int64List(out)));
+    }
+    if first.cast::<PyFloat>().is_ok() {
+        let mut out = Vec::with_capacity(items.len());
+        for item in &items {
+            // An int among floats is a harmless widening, unlike the reverse.
+            if item.cast::<PyFloat>().is_err() && item.cast::<PyInt>().is_err() {
+                return Err(mismatch("float"));
+            }
+            out.push(item.extract::<f64>()?);
+        }
+        return Ok(Some(Attr::Float64List(out)));
+    }
+    if first.cast::<PyString>().is_ok() {
+        let mut out = Vec::with_capacity(items.len());
+        for item in &items {
+            if item.cast::<PyString>().is_err() {
+                return Err(mismatch("str"));
+            }
+            out.push(item.extract::<String>()?);
+        }
+        return Ok(Some(Attr::StringList(out)));
+    }
+    if first.cast::<PyBytes>().is_ok() {
+        let mut out = Vec::with_capacity(items.len());
+        for item in &items {
+            if item.cast::<PyBytes>().is_err() {
+                return Err(mismatch("bytes"));
+            }
+            out.push(item.extract::<Vec<u8>>()?);
+        }
+        return Ok(Some(Attr::BinaryList(out)));
+    }
+    Err(PyValueError::new_err(format!(
+        "unsupported attribute list element type: {:?}",
+        first.get_type().name()?
     )))
 }
 

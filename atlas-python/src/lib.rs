@@ -1,12 +1,13 @@
 use pyo3::prelude::*;
 
 mod attr;
-mod dataset;
 mod dtype;
 mod error;
 mod logging;
+mod reader;
 mod runtime;
-mod store;
+mod source;
+mod writer;
 
 #[pymodule]
 fn _atlas(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -14,8 +15,10 @@ fn _atlas(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // No-op if neither is set, or if a global subscriber already exists.
     logging::try_init_from_env();
 
-    m.add_class::<store::PyAtlas>()?;
-    m.add_class::<dataset::PyDatasetView>()?;
+    m.add_class::<writer::PyAtlasWriter>()?;
+    m.add_class::<writer::PyDatasetWriter>()?;
+    m.add_class::<reader::PyAtlas>()?;
+    m.add_class::<reader::PyDatasetView>()?;
     m.add_function(wrap_pyfunction!(logging::init_tracing, m)?)?;
     m.add_function(wrap_pyfunction!(logging::log_chunk_event, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;

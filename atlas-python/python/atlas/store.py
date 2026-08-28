@@ -1,20 +1,19 @@
-"""The public :class:`Atlas` — a thin Python facade over the Rust core.
+"""The public :class:`Atlas` and :class:`AtlasWriter` facades.
 
-The Rust extension (``atlas._atlas``) exposes the fast primitives: creating
-datasets, defining and reading arrays, attributes, the pruning index. Those all
-release the GIL and move data zero-copy, so they belong in Rust.
+The Rust extension (``atlas._atlas``) holds the primitives: building a
+collection, streaming numpy blocks into it, and reading its metadata back. Those
+release the GIL and move data without copying, so they belong in Rust.
 
-Everything *pythonic* — the xarray integration, and any future high-level
-convenience — lives here, in pure Python. This module owns the ergonomics; the
-Rust core owns the performance. Adding a new high-level method is a pure-Python
-edit with no rebuild, and the hot paths stay direct: the xarray writer loops over
-the **core** ``DatasetView`` (returned straight from the core), never through
-this wrapper.
+Everything pythonic — the xarray integration and the attribute decoding — lives
+here. Primitives are not re-declared; ``__getattr__`` forwards them to the core.
+The authoritative, typed surface is ``__init__.pyi``.
 
-Primitive methods aren't re-declared here; ``__getattr__`` forwards them to the
-core. The authoritative, typed surface is ``__init__.pyi``.
+Note what is missing on purpose: a collection opened from Python exposes its
+datasets, schemas, and attributes, but not its array data. Use the Rust API to
+read arrays.
 """
 
+import json as _json
 from typing import Any, Optional, Sequence, Union
 
 from . import _atlas
@@ -24,49 +23,38 @@ from . import xarray as _xarray
 _AtlasSource = Any
 
 
-class Atlas:
-    """A directory-based store for many named datasets of N-dimensional arrays.
+class AtlasWriter:
+    """Builds one collection, then finishes.
 
-    Construct with :meth:`create` / :meth:`open`; see ``atlas`` package docs for
-    the full API. Instances wrap the Rust core and forward primitive calls to
-    it, so `isinstance(store, Atlas)` holds and every method behaves as the stub
-    documents.
+    A collection is written once. There is no reopening it to add datasets:
+    rewrite it instead. Nothing at the target is readable until
+    :meth:`finish` runs, so use this as a context manager and let an exception
+    abandon the whole write.
+
+    >>> with AtlasWriter.create("/tmp/my_collection") as w:  # doctest: +SKIP
+    ...     w.add_xarray_dataset(ds, name="jan_2024")
     """
 
     __slots__ = ("_inner",)
 
-    def __init__(self, inner: "_atlas.Atlas") -> None:
-        # Bypass __setattr__/__getattr__ machinery for the one real field.
+    def __init__(self, inner: "_atlas.AtlasWriter") -> None:
         object.__setattr__(self, "_inner", inner)
 
-    # ── Construction ────────────────────────────────────────────────────
     @staticmethod
     def create(
         source: "_AtlasSource",
         codec: str = "zstd",
-        meta_format: str = "json",
-        meta_compression: str = "none",
-        on_type_mismatch: str = "warn",
-    ) -> "Atlas":
-        """Create a new store. See the type stub for argument details."""
-        return Atlas(
-            _atlas.Atlas.create(source, codec, meta_format, meta_compression, on_type_mismatch)
-        )
+        block_target_size: Optional[int] = None,
+    ) -> "AtlasWriter":
+        """Start a collection. See the type stub for argument details."""
+        return AtlasWriter(_atlas.AtlasWriter.create(source, codec, block_target_size))
 
-    @staticmethod
-    def open(source: "_AtlasSource", on_type_mismatch: str = "warn") -> "Atlas":
-        """Open an existing store."""
-        return Atlas(_atlas.Atlas.open(source, on_type_mismatch))
-
-    # ── Primitive delegation ────────────────────────────────────────────
     def __getattr__(self, name: str) -> Any:
-        # Reached only for names not defined on the facade — every primitive
-        # (create_dataset, read_array_across, pruning_index, flush, …) forwards
-        # straight to the Rust core. `_inner` is set in __init__ via
-        # object.__setattr__, so it never recurses here.
+        # Reached only for names not defined on the facade: add_dataset,
+        # finish, dataset_count, and so on forward straight to the core.
+        # `_inner` is set via object.__setattr__, so this never recurses.
         return getattr(self._inner, name)
 
-    # ── xarray integration (pure Python, calling the core directly) ─────
     def add_xarray_dataset(
         self,
         ds: "Any",
@@ -74,33 +62,88 @@ class Atlas:
         chunks: Optional[dict[str, Sequence[int]]] = None,
         fill_value: Union[Any, dict[str, Any], None] = None,
     ) -> None:
-        """Append an atlas dataset populated from an ``xarray.Dataset``.
+        """Write an ``xarray.Dataset`` into the collection as ``name``.
 
-        The per-variable write loop runs against the **core** ``DatasetView``,
-        so this convenience adds no per-chunk overhead.
+        Dask-backed variables stream block by block, so the dataset need not
+        fit in memory. The write is atomic: a failure partway leaves no trace
+        of the dataset in the collection.
         """
-        _xarray._write_xarray_new_dataset(self._inner, ds, name, chunks, fill_value)
+        _xarray._write_xarray_dataset(self._inner, ds, name, chunks, fill_value)
 
-    def open_as_xarray_dataset(self, name: str) -> "Any":
-        """Open ``name`` and return it as an ``xarray.Dataset`` (eager read)."""
-        return _xarray._view_to_xarray(self._inner.open_dataset(name))
-
-    def open_as_many_xarray_dataset(
-        self,
-        names: Sequence[str],
-        concat_dim: str = "dataset",
-        parallel: bool = True,
-    ) -> "Any":
-        """Open many datasets stacked along ``concat_dim`` as one ``xr.Dataset``."""
-        return _xarray._atlas_to_xarray_many(self._inner, list(names), concat_dim, parallel)
-
-    # ── Dunders (implicit calls bypass __getattr__, so define explicitly) ─
-    def __enter__(self) -> "Atlas":
+    # Dunders bypass __getattr__, so define them explicitly.
+    def __enter__(self) -> "AtlasWriter":
         return self
 
-    def __exit__(self, *_exc: object) -> bool:
-        self._inner.close()
-        return False
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        return bool(self._inner.__exit__(exc_type, exc_value, traceback))
+
+    def __repr__(self) -> str:
+        return repr(self._inner)
+
+
+class Atlas:
+    """An open collection, read as metadata.
+
+    Lists datasets, reports their schemas and attributes, and deletes datasets.
+    It does **not** read array data; :class:`AtlasWriter` writes collections and
+    the Rust API reads them.
+    """
+
+    __slots__ = ("_inner",)
+
+    def __init__(self, inner: "_atlas.Atlas") -> None:
+        object.__setattr__(self, "_inner", inner)
+
+    @staticmethod
+    def open(source: "_AtlasSource") -> "Atlas":
+        """Open an existing collection. Reads the footer and nothing else."""
+        return Atlas(_atlas.Atlas.open(source))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def dataset(self, name: str) -> "_atlas.DatasetView":
+        """A metadata view of one dataset. Raises ``KeyError`` if absent."""
+        return self._inner.dataset(name)
+
+    def coords(self, name: str) -> list[str]:
+        """Names of the variables that were xarray coordinates in ``name``.
+
+        Empty for a dataset that atlas did not write from xarray.
+        """
+        raw = self._inner.dataset(name).get_attribute(_xarray._COORDS_ATTR)
+        if raw is None:
+            return []
+        # The marker is a bare JSON list, not one of the `json:`-prefixed
+        # attribute values, so decode it directly.
+        return [str(n) for n in _json.loads(raw)]
+
+    def attributes(self, name: str) -> dict[str, Any]:
+        """Dataset-level attributes of ``name``, decoded back to Python values.
+
+        Complex values that were JSON-encoded on the way in are restored here;
+        the reserved ``_pyatlas_coords`` marker is omitted (see :meth:`coords`).
+        """
+        attrs = self._inner.dataset(name).attributes()
+        return {
+            key: _xarray._decode_attr_value(value)
+            for key, value in attrs.items()
+            if key != _xarray._COORDS_ATTR
+        }
+
+    def array_attributes(self, name: str, array: str) -> dict[str, Any]:
+        """Attributes of one array of ``name``, decoded back to Python values."""
+        attrs = self._inner.dataset(name).array_attributes(array)
+        return {key: _xarray._decode_attr_value(value) for key, value in attrs.items()}
+
+    def __contains__(self, name: str) -> bool:
+        return bool(self._inner.dataset_exists(name))
+
+    def __len__(self) -> int:
+        return int(self._inner.dataset_count())
+
+    def __iter__(self) -> Any:
+        return iter(self._inner.list_datasets())
 
     def __repr__(self) -> str:
         return repr(self._inner)

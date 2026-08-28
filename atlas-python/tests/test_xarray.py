@@ -1,4 +1,16 @@
-"""xarray integration tests."""
+"""xarray integration tests: the write path and the metadata it produces.
+
+Python writes collections and reads their metadata; it does not read array data
+back. So these tests assert on what a written collection *says* about itself —
+dtypes, shapes, chunk shapes, fill values, attributes — and on the write path's
+own behaviour: streaming, rollback, and the warnings it emits.
+
+Array values are verified where they belong, in the Rust suite:
+``tests/cross_fixture.rs`` reads a collection written by ``make_fixture.py`` in
+this directory and checks the bytes.
+"""
+
+import json
 import os
 import tempfile
 import warnings
@@ -15,7 +27,7 @@ _DATA_DIR = os.path.dirname(__file__)
 
 
 def _make_dataset() -> xr.Dataset:
-    """Build a sample xarray Dataset with coords, data_vars, and per-var attrs."""
+    """A sample Dataset with coords, data_vars, and per-variable attrs."""
     temp = xr.DataArray(
         np.arange(8 * 16, dtype=np.float32).reshape(8, 16),
         dims=["lat", "lon"],
@@ -36,313 +48,207 @@ def _make_dataset() -> xr.Dataset:
     )
 
 
-def test_basic_roundtrip():
+def _write(ds, name="ds", tmp=None, **kwargs):
+    """Write `ds` into a fresh collection and return the open collection."""
+    d = tmp or tempfile.mkdtemp()
+    with atlas.AtlasWriter.create(str(d)) as w:
+        w.add_xarray_dataset(ds, name, **kwargs)
+    return atlas.Atlas.open(str(d))
+
+
+# ── the shape of what gets written ───────────────────────────────────
+
+
+def test_a_dataset_writes_every_variable_and_coordinate():
     ds = _make_dataset()
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds_jan")
+    a = _write(ds)
 
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds_jan")
+    assert a.list_datasets() == ["ds"]
+    view = a.dataset("ds")
+    # Coordinates first, then data variables.
+    assert view.list_arrays() == ["lat", "lon", "temperature", "pressure"]
+    # And which of them were coordinates is recorded.
+    assert a.coords("ds") == ["lat", "lon"]
 
-    xr.testing.assert_identical(ds, ds_back)
+    temp = view.array_meta("temperature")
+    assert temp["dtype"] == "float32"
+    assert temp["shape"] == [8, 16]
+    assert temp["dimension_names"] == ["lat", "lon"]
 
 
-def test_per_var_attrs_roundtrip():
+def test_dataset_and_variable_attributes_land_at_the_right_level():
     ds = _make_dataset()
-    with tempfile.TemporaryDirectory() as d:
-        store = atlas.Atlas.create(d)
-        store.add_xarray_dataset(ds, "ds_jan")
-        store.flush()
+    a = _write(ds)
 
-        view = store.open_dataset("ds_jan")
-        # Global attrs live at the dataset level; per-variable attrs on the array.
-        global_attrs = view.attributes()
-        assert global_attrs["month"] == 1
-        assert global_attrs["station"] == "KNMI"
-        temp_attrs = view.array_attributes("temperature")
-        assert temp_attrs["units"] == "celsius"
-        assert temp_attrs["long_name"] == "surface temperature"
-        assert view.array_attributes("pressure")["units"] == "hPa"
+    # Dataset attrs, with the coordinate marker filtered out.
+    assert a.attributes("ds") == {"month": 1, "station": "KNMI"}
 
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds_jan")
-        assert ds_back["temperature"].attrs == {
-            "units": "celsius",
-            "long_name": "surface temperature",
-        }
-        assert ds_back["pressure"].attrs == {"units": "hPa"}
+    assert a.array_attributes("ds", "temperature") == {
+        "units": "celsius",
+        "long_name": "surface temperature",
+    }
+    assert a.array_attributes("ds", "pressure") == {"units": "hPa"}
+    assert a.array_attributes("ds", "lat") == {}
 
 
-def test_non_scalar_attr_value():
-    """List-valued attrs roundtrip via the `json:` prefix marker."""
-    da = xr.DataArray(
-        np.zeros((4,), dtype=np.int32),
-        dims=["x"],
-        attrs={"valid_range": [0, 100], "tags": ["draft", "v1"]},
+def test_non_scalar_attributes_survive_as_json():
+    ds = xr.Dataset(
+        {"v": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"])},
+        attrs={
+            "bounds": [1.0, 2.0, 3.0],
+            "nested": {"a": 1, "b": [2, 3]},
+            "plain": "text",
+        },
     )
-    ds = xr.Dataset(data_vars={"v": da}, attrs={"version_history": [1, 2, 3]})
+    got = _write(ds).attributes("ds")
+    assert got["bounds"] == [1.0, 2.0, 3.0]
+    assert got["nested"] == {"a": 1, "b": [2, 3]}
+    assert got["plain"] == "text"
 
+
+def test_a_dataset_with_no_coordinates_reports_none():
+    ds = xr.Dataset({"v": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"])})
+    a = _write(ds)
+    assert a.coords("ds") == []
+    assert a.dataset("ds").list_arrays() == ["v"]
+
+
+def test_many_datasets_go_into_one_collection():
     with tempfile.TemporaryDirectory() as d:
-        store = atlas.Atlas.create(d)
-        store.add_xarray_dataset(ds, "ds")
-        store.flush()
-
-        view = store.open_dataset("ds")
-        # Per-variable non-scalar attrs are json-encoded on the array; the
-        # dataset-level one is json-encoded at the global level.
-        assert view.array_attributes("v")["valid_range"].startswith("json:")
-        assert view.attributes()["version_history"].startswith("json:")
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds")
-        assert ds_back["v"].attrs["valid_range"] == [0, 100]
-        assert ds_back["v"].attrs["tags"] == ["draft", "v1"]
-        assert ds_back.attrs["version_history"] == [1, 2, 3]
+        with atlas.AtlasWriter.create(d) as w:
+            w.add_xarray_dataset(_make_dataset(), "jan")
+            w.add_xarray_dataset(_make_dataset(), "feb")
+        a = atlas.Atlas.open(d)
+        assert a.list_datasets() == ["jan", "feb"]
+        # Identical schemas, so the footer interns one copy. Observable here as
+        # identical metadata for both.
+        assert a.dataset("jan").list_arrays() == a.dataset("feb").list_arrays()
+        # One file, no per-array directories.
+        assert sorted(p for p in os.listdir(d)) == ["data.atlas"]
 
 
-def test_no_coords_marker_fallback():
-    """If a dataset was written without the _pyatlas_coords marker, a 1-D array
-    whose dim name matches its name is auto-promoted to a coordinate."""
-    with tempfile.TemporaryDirectory() as d:
-        store = atlas.Atlas.create(d)
-        view = store.create_dataset("ds")
-        view.define_array("lat", dtype="float32", dims=["lat"], shape=[4])
-        view.write_array("lat", start=[0], data=np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
-        view.define_array("temp", dtype="float32", dims=["lat", "lon"], shape=[4, 2])
-        view.write_array("temp", start=[0, 0], data=np.full((4, 2), 5.0, dtype=np.float32))
-        store.flush()
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds")
-
-    assert "lat" in ds_back.coords
-    assert "temp" in ds_back.data_vars
-    assert ds_back["temp"].dims == ("lat", "lon")
+# ── dtype mapping ────────────────────────────────────────────────────
 
 
-def test_netcdf_file_roundtrip():
-    """Open a real NetCDF file (datetime64[ns] + object-string + scalar vars), roundtrip."""
+def test_a_real_netcdf_file_maps_its_dtypes():
     ds = xr.open_dataset(os.path.join(_DATA_DIR, "GL_PR_BO_JLKU.nc"))
 
     assert ds["TIME"].dtype == np.dtype("datetime64[ns]")
     assert ds["DC_REFERENCE"].dtype.kind == "O"
-    assert ds["DIRECTION"].dtype.kind == "O"
     assert ds["TRAJECTORY"].ndim == 0  # |S5 scalar
 
-    with tempfile.TemporaryDirectory() as d:
-        store = atlas.Atlas.create(d)
-        store.add_xarray_dataset(ds, "obs")
-        store.flush()
-
-        view = store.open_dataset("obs")
-        assert view.array_meta("TIME")["dtype"] == "timestamp_nanoseconds"
-        assert view.array_meta("DC_REFERENCE")["dtype"] == "string"
-        assert view.array_meta("DIRECTION")["dtype"] == "string"
-        assert view.array_meta("TRAJECTORY")["dtype"] == "string"
-        assert view.array_meta("TRAJECTORY")["shape"] == []
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("obs")
-
-    assert ds_back["TIME"].dtype == np.dtype("datetime64[ns]")
-    np.testing.assert_array_equal(ds_back["TIME"].values, ds["TIME"].values)
-    np.testing.assert_array_equal(ds_back["LATITUDE"].values, ds["LATITUDE"].values)
-    np.testing.assert_array_equal(ds_back["FLU2"].values, ds["FLU2"].values)
-
-    def _decode_one(v):
-        return v.decode() if isinstance(v, bytes) else v
-
-    def _decode(arr):
-        return np.array([_decode_one(v) for v in arr], dtype=object)
-
-    np.testing.assert_array_equal(ds_back["DC_REFERENCE"].values, _decode(ds["DC_REFERENCE"].values))
-    np.testing.assert_array_equal(ds_back["DIRECTION"].values, _decode(ds["DIRECTION"].values))
-    assert _decode_one(ds_back["TRAJECTORY"].values.item()) == _decode_one(ds["TRAJECTORY"].values.item())
+    view = _write(ds, "obs").dataset("obs")
+    assert view.array_meta("TIME")["dtype"] == "timestamp_nanoseconds"
+    assert view.array_meta("DC_REFERENCE")["dtype"] == "string"
+    assert view.array_meta("DIRECTION")["dtype"] == "string"
+    assert view.array_meta("TRAJECTORY")["dtype"] == "string"
+    assert view.array_meta("TRAJECTORY")["shape"] == []
+    assert view.array_meta("LATITUDE")["dtype"] in ("float32", "float64")
 
 
-def test_atlas_xr_batched_roundtrip():
-    """Many add_xarray_dataset calls accumulate; one store.flush persists them all."""
-    ds_a = _make_dataset()
-    ds_b = _make_dataset()
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds_a, "jan")
-            store.add_xarray_dataset(ds_b, "feb")
-
-        atlas2 = atlas.Atlas.open(d)
-        assert sorted(atlas2.list_datasets()) == ["feb", "jan"]
-        xr.testing.assert_identical(ds_a, atlas2.open_as_xarray_dataset("jan"))
-        xr.testing.assert_identical(ds_b, atlas2.open_as_xarray_dataset("feb"))
-
-
-def test_open_as_many_xarray_dataset():
-    """Many identically-shaped datasets stack along `concat_dim` into one Dataset."""
-    ds_a = _make_dataset()
-    ds_b = _make_dataset()
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds_a, "jan")
-            store.add_xarray_dataset(ds_b, "feb")
-
-        atlas2 = atlas.Atlas.open(d)
-        combined = atlas2.open_as_many_xarray_dataset(["jan", "feb"], concat_dim="month_idx")
-
-        # Each data var gains a leading concat dimension of length N=2.
-        assert combined["temperature"].dims == ("month_idx", "lat", "lon")
-        assert combined["temperature"].shape == (2, 8, 16)
-        assert list(combined["month_idx"].values) == ["jan", "feb"]
-        # Coords/attrs come from the first dataset; data matches each source.
-        np.testing.assert_array_equal(
-            combined["temperature"].isel(month_idx=0).values, ds_a["temperature"].values
-        )
-        np.testing.assert_array_equal(
-            combined["temperature"].isel(month_idx=1).values, ds_b["temperature"].values
-        )
+@pytest.mark.parametrize(
+    "np_dtype,expected",
+    [
+        ("int8", "int8"),
+        ("int16", "int16"),
+        ("int32", "int32"),
+        ("int64", "int64"),
+        ("uint8", "uint8"),
+        ("uint32", "uint32"),
+        ("float32", "float32"),
+        ("float64", "float64"),
+        ("datetime64[ns]", "timestamp_nanoseconds"),
+    ],
+)
+def test_numpy_dtypes_map_one_to_one(np_dtype, expected):
+    data = np.zeros(4, dtype=np_dtype)
+    ds = xr.Dataset({"v": xr.DataArray(data, dims=["x"])})
+    assert _write(ds).dataset("ds").array_meta("v")["dtype"] == expected
 
 
-def test_atlas_xr_no_implicit_flush():
-    """add_xarray_dataset doesn't auto-persist — fresh Atlas sees nothing without store.flush."""
-    ds = _make_dataset()
-    with tempfile.TemporaryDirectory() as d:
-        store = atlas.Atlas.create(d)
-        store.add_xarray_dataset(ds, "jan")
-        # No flush.
-
-        atlas_peek = atlas.Atlas.open(d)
-        assert atlas_peek.list_datasets() == []
-
-
-def test_surrogate_attr_value_is_sanitized():
-    """NetCDF backends sometimes hand back attr strs containing lone surrogates
-    (bytes-mis-decoded-as-Latin-1 via surrogateescape). The write path recovers
-    the original UTF-8 instead of crashing on the pyo3 boundary."""
-    # '\udcc2\udcb5mol kg-1' is what xarray produces for the UTF-8 bytes
-    # b'\xc2\xb5mol kg-1' = 'µmol kg-1' when the backend mis-decodes them.
-    surr = "\udcc2\udcb5mol kg-1"
-    da = xr.DataArray(
-        np.zeros((2,), dtype=np.float32), dims=["x"], attrs={"units": surr}
+def test_an_unsupported_dtype_is_refused():
+    ds = xr.Dataset(
+        {"v": xr.DataArray(np.array([True, False, True, False]), dims=["x"])}
     )
-    ds = xr.Dataset(data_vars={"v": da})
-
     with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds")
-
-        assert ds_back["v"].attrs["units"] == "µmol kg-1"  # µmol kg-1
+        with atlas.AtlasWriter.create(d) as w:
+            with pytest.raises(NotImplementedError):
+                w.add_xarray_dataset(ds, "ds")
 
 
-def test_unsupported_dtype_raises():
-    da = xr.DataArray(np.array([True, False, True], dtype=np.bool_), dims=["x"])
-    ds = xr.Dataset(data_vars={"flag": da})
-    with tempfile.TemporaryDirectory() as d:
-        store = atlas.Atlas.create(d)
-        with pytest.raises(NotImplementedError):
-            store.add_xarray_dataset(ds, "ds")
+def test_timedelta_is_tagged_so_it_can_be_restored():
+    arr = np.array([1, 2, 3, 4], dtype="timedelta64[s]")
+    ds = xr.Dataset({"dt": xr.DataArray(arr, dims=["x"])})
+    view = _write(ds).dataset("ds")
+    # Stored as int64 nanoseconds, with a marker naming the unit.
+    assert view.array_meta("dt")["dtype"] == "int64"
+    assert view.get_array_attribute("dt", "_pyatlas_timedelta") == "ns"
 
 
-def test_accessor_write():
-    """`ds.atlas.write(atlas, name)` performs the same roundtrip as the method form."""
-    ds = _make_dataset()
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            ds.atlas.write(store, "ds_jan")  # accessor path
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds_jan")
-
-    xr.testing.assert_identical(ds, ds_back)
-
-
-def test_accessor_and_method_equivalent():
-    """The accessor and `store.add_xarray_dataset` produce identical Datasets on roundtrip."""
-    ds = _make_dataset()
-    with tempfile.TemporaryDirectory() as d_a, tempfile.TemporaryDirectory() as d_b:
-        with atlas.Atlas.create(d_a) as atlas_a:
-            atlas_a.add_xarray_dataset(ds, "ds_jan")
-        with atlas.Atlas.create(d_b) as atlas_b:
-            ds.atlas.write(atlas_b, "ds_jan")
-
-        ds_a = atlas.Atlas.open(d_a).open_as_xarray_dataset("ds_jan")
-        ds_b = atlas.Atlas.open(d_b).open_as_xarray_dataset("ds_jan")
-
-    xr.testing.assert_identical(ds_a, ds_b)
-
-
-# ----- dask-backed (streaming) tests --------------------------------------------------
-
-
-def test_dask_chunked_roundtrip():
-    """A dask-chunked variable's chunks are preserved as the atlas chunk_shape
-    and the read-back variable is dask-backed with matching chunks."""
-    data = dask_array.arange(8 * 16, dtype=np.float32, chunks=8 * 16).reshape(8, 16)  # type: ignore[arg-type]
-    da = xr.DataArray(data, dims=["y", "x"]).chunk({"y": 4, "x": 8})
-    ds = xr.Dataset(data_vars={"temp": da})
-
-    with tempfile.TemporaryDirectory() as d:
-        store = atlas.Atlas.create(d)
-        store.add_xarray_dataset(ds, "ds")
-        store.flush()
-
-        view = store.open_dataset("ds")
-        meta = view.array_meta("temp")
-        assert meta["chunk_shape"] == [4, 8]
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds")
-
-        assert isinstance(ds_back["temp"].data, dask_array.Array)
-        assert ds_back["temp"].data.chunks == ((4, 4), (8, 8))
-        # `assert_identical` computes both sides for dask-backed comparison.
-        xr.testing.assert_identical(ds, ds_back)
-
-
-def test_batched_iter_preserves_order_and_values():
-    """7 chunks of length 4 (chunk count not divisible by the default batch
-    size of 8) — exercises the cross-batch-boundary path of the prefetched
-    iterator. Values and chunk grid must round-trip byte-identical."""
-    expected = np.arange(7 * 4, dtype=np.int32)
-    da = xr.DataArray(
-        dask_array.from_array(expected, chunks=4),  # type: ignore[arg-type]
-        dims=["x"],
+def test_surrogate_escaped_attribute_text_is_sanitized():
+    # NetCDF backends surface byte attrs decoded with surrogateescape; those
+    # pseudo-codepoints are not representable as UTF-8.
+    ds = xr.Dataset(
+        {"v": xr.DataArray(np.arange(2, dtype=np.float32), dims=["x"])},
+        attrs={"note": "caf\udce9"},
     )
-    ds = xr.Dataset(data_vars={"v": da})
-
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds")
-        # Stored chunk grid preserved
-        assert ds_back["v"].data.chunks == ((4, 4, 4, 4, 4, 4, 4),)
-        np.testing.assert_array_equal(ds_back["v"].compute().data, expected)
+    got = _write(ds).attributes("ds")["note"]
+    assert isinstance(got, str)
+    got.encode("utf-8")  # must not raise
 
 
-def test_streaming_write_call_count(monkeypatch):
-    """`write_array` is called once per dask block (not once for the whole array)."""
-    from atlas._atlas import DatasetView
+# ── chunking ─────────────────────────────────────────────────────────
+
+
+def test_a_numpy_variable_becomes_a_single_chunk():
+    ds = xr.Dataset({"v": xr.DataArray(np.arange(16, dtype=np.int32), dims=["x"])})
+    meta = _write(ds).dataset("ds").array_meta("v")
+    assert meta["shape"] == [16]
+    assert meta["chunk_shape"] == [16]
+
+
+def test_a_dask_variable_keeps_its_chunking():
+    arr = dask_array.arange(16, dtype=np.int32, chunks=4)  # type: ignore[arg-type]
+    ds = xr.Dataset({"v": xr.DataArray(arr, dims=["x"])})
+    assert _write(ds).dataset("ds").array_meta("v")["chunk_shape"] == [4]
+
+
+def test_an_explicit_chunks_argument_wins():
+    ds = xr.Dataset(
+        {"v": xr.DataArray(np.arange(16, dtype=np.int32).reshape(4, 4), dims=["x", "y"])}
+    )
+    a = _write(ds, chunks={"v": [2, 2]})
+    assert a.dataset("ds").array_meta("v")["chunk_shape"] == [2, 2]
+
+
+def test_an_uneven_trailing_chunk_is_written():
+    # 10 elements in chunks of 4: 4, 4, 2.
+    arr = dask_array.arange(10, dtype=np.int32, chunks=4)  # type: ignore[arg-type]
+    ds = xr.Dataset({"v": xr.DataArray(arr, dims=["x"])})
+    meta = _write(ds).dataset("ds").array_meta("v")
+    assert meta["shape"] == [10]
+    assert meta["chunk_shape"] == [4]
+
+
+def test_dask_blocks_stream_one_write_per_block(monkeypatch):
+    """A dask-backed variable is written block by block, not materialized whole."""
+    from atlas._atlas import DatasetWriter
 
     arr = dask_array.arange(16, dtype=np.int32, chunks=4)  # type: ignore[arg-type]
-    da = xr.DataArray(arr, dims=["x"])
-    ds = xr.Dataset(data_vars={"v": da})
+    ds = xr.Dataset({"v": xr.DataArray(arr, dims=["x"])})
 
     calls: list[tuple[str, list[int], tuple[int, ...]]] = []
-    real_write_array = DatasetView.write_array
+    real_write_array = DatasetWriter.write_array
 
-    def counting_write_array(self, name, start, data):  # type: ignore[no-redef]
+    def counting_write_array(self, name, start, data):
         calls.append((name, list(start), tuple(data.shape)))
         return real_write_array(self, name, start, data)
 
-    monkeypatch.setattr(DatasetView, "write_array", counting_write_array)
+    monkeypatch.setattr(DatasetWriter, "write_array", counting_write_array)
 
     with tempfile.TemporaryDirectory() as d:
-        store = atlas.Atlas.create(d)
-        store.add_xarray_dataset(ds, "ds")
-        store.flush()
+        with atlas.AtlasWriter.create(d) as w:
+            w.add_xarray_dataset(ds, "ds")
 
     v_calls = [c for c in calls if c[0] == "v"]
     assert len(v_calls) == 4
@@ -350,232 +256,130 @@ def test_streaming_write_call_count(monkeypatch):
     assert all(c[2] == (4,) for c in v_calls)
 
 
-# ----- dask-backed (lazy) reads -------------------------------------------------------
-
-
-def test_lazy_read_does_not_compute_until_requested(monkeypatch):
-    """Building the dask graph is free; only `.compute()` (or slicing) reads chunks."""
-    from atlas._atlas import DatasetView
-
-    arr = dask_array.arange(16, dtype=np.int32, chunks=4)  # type: ignore[arg-type]
-    da = xr.DataArray(arr, dims=["x"])
-    ds = xr.Dataset(data_vars={"v": da})
-
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        atlas2 = atlas.Atlas.open(d)
-
-        read_calls: list[tuple[str, list[int], list[int]]] = []
-        real_read_array = DatasetView.read_array
-
-        def counting_read_array(self, name, start=None, shape=None):  # type: ignore[no-redef]
-            read_calls.append((name, list(start or []), list(shape or [])))
-            return real_read_array(self, name, start, shape)
-
-        monkeypatch.setattr(DatasetView, "read_array", counting_read_array)
-
-        ds_back = atlas2.open_as_xarray_dataset("ds")
-        assert isinstance(ds_back["v"].data, dask_array.Array)
-        # Building the graph reads zero chunks.
-        assert [c for c in read_calls if c[0] == "v"] == []
-
-        # Slicing one chunk's worth of data triggers exactly one read.
-        _ = ds_back["v"].data[0:4].compute()
-        v_reads = [c for c in read_calls if c[0] == "v"]
-        assert len(v_reads) == 1
-        assert v_reads[0] == ("v", [0], [4])
-
-        # Full compute reads all four chunks.
-        read_calls.clear()
-        result = ds_back["v"].compute()
-        v_reads = [c for c in read_calls if c[0] == "v"]
-        assert len(v_reads) == 4
-        np.testing.assert_array_equal(result.data, np.arange(16, dtype=np.int32))
-
-
-def test_mixed_eager_and_dask_in_one_dataset():
-    """Within one dataset, full-shape arrays are eager and chunked arrays are dask."""
-    full = dask_array.arange(8, dtype=np.float32, chunks=8)  # type: ignore[arg-type]
-    chunked = dask_array.arange(8, dtype=np.float32, chunks=8).reshape(8)  # type: ignore[arg-type]
+def test_eager_and_dask_variables_mix_in_one_dataset():
     ds = xr.Dataset(
-        data_vars={
-            "eager_var": xr.DataArray(full, dims=["x"]),
-            "lazy_var": xr.DataArray(chunked, dims=["x"]).chunk({"x": 4}),
+        {
+            "eager": xr.DataArray(np.arange(8, dtype=np.int32), dims=["x"]),
+            "lazy": xr.DataArray(
+                dask_array.arange(8, dtype=np.int32, chunks=2),  # type: ignore[arg-type]
+                dims=["x"],
+            ),
         }
     )
-
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds")
-
-    assert isinstance(ds_back["eager_var"].data, np.ndarray)
-    assert isinstance(ds_back["lazy_var"].data, dask_array.Array)
-    assert ds_back["lazy_var"].data.chunks == ((4, 4),)
+    view = _write(ds).dataset("ds")
+    assert view.array_meta("eager")["chunk_shape"] == [8]
+    assert view.array_meta("lazy")["chunk_shape"] == [2]
 
 
-def test_uneven_trailing_chunk():
-    """Non-divisible shape produces an uneven trailing chunk; values round-trip."""
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            view = store.create_dataset("ds")
-            view.define_array("v", dtype="int32", dims=["x"], shape=[10], chunk_shape=[4])
-            view.write_array("v", start=[0], data=np.arange(10, dtype=np.int32))
-
-        atlas2 = atlas.Atlas.open(d)
-        ds_back = atlas2.open_as_xarray_dataset("ds")
-
-        assert isinstance(ds_back["v"].data, dask_array.Array)
-        assert ds_back["v"].data.chunks == ((4, 4, 2),)
-        np.testing.assert_array_equal(
-            ds_back["v"].compute().data, np.arange(10, dtype=np.int32)
-        )
+# ── fill values ──────────────────────────────────────────────────────
 
 
-def test_fill_value_attribute_picked_up():
-    """`_FillValue` on a variable is consumed by define_array, not flattened.
-
-    The fill value's effect on unwritten cells is exercised in
-    `test_smoke.test_fill_value_unwritten_cells_int32`; this test just
-    confirms that the xarray accessor strips `_FillValue` from the flattened
-    attribute set so it isn't stored twice. Other per-var attrs survive.
-    """
+def test_a_fill_value_attribute_becomes_the_arrays_fill():
     arr = xr.DataArray(
-        np.array([10, 20, 30, 40], dtype=np.int32),
-        dims=["x"],
-        attrs={"_FillValue": np.int32(-1), "units": "K"},
+        np.arange(4, dtype=np.int32), dims=["x"], attrs={"_FillValue": np.int32(-999)}
     )
     ds = xr.Dataset({"v": arr})
-
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        atlas2 = atlas.Atlas.open(d)
-        view = atlas2.open_dataset("ds")
-        v_attrs = view.array_attributes("v")
-        assert "_FillValue" not in v_attrs, v_attrs
-        assert v_attrs.get("units") == "K"
-
-        # The user's source Dataset must not be mutated by the write.
-        assert ds["v"].attrs["_FillValue"] == np.int32(-1)
+    a = _write(ds)
+    assert a.dataset("ds").array_fill_value("v") == -999
+    # And it is not left behind as an ordinary attribute.
+    assert "_FillValue" not in a.array_attributes("ds", "v")
 
 
-def test_fill_value_attribute_dtype_mismatch_raises():
-    """A `_FillValue` whose Python type can't represent the dtype is rejected."""
+def test_float_arrays_default_to_a_nan_fill():
+    ds = xr.Dataset({"v": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"])})
+    assert np.isnan(_write(ds).dataset("ds").array_fill_value("v"))
+
+
+def test_datetime_arrays_default_to_a_nat_fill():
+    arr = np.array(["2024-01-01", "2024-01-02"], dtype="datetime64[ns]")
+    ds = xr.Dataset({"t": xr.DataArray(arr, dims=["x"])})
+    nat = int(np.datetime64("NaT", "ns").view("int64"))
+    assert _write(ds).dataset("ds").array_fill_value("t") == nat
+
+
+def test_integer_arrays_get_no_fill_by_default():
+    ds = xr.Dataset({"v": xr.DataArray(np.arange(4, dtype=np.int32), dims=["x"])})
+    assert _write(ds).dataset("ds").array_fill_value("v") is None
+
+
+def test_a_fill_value_dict_targets_named_variables():
+    ds = xr.Dataset(
+        {
+            "a": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"]),
+            "b": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"]),
+        }
+    )
+    view = _write(ds, fill_value={"a": -1.0}).dataset("ds")
+    assert view.array_fill_value("a") == -1.0
+    assert np.isnan(view.array_fill_value("b"))  # untouched default
+
+
+def test_a_scalar_fill_value_applies_to_every_numeric_array():
+    ds = xr.Dataset(
+        {
+            "a": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"]),
+            "b": xr.DataArray(np.arange(4, dtype=np.float64), dims=["x"]),
+        }
+    )
+    view = _write(ds, fill_value=-1.0).dataset("ds")
+    assert view.array_fill_value("a") == -1.0
+    assert view.array_fill_value("b") == -1.0
+
+
+def test_a_none_fill_value_disables_the_default():
+    ds = xr.Dataset({"v": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"])})
+    assert _write(ds, fill_value={"v": None}).dataset("ds").array_fill_value("v") is None
+
+
+def test_a_fill_value_of_the_wrong_type_is_refused():
     arr = xr.DataArray(
-        np.zeros(4, dtype=np.int32),
-        dims=["x"],
-        attrs={"_FillValue": 1.5},  # float for int32 → TypeError
+        np.arange(4, dtype=np.int32), dims=["x"], attrs={"_FillValue": "not a number"}
     )
     ds = xr.Dataset({"v": arr})
     with tempfile.TemporaryDirectory() as d:
-        with pytest.raises(TypeError):
-            with atlas.Atlas.create(d) as store:
-                store.add_xarray_dataset(ds, "ds")
+        with atlas.AtlasWriter.create(d) as w:
+            with pytest.raises((TypeError, ValueError)):
+                w.add_xarray_dataset(ds, "ds")
 
 
-def test_mask_and_scale_default_nan_fill():
-    """A masked float var (NaN cells, no `_FillValue` attr) defaults to a NaN
-    fill so the NaN cells are recorded as null — the mask_and_scale shape, where
-    xarray moves `_FillValue` into `.encoding` and the data carries NaN."""
-    data = np.array([1.0, np.nan, 3.0, np.nan], dtype=np.float64)
-    arr = xr.DataArray(data, dims=["x"])
-    arr.encoding["_FillValue"] = np.float64(-9999.0)  # as mask_and_scale leaves it
-    ds = xr.Dataset({"v": arr})
+# ── strings ──────────────────────────────────────────────────────────
 
+
+def test_missing_string_cells_are_filled_with_a_warning():
+    arr = xr.DataArray(np.array(["a", None, "c", np.nan], dtype=object), dims=["x"])
+    ds = xr.Dataset({"s": arr})
     with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        store2 = atlas.Atlas.open(d)
-        view = store2.open_dataset("ds")
-        fv = view.array_fill_value("v")
-        assert fv is not None and np.isnan(fv)
-        assert view.array_stats("v")["null_count"] == 2
-
-        # Round-trip preserves NaN and does not re-add a redundant `_FillValue`.
-        ds_back = store2.open_as_xarray_dataset("ds")
-        np.testing.assert_array_equal(np.asarray(ds_back["v"].data), data)
-        assert "_FillValue" not in ds_back["v"].attrs
+        with pytest.warns(UserWarning, match="2 missing string"):
+            with atlas.AtlasWriter.create(d) as w:
+                w.add_xarray_dataset(ds, "ds")
+        assert atlas.Atlas.open(d).dataset("ds").array_fill_value("s") == ""
 
 
-def test_datetime_nat_default_fill():
-    """A datetime var with NaT cells defaults to a NaT fill so they're recorded
-    as null — the datetime parallel to the float/NaN default."""
-    times = np.array(
-        ["2024-01-01", "NaT", "2024-01-03", "NaT"], dtype="datetime64[ns]"
-    )
-    arr = xr.DataArray(times, dims=["t"])
-    ds = xr.Dataset({"time_obs": arr})
-
+def test_a_provided_string_fill_is_used():
+    arr = xr.DataArray(np.array(["a", None], dtype=object), dims=["x"])
+    ds = xr.Dataset({"s": arr})
     with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        store2 = atlas.Atlas.open(d)
-        view = store2.open_dataset("ds")
-        assert view.array_meta("time_obs")["dtype"] == "timestamp_nanoseconds"
-        assert view.array_stats("time_obs")["null_count"] == 2
-
-        # Round-trips back to datetime64[ns] (NaT preserved) with no spurious
-        # `_FillValue` attribute.
-        ds_back = store2.open_as_xarray_dataset("ds")
-        assert ds_back["time_obs"].dtype == np.dtype("datetime64[ns]")
-        np.testing.assert_array_equal(ds_back["time_obs"].values, times)
-        assert "_FillValue" not in ds_back["time_obs"].attrs
+        with pytest.warns(UserWarning):
+            with atlas.AtlasWriter.create(d) as w:
+                w.add_xarray_dataset(ds, "ds", fill_value={"s": "n/a"})
+        assert atlas.Atlas.open(d).dataset("ds").array_fill_value("s") == "n/a"
 
 
-def test_timedelta_roundtrip():
-    """timedelta64 has no native atlas type; it's stored as int64 ns + a marker
-    attribute and restored to a duration dtype on read."""
-    deltas = (
-        np.array([1, 2, 3, 4], dtype="timedelta64[s]").astype("timedelta64[ns]")
-    )
-    arr = xr.DataArray(deltas, dims=["t"], attrs={"long_name": "sampling gap"})
-    ds = xr.Dataset({"gap": arr})
-
+def test_complete_string_arrays_warn_about_nothing():
+    arr = xr.DataArray(np.array(["a", "b"], dtype=object), dims=["x"])
+    ds = xr.Dataset({"s": arr})
     with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        store2 = atlas.Atlas.open(d)
-        # Stored as int64 under the hood.
-        assert store2.open_dataset("ds").array_meta("gap")["dtype"] == "int64"
-
-        ds_back = store2.open_as_xarray_dataset("ds")
-        assert ds_back["gap"].dtype == np.dtype("timedelta64[ns]")
-        np.testing.assert_array_equal(ds_back["gap"].values, deltas)
-        # The internal marker never surfaces as a user-visible attribute.
-        assert "_pyatlas_timedelta" not in ds_back["gap"].attrs
-        assert ds_back["gap"].attrs == {"long_name": "sampling gap"}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            with atlas.AtlasWriter.create(d) as w:
+                w.add_xarray_dataset(ds, "ds")
 
 
-def test_timedelta_nat_default_fill():
-    """A timedelta var with NaT cells defaults to a NaT fill (recorded as null),
-    round-tripping with no spurious `_FillValue`."""
-    deltas = np.array([10, "NaT", 30, "NaT"], dtype="timedelta64[ns]")
-    ds = xr.Dataset({"gap": xr.DataArray(deltas, dims=["t"])})
-
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds")
-
-        store2 = atlas.Atlas.open(d)
-        assert store2.open_dataset("ds").array_stats("gap")["null_count"] == 2
-        ds_back = store2.open_as_xarray_dataset("ds")
-        assert ds_back["gap"].dtype == np.dtype("timedelta64[ns]")
-        np.testing.assert_array_equal(ds_back["gap"].values, deltas)
-        assert "_FillValue" not in ds_back["gap"].attrs
+# ── failure handling ─────────────────────────────────────────────────
 
 
-def test_failed_insert_rolls_back_dataset():
-    """An insert that fails partway (unsupported dtype after a valid var) must
-    not leave a half-written dataset that a later flush would persist."""
+def test_a_failed_write_leaves_no_trace_of_the_dataset():
+    """An unsupported dtype after a valid variable must not half-write."""
     ds = xr.Dataset(
         {
             "ok": xr.DataArray(np.arange(4, dtype=np.float32), dims=["x"]),
@@ -583,104 +387,60 @@ def test_failed_insert_rolls_back_dataset():
         }
     )
     with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
+        with atlas.AtlasWriter.create(d) as w:
             with pytest.raises(NotImplementedError):
-                store.add_xarray_dataset(ds, "ds")
-            # Rolled back: the name is gone from the in-memory store, so the
-            # __exit__ flush persists nothing for it.
-            assert "ds" not in store.list_datasets()
+                w.add_xarray_dataset(ds, "broken")
+            # The collection carries on; the failed dataset simply never lands.
+            w.add_xarray_dataset(_make_dataset(), "good")
 
-        # And nothing was persisted to disk either.
-        assert "ds" not in atlas.Atlas.open(d).list_datasets()
+        assert atlas.Atlas.open(d).list_datasets() == ["good"]
 
 
-def test_missing_strings_filled_with_warning():
-    """A string var with None/NaN cells is written after substituting the string
-    fill (default ""), and a warning is emitted naming the count."""
-    arr = xr.DataArray(np.array(["a", None, "c", np.nan], dtype=object), dims=["x"])
-    ds = xr.Dataset({"s": arr})
+# ── the accessor ─────────────────────────────────────────────────────
 
+
+def test_the_accessor_writes_like_the_method():
+    ds = _make_dataset()
     with tempfile.TemporaryDirectory() as d:
-        with pytest.warns(UserWarning, match="missing string"):
-            with atlas.Atlas.create(d) as store:
-                store.add_xarray_dataset(ds, "ds")
+        with atlas.AtlasWriter.create(d) as w:
+            ds.atlas.write(w, "via_accessor")
+            w.add_xarray_dataset(ds, "via_method")
 
-        view = atlas.Atlas.open(d).open_dataset("ds")
-        back = list(view.read_array("s"))
-        assert back == ["a", "", "c", ""]
-        # The default "" fill is declared, so the substituted cells are tracked
-        # as null and excluded from min/max.
-        assert view.array_stats("s")["null_count"] == 2
-        # A default "" fill is not re-emitted as a _FillValue attr on read.
-        ds_back = atlas.Atlas.open(d).open_as_xarray_dataset("ds")
-        assert "_FillValue" not in ds_back["s"].attrs
-
-
-def test_missing_strings_use_provided_fill():
-    """An explicit string fill is used for missing cells instead of ""."""
-    arr = xr.DataArray(np.array(["a", None, "c"], dtype=object), dims=["x"])
-    ds = xr.Dataset({"s": arr})
-
-    with tempfile.TemporaryDirectory() as d:
-        with pytest.warns(UserWarning, match="missing string"):
-            with atlas.Atlas.create(d) as store:
-                store.add_xarray_dataset(ds, "ds", fill_value={"s": "N/A"})
-
-        view = atlas.Atlas.open(d).open_dataset("ds")
-        assert list(view.read_array("s")) == ["a", "N/A", "c"]
+        a = atlas.Atlas.open(d)
+        one = a.dataset("via_accessor")
+        two = a.dataset("via_method")
+        assert one.list_arrays() == two.list_arrays()
+        assert a.attributes("via_accessor") == a.attributes("via_method")
+        for name in one.list_arrays():
+            a_meta, b_meta = one.array_meta(name), two.array_meta(name)
+            # NaN never equals itself, so compare the fill on its own terms.
+            a_fill, b_fill = a_meta.pop("fill_value"), b_meta.pop("fill_value")
+            assert a_meta == b_meta, name
+            assert a_fill == b_fill or (
+                isinstance(a_fill, float)
+                and isinstance(b_fill, float)
+                and np.isnan(a_fill)
+                and np.isnan(b_fill)
+            ), name
 
 
-def test_complete_strings_no_warning():
-    """A string var with no missing cells writes without warning or substitution."""
-    arr = xr.DataArray(np.array(["a", "b", "c"], dtype=object), dims=["x"])
-    ds = xr.Dataset({"s": arr})
-
-    with tempfile.TemporaryDirectory() as d:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")  # any warning fails the test
-            with atlas.Atlas.create(d) as store:
-                store.add_xarray_dataset(ds, "ds")
-
-        view = atlas.Atlas.open(d).open_dataset("ds")
-        assert list(view.read_array("s")) == ["a", "b", "c"]
+# ── the read path is gone ────────────────────────────────────────────
 
 
-def test_fill_value_kwarg_dict_overrides():
-    """`fill_value={var: scalar}` overrides the per-array fill."""
-    arr = xr.DataArray(np.array([10, 20, 30, 40], dtype=np.int32), dims=["x"])
-    ds = xr.Dataset({"v": arr})
-
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds", fill_value={"v": -1})
-
-        view = atlas.Atlas.open(d).open_dataset("ds")
-        assert view.array_fill_value("v") == -1
+def test_reading_arrays_back_is_not_offered():
+    ds = _make_dataset()
+    a = _write(ds)
+    for method in ("open_as_xarray_dataset", "open_as_many_xarray_dataset", "read_array"):
+        assert not hasattr(a, method)
+    assert not hasattr(a.dataset("ds"), "read_array")
+    # The accessor writes only.
+    assert not hasattr(ds.atlas, "read")
 
 
-def test_fill_value_kwarg_scalar_applies_to_numeric():
-    """A bare scalar `fill_value` applies to numeric arrays."""
-    arr = xr.DataArray(np.array([1.0, 2.0, 3.0], dtype=np.float64), dims=["x"])
-    ds = xr.Dataset({"v": arr})
-
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds", fill_value=-1)
-
-        view = atlas.Atlas.open(d).open_dataset("ds")
-        assert view.array_fill_value("v") == -1.0
-
-
-def test_fill_value_kwarg_none_disables_default():
-    """`fill_value={var: None}` disables the NaN default for that var."""
-    arr = xr.DataArray(np.array([1.0, np.nan, 3.0], dtype=np.float64), dims=["x"])
-    ds = xr.Dataset({"v": arr})
-
-    with tempfile.TemporaryDirectory() as d:
-        with atlas.Atlas.create(d) as store:
-            store.add_xarray_dataset(ds, "ds", fill_value={"v": None})
-
-        view = atlas.Atlas.open(d).open_dataset("ds")
-        assert view.array_fill_value("v") is None
-        # No fill declared → NaN cells are not counted as null.
-        assert view.array_stats("v")["null_count"] == 0
+def test_the_coords_marker_is_not_surfaced_as_a_user_attribute():
+    ds = _make_dataset()
+    a = _write(ds)
+    assert "_pyatlas_coords" not in a.attributes("ds")
+    # It is still there underneath, which is how coords() answers.
+    raw = a.dataset("ds").get_attribute("_pyatlas_coords")
+    assert json.loads(raw) == ["lat", "lon"]

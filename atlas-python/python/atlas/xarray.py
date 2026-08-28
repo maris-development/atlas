@@ -1,17 +1,22 @@
-"""xarray integration for atlas.
+"""xarray integration for atlas: the write path.
 
 `xarray` and `dask` are required dependencies.
 
-Reads automatically return dask-backed variables when an array was stored with a
-non-trivial chunk shape (`chunk_shape != shape`); full-shape arrays come back
-eager as numpy. The dask chunks mirror the on-disk chunk grid one-to-one.
+This module turns `xarray.Dataset` objects into atlas datasets. It has no read
+path, and that is deliberate: a collection opened from Python is metadata only.
+Use the Rust API to read array data back.
 
-Bulk ingestion — Atlas itself batches; explicit flush on the atlas persists:
-    with atlas:
+Dask-backed variables stream block by block, so a dataset far larger than memory
+can be written. The on-disk chunk grid follows the dask chunking unless
+`chunks=` says otherwise.
+
+Bulk ingestion, one collection from many files:
+
+    with atlas.AtlasWriter.create(path) as w:
         for nc_path in nc_paths:
             ds = xr.open_dataset(nc_path)
-            atlas.add_xarray_dataset(ds, name=Path(nc_path).stem)
-    # atlas.close() (== flush) runs on __exit__.
+            w.add_xarray_dataset(ds, name=Path(nc_path).stem)
+    # w.finish() runs on __exit__; nothing is readable before it.
 """
 from __future__ import annotations
 
@@ -30,7 +35,7 @@ from ._atlas import log_chunk_event as _log_chunk_event
 if TYPE_CHECKING:
     import xarray as xr
 
-    from ._atlas import Atlas, DatasetView
+    from ._atlas import AtlasWriter, DatasetWriter
 
 
 _COORDS_ATTR = "_pyatlas_coords"
@@ -331,17 +336,17 @@ def _iter_blocks(
 
 
 def _write_xarray_to_view(
-    view: "DatasetView",
+    writer: "DatasetWriter",
     ds: "xr.Dataset",
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
 ) -> None:
-    """Populate an empty `DatasetView` with the contents of an xarray Dataset.
+    """Populate an empty `DatasetWriter` from an xarray Dataset.
 
-    Writes every coordinate and data variable as an atlas array, the
-    coordinate names as ``_pyatlas_coords`` (JSON list), all dataset attrs
-    (as dataset-global attributes), and each variable's attrs as real
-    per-variable attributes on that variable's array.
+    Writes every coordinate and data variable as an atlas array, the coordinate
+    names as ``_pyatlas_coords`` (a JSON list), all dataset attrs as
+    dataset-level attributes, and each variable's attrs as attributes on that
+    variable's array.
     """
     coord_names = [str(n) for n in ds.coords.keys()]
 
@@ -378,7 +383,7 @@ def _write_xarray_to_view(
             fill_value,
         )
 
-        view.define_array(
+        writer.define_array(
             var_name,
             dtype=atlas_dtype,
             dims=dims,
@@ -391,7 +396,7 @@ def _write_xarray_to_view(
         # restore the duration dtype. Values are normalised to ns below, so
         # the recorded unit is always "ns".
         if np_dtype.kind == "m":
-            view.set_array_attribute(var_name, _TIMEDELTA_ATTR, "ns")
+            writer.set_array_attribute(var_name, _TIMEDELTA_ATTR, "ns")
 
         # For string arrays, missing (None/NaN) cells can't be stored as null,
         # so they're substituted with the resolved string fill (default "").
@@ -413,7 +418,7 @@ def _write_xarray_to_view(
                 block, n = _fill_missing_strings(block, str_fill)
                 n_filled_strings += n
             t0 = time.perf_counter_ns()
-            view.write_array(var_name, start=start, data=block)
+            writer.write_array(var_name, start=start, data=block)
             _log_chunk_event(
                 "write",
                 var_name,
@@ -429,322 +434,50 @@ def _write_xarray_to_view(
                 stacklevel=2,
             )
 
-        # Per-variable attrs → stored as real per-array attributes on the
-        # variable's own `.af` file (sans `_FillValue`).
+        # Per-variable attrs become real per-array attributes in the
+        # collection footer (minus `_FillValue`, which became the fill).
         for attr_key, attr_val in var_attrs.items():
             encoded = _encode_attr_value(attr_val)
-            view.set_array_attribute(var_name, _sanitize_str(str(attr_key)), encoded)
+            writer.set_array_attribute(var_name, _sanitize_str(str(attr_key)), encoded)
 
     # Dataset-level attrs
     for attr_key, attr_val in ds.attrs.items():
         encoded = _encode_attr_value(attr_val)
-        view.set_attribute(_sanitize_str(str(attr_key)), encoded)
+        writer.set_attribute(_sanitize_str(str(attr_key)), encoded)
 
     # Marker so we can faithfully restore coord/var distinction on read.
-    view.set_attribute(_COORDS_ATTR, json.dumps(coord_names))
+    writer.set_attribute(_COORDS_ATTR, json.dumps(coord_names))
 
 
-_ATLAS_TO_NUMPY = {atlas: np_dt for np_dt, atlas in _NUMPY_TO_ATLAS.items()}
-
-
-def _atlas_to_numpy_dtype(atlas_dtype: str) -> np.dtype:
-    """Numpy dtype that `view.read_array` returns for a given atlas dtype string."""
-    if atlas_dtype in _ATLAS_TO_NUMPY:
-        return _ATLAS_TO_NUMPY[atlas_dtype]
-    if atlas_dtype == "string":
-        return np.dtype("object")
-    raise NotImplementedError(
-        f"atlas dtype {atlas_dtype!r} is not supported on the dask read path"
-    )
-
-
-def _as_timedelta(arr: Any, unit: str) -> Any:
-    """View an int64 array (numpy or dask) as ``timedelta64[unit]``.
-
-    A same-itemsize reinterpretation — the on-disk int64 nanoseconds become a
-    duration without copying. Dask-backed reads are transformed lazily so the
-    chunk-by-chunk read graph is preserved.
-    """
-    td_dtype = np.dtype(f"timedelta64[{unit}]")
-    if _is_dask_array(arr):
-        return arr.map_blocks(lambda b: b.view(td_dtype), dtype=td_dtype)
-    return np.asarray(arr).view(td_dtype)
-
-
-def _dask_chunks_for(shape: Sequence[int], chunk_shape: Sequence[int]) -> tuple:
-    """Per-dim chunk-length tuples in the form dask expects."""
-    chunks: list[tuple[int, ...]] = []
-    for dim_size, dim_chunk in zip(shape, chunk_shape):
-        if dim_chunk <= 0 or dim_size == 0:
-            chunks.append((dim_size,))
-            continue
-        full = dim_size // dim_chunk
-        rem = dim_size - full * dim_chunk
-        c = (dim_chunk,) * full + ((rem,) if rem else ())
-        chunks.append(c if c else (0,))
-    return tuple(chunks)
-
-
-def _view_to_dask_array(view: "DatasetView", name: str) -> Any:
-    """Build a `dask.array.Array` that lazily reads `name` chunk-by-chunk.
-
-    Each on-disk chunk becomes one dask task; values are fetched via
-    `view.read_array(name, start, block_shape)` on demand. Used by
-    `_view_to_xarray` when an array's `chunk_shape != shape`.
-    """
-    import dask
-    import dask.array as da
-
-    meta = view.array_meta(name)
-    assert meta is not None, f"array {name!r} not found in view {view.name!r}"
-    shape: list[int] = list(meta["shape"])
-    chunk_shape: list[int] = list(meta["chunk_shape"])
-    np_dtype = _atlas_to_numpy_dtype(meta["dtype"])
-
-    per_dim_chunks = _dask_chunks_for(shape, chunk_shape)
-    offsets = [
-        [0, *itertools.accumulate(dim_chunks)][:-1] for dim_chunks in per_dim_chunks
-    ]
-
-    def _read_block(start: list[int], block_shape: list[int]) -> np.ndarray:
-        return view.read_array(name, start=start, shape=block_shape)
-
-    def _nested_blocks(axis: int, prefix_start: list[int], prefix_shape: list[int]):
-        if axis == len(shape):
-            block_shape = list(prefix_shape)
-            block_start = list(prefix_start)
-            delayed = dask.delayed(_read_block)(block_start, block_shape)
-            return da.from_delayed(delayed, shape=tuple(block_shape), dtype=np_dtype)
-        return [
-            _nested_blocks(
-                axis + 1,
-                prefix_start + [offsets[axis][i]],
-                prefix_shape + [per_dim_chunks[axis][i]],
-            )
-            for i in range(len(per_dim_chunks[axis]))
-        ]
-
-    nested = _nested_blocks(0, [], [])
-    return da.block(nested)
-
-
-def _view_to_xarray(view: "DatasetView", force_lazy: bool = False) -> "xr.Dataset":
-    """Convert an atlas `DatasetView` into an xarray Dataset.
-
-    Variables stored with `chunk_shape != shape` come back dask-backed (one task
-    per on-disk chunk); full-shape arrays come back eager as numpy unless
-    ``force_lazy=True``, in which case they're wrapped in a single-chunk
-    `dask.array` so the returned Dataset is uniformly lazy (used by
-    `_atlas_to_xarray_many` so concat returns a lazy graph regardless of the
-    source chunk_shape).
-    """
-    import xarray as xr
-
-    array_names = list(view.list_arrays())
-
-    # Coord/var assignment
-    coords_marker = view.get_attribute(_COORDS_ATTR)
-    if isinstance(coords_marker, str):
-        try:
-            coord_names = set(json.loads(coords_marker))
-        except (TypeError, ValueError):
-            coord_names = set()
-    else:
-        # Fallback heuristic: 1-D array whose single dim matches its name.
-        coord_names = set()
-        for name in array_names:
-            meta = view.array_meta(name)
-            if meta is None:
-                continue
-            if (
-                len(meta["dimension_names"]) == 1
-                and meta["dimension_names"][0] == name
-            ):
-                coord_names.add(name)
-
-    # Pull array data. Chunked arrays (chunk_shape != shape) come back as a
-    # lazy dask.array; full-shape and 0-D arrays come back eager.
-    data_vars: dict[str, tuple] = {}
-    coords: dict[str, tuple] = {}
-    for name in array_names:
-        meta = view.array_meta(name)
-        if meta is None:
-            continue
-        shape = list(meta["shape"])
-        chunk_shape = list(meta["chunk_shape"])
-        if not shape or chunk_shape == shape:
-            arr = view.read_array(name)
-            if arr is None:
-                continue
-            if force_lazy and shape:
-                import dask.array as da
-                arr = da.from_array(arr, chunks=tuple(shape))
-        else:
-            arr = _view_to_dask_array(view, name)
-        dims = list(meta["dimension_names"])
-        entry = (dims, arr, {})  # placeholder for per-var attrs; filled below
-        if name in coord_names:
-            coords[name] = entry
-        else:
-            data_vars[name] = entry
-
-    # Dataset-level attrs come from the reserved `_global` file (minus the
-    # internal coord marker); each variable's attrs come from its own array.
-    raw_attrs = dict(view.attributes())
-    raw_attrs.pop(_COORDS_ATTR, None)
-    dataset_attrs: dict[str, Any] = {
-        key: _decode_attr_value(value) for key, value in raw_attrs.items()
-    }
-
-    per_var_attrs: dict[str, dict[str, Any]] = {}
-    for name in array_names:
-        per_var_attrs[name] = {
-            key: _decode_attr_value(value)
-            for key, value in dict(view.array_attributes(name)).items()
-        }
-
-    # Restore _FillValue for any array that was defined with one. The default
-    # NaN (float) / NaT (datetime) / "" (string) sentinels are skipped: they're
-    # self-describing in the data and a spurious `_FillValue` attr can interfere
-    # with NetCDF re-encoding. Explicit fills (e.g. int -1) are still restored.
-    for name in array_names:
-        fv = view.array_fill_value(name)
-        if (
-            fv is None
-            or (isinstance(fv, float) and math.isnan(fv))
-            or (isinstance(fv, str) and fv == "")
-        ):
-            continue
-        meta = view.array_meta(name)
-        # NaT sentinel (i64::MIN) on a datetime column, or on a timedelta column
-        # stored as int64 — self-describing in the data, so skip the attr.
-        is_timedelta = _TIMEDELTA_ATTR in per_var_attrs.get(name, {})
-        if fv == _NAT_INT64 and (
-            (meta is not None and meta["dtype"] == "timestamp_nanoseconds")
-            or is_timedelta
-        ):
-            continue
-        per_var_attrs.setdefault(name, {})
-        per_var_attrs[name]["_FillValue"] = fv
-
-    # Restore timedelta64 arrays: stored as int64 ns + the `_TIMEDELTA_ATTR`
-    # marker. View the int64 data back as a duration and drop the marker so it
-    # doesn't surface as a user-visible attribute (i64::MIN reads back as NaT).
-    for name in array_names:
-        unit = per_var_attrs.get(name, {}).pop(_TIMEDELTA_ATTR, None)
-        if unit is None:
-            continue
-        target = data_vars if name in data_vars else coords
-        if name not in target:
-            continue
-        dims, arr, extra = target[name]
-        target[name] = (dims, _as_timedelta(arr, str(unit)), extra)
-
-    # Inject per-var attrs into the (dims, data, attrs) triples
-    def _with_attrs(name: str, triple: tuple) -> tuple:
-        dims, arr, _ = triple
-        return (dims, arr, per_var_attrs.get(name, {}))
-
-    data_vars = {n: _with_attrs(n, t) for n, t in data_vars.items()}
-    coords = {n: _with_attrs(n, t) for n, t in coords.items()}
-
-    return xr.Dataset(data_vars=data_vars, coords=coords, attrs=dataset_attrs)
-
-
-def _atlas_to_xarray_many(
-    atlas: "Atlas",
-    names: list[str],
-    concat_dim: str = "dataset",
-    parallel: bool = True,  # noqa: ARG001  — kept for API compat; ignored
-) -> "xr.Dataset":
-    """Open many atlas datasets and stack them into one xr.Dataset along
-    `concat_dim`. atlas-native equivalent of `xr.open_mfdataset(...)`.
-
-    Implementation: opens the first dataset to discover the schema (vars,
-    dims, dtypes, coords, per-var attrs), then for each data variable calls
-    `Atlas.read_array_across` to bulk-read across all `names` in one Rust
-    call. The N reads share one `RwLock::read` guard on the shared physical
-    file and dispatch concurrently on the tokio runtime — avoids the N
-    Python ↔ Rust round-trips the prior dask-delayed implementation paid.
-
-    Returns eager numpy-backed arrays of shape `(len(names), *original_shape)`.
-    Wrap with `.chunk(...)` downstream if you need dask laziness.
-
-    The `parallel` parameter is accepted for API compatibility but no longer
-    selects an implementation — the bulk path is always taken.
-    """
-    import numpy as np
-    import xarray as xr
-
-    if not names:
-        raise ValueError("open_as_many_xarray_dataset: `names` is empty")
-
-    # Schema discovery from the first dataset (cheap: in-memory meta lookup).
-    first_view = atlas.open_dataset(names[0])
-    template = _view_to_xarray(first_view, force_lazy=False)
-
-    # Bulk-read each data variable across all datasets in one Rust call,
-    # returning a pre-stacked (N, *shape) numpy array. Skips the Python-side
-    # `np.stack` copy that the list-returning `read_array_across` would
-    # require — significant on big workloads (a 1000-dataset gridded run
-    # saves several seconds of memory bandwidth).
-    #
-    # Variables are processed serially because each Rust call internally
-    # parallelises N reads up to num_cpus — running multiple vars in
-    # parallel would oversubscribe CPU.
-    data_vars: dict[str, xr.DataArray] = {}
-    for var in template.data_vars:
-        stacked = atlas.read_array_across_stacked(var, names)
-        original_dims = list(template[var].dims)
-        original_attrs = dict(template[var].attrs)
-        data_vars[var] = xr.DataArray(
-            stacked,
-            dims=[concat_dim, *original_dims],
-            attrs=original_attrs,
-        )
-
-    # Coords + dataset-level attrs come from the first dataset, matching
-    # xarray.open_mfdataset(coords="minimal", compat="override") semantics.
-    coords = {name: template.coords[name] for name in template.coords}
-    coords[concat_dim] = xr.DataArray(np.asarray(names), dims=[concat_dim])
-
-    return xr.Dataset(data_vars=data_vars, coords=coords, attrs=dict(template.attrs))
-
-
-def _write_xarray_new_dataset(
-    atlas: "Atlas",
+def _write_xarray_dataset(
+    writer: "AtlasWriter",
     ds: "xr.Dataset",
     name: str,
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
 ) -> None:
-    """Rust-delegated helper: create a fresh atlas dataset and populate it.
+    """Write an ``xarray.Dataset`` into an open :class:`AtlasWriter` as ``name``.
 
-    Both `atlas.add_xarray_dataset` and the `ds.atlas.write` accessor route through
-    this function.
+    Both ``AtlasWriter.add_xarray_dataset`` and the ``ds.atlas.write`` accessor
+    route through here.
 
-    The write is atomic: if populating the view fails partway (e.g. an
-    unsupported dtype), the just-created dataset is rolled back with
-    `delete_dataset` so a later `flush()`/`close()` can't persist a half-written
-    record. Nothing reaches disk until flush regardless, so this only cleans up
-    the in-memory store.
+    The write is atomic. A ``DatasetWriter`` reaches the container only when it
+    finishes, so a failure partway through — an unsupported dtype, say — is
+    discarded by aborting it, and the collection never sees the dataset.
     """
-    view = atlas.create_dataset(name)
+    dataset_writer = writer.add_dataset(name)
     try:
-        _write_xarray_to_view(view, ds, chunks=chunks, fill_value=fill_value)
+        _write_xarray_to_view(dataset_writer, ds, chunks=chunks, fill_value=fill_value)
     except BaseException:
-        try:
-            atlas.delete_dataset(name)
-        except Exception:
-            # Best-effort rollback; surface the original failure regardless.
-            pass
+        dataset_writer.abort()
         raise
+    dataset_writer.finish()
 
 
 # --- xarray accessor ----------------------------------------------------------
 # Registered as `ds.atlas` once `atlas` is imported. The whole module is
-# side-effect-imported from `atlas/__init__.py` so importing `atlas` is
-# enough to activate this.
+# side-effect-imported from `atlas/__init__.py`, so importing `atlas` is enough
+# to activate this.
 
 import xarray as _xr  # noqa: E402
 
@@ -758,18 +491,18 @@ class _AtlasAccessor:
 
     def write(
         self,
-        atlas: "Atlas",
+        writer: "AtlasWriter",
         name: str,
         chunks: Optional[dict[str, Sequence[int]]] = None,
         fill_value: Any = None,
     ) -> None:
-        """Append this Dataset to the open atlas store under `name`.
+        """Write this Dataset into the open collection under `name`.
 
-        Equivalent to `atlas.add_xarray_dataset(self_ds, name, chunks, fill_value)`.
+        Equivalent to `writer.add_xarray_dataset(self_ds, name, chunks, fill_value)`.
 
         `fill_value` overrides the per-array fill: a bare scalar applies to
         numeric arrays, a `{var: scalar}` dict targets named vars (`None`
         disables the default for that var). When omitted, float arrays default
         to a `NaN` fill so mask_and_scale'd missing cells are recorded as null.
         """
-        atlas.add_xarray_dataset(self._ds, name, chunks, fill_value)
+        writer.add_xarray_dataset(self._ds, name, chunks, fill_value)

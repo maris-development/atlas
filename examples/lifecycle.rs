@@ -16,10 +16,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Build ────────────────────────────────────────────────────────
 
     println!("=== Building the collection ===");
-    let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default()).await?;
+    let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default()).await?;
 
     for (name, value) in [("north", 1.0f32), ("south", 2.0), ("east", 3.0)] {
-        let mut ds = w.add_dataset(name)?;
+        let mut ds = w.add_dataset(name).await?;
 
         ds.define_array::<f32>(
             "grid",

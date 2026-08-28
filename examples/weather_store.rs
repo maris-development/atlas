@@ -28,11 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Write ────────────────────────────────────────────────────────
 
     println!("=== Writing ===");
-    let mut w =
+    let w =
         AtlasWriter::create(Arc::clone(&store), prefix.clone(), WriterConfig::default()).await?;
 
     for (month, name) in [(1u8, "jan"), (2, "feb"), (3, "mar")] {
-        let mut ds = w.add_dataset(name)?;
+        let mut ds = w.add_dataset(name).await?;
 
         ds.define_array::<f32>(
             "temperature",
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // A dataset with a different schema: the station table.
     {
-        let mut ds = w.add_dataset("stations")?;
+        let mut ds = w.add_dataset("stations").await?;
         ds.define_array::<String>("name", vec!["station".into()], vec![3], None, None)
             .await?;
         let names = Array1::from_vec(vec![

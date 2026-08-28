@@ -1,17 +1,16 @@
-"""Compare the three array compression codecs (zstd, lz4, none) on a real workload.
+"""Compare the three block codecs on one workload.
 
-The `codec` kwarg on `Atlas.create` sets the codec used when *new* blocks are
-written. The codec is recorded per-array, so reading is automatic regardless
-of which codec the store was opened with. Existing blocks always decompress
-with whichever codec they were originally written with.
+The `codec` argument to `AtlasWriter.create` sets how array blocks are
+compressed. Each block records the codec that produced it, so a reader decodes
+whatever it finds without being told — the choice affects only writing.
 
 Rule of thumb:
-    * `zstd` — default. Best ratio at moderate CPU. Pick this unless you have
-      a reason not to.
-    * `lz4`  — faster to decompress; ~2× larger files. Worth it for read-heavy
-      scan loops where the compressed-bytes-per-second matters more than space.
-    * `none` — fastest write path, no size reduction. Useful only for tiny
-      stores or when you'll compress the entire directory externally.
+    zstd  default. Best ratio at moderate CPU. Pick this unless you have a
+          reason not to.
+    lz4   faster to decompress, larger files. Worth it for scan-heavy reading
+          where compressed bytes per second matters more than space.
+    none  fastest write path, no size reduction. Useful for tiny collections,
+          or when you compress the whole file externally.
 
 Run:
     python atlas-python/examples/05_codecs.py
@@ -23,68 +22,52 @@ import numpy as np
 
 import atlas
 
-# A workload that compresses well: sinusoidal data with lots of structure.
 N_DATASETS = 8
 SHAPE = (256, 256)
 
 
-def populate(store: "atlas.Atlas") -> None:
-    """Write the same data into every dataset, so codec is the only variable."""
-    # A smooth field with no noise — realistic for geophysical / model output.
-    # Random/noisy data resists compression and would show all three codecs
-    # tied; smooth data is where codec choice actually matters.
+def field() -> np.ndarray:
+    """A smooth field, the kind of data where codec choice actually matters.
+
+    Random noise resists compression and would leave all three codecs tied.
+    """
     xs = np.linspace(0, 4 * np.pi, SHAPE[0])
     ys = np.linspace(0, 4 * np.pi, SHAPE[1])
-    data = (np.sin(xs)[:, None] + np.cos(ys)[None, :]).astype(np.float32)
-
-    for i in range(N_DATASETS):
-        ds = store.create_dataset(f"sensor_{i:02d}")
-        ds.define_array(
-            "readings",
-            dtype="float32",
-            dims=["lat", "lon"],
-            shape=list(SHAPE),
-            chunk_shape=[64, 64],
-        )
-        ds.write_array("readings", start=[0, 0], data=data)
-    store.flush()
+    return (np.sin(xs)[:, None] + np.cos(ys)[None, :]).astype(np.float32)
 
 
-def array_bytes(store_dir: Path) -> int:
-    """Total bytes used by array files (everything except the top-level atlas.* metadata)."""
-    total = 0
-    for path in store_dir.rglob("*"):
-        if path.is_file() and not path.name.startswith("atlas."):
-            total += path.stat().st_size
-    return total
+def write(path: str, codec: str, data: np.ndarray) -> int:
+    """Write the same data under `codec` and return the file size in bytes."""
+    with atlas.AtlasWriter.create(path, codec=codec) as writer:
+        for i in range(N_DATASETS):
+            ds = writer.add_dataset(f"grid_{i:02d}")
+            ds.define_array(
+                "field",
+                dtype="float32",
+                dims=["y", "x"],
+                shape=list(SHAPE),
+                chunk_shape=[64, 64],
+            )
+            ds.write_array("field", start=[0, 0], data=data)
+            ds.finish()
+    return (Path(path) / "data.atlas").stat().st_size
 
 
 def main() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        results: list[tuple[str, int]] = []
+    data = field()
+    raw = data.nbytes * N_DATASETS
+    print(f"{N_DATASETS} datasets x {SHAPE[0]}x{SHAPE[1]} float32 = {raw / 1e6:.2f} MB raw\n")
+    print(f"{'codec':<8} {'file size':>12} {'ratio':>8}")
+    print("-" * 30)
 
-        for codec in ["zstd", "lz4", "none"]:
-            store_dir = tmp_path / codec
-            with atlas.Atlas.create(str(store_dir), codec=codec) as store:
-                populate(store)
-            results.append((codec, array_bytes(store_dir)))
+    for codec in ("zstd", "lz4", "none"):
+        with tempfile.TemporaryDirectory() as path:
+            size = write(path, codec, data)
+            print(f"{codec:<8} {size / 1e6:>9.2f} MB {raw / size:>7.1f}x")
 
-        baseline = next(size for codec, size in results if codec == "none")
-        print(f"Workload: {N_DATASETS} datasets × {SHAPE[0]}×{SHAPE[1]} float32 "
-              f"= {N_DATASETS * SHAPE[0] * SHAPE[1] * 4 / 1024:.0f} KiB raw per codec\n")
-        print(f"{'codec':<8} {'array bytes':>14}   ratio vs raw")
-        print("─" * 44)
-        for codec, size in results:
-            print(f"{codec:<8} {size:>14,}   {size / baseline:.2f}×")
-
-        # Codec is auto-detected per array on open — no kwarg required.
-        print("\nReopening the lz4 store with no kwargs; read-back is automatic:")
-        store = atlas.Atlas.open(str(tmp_path / "lz4"))
-        ds = store.open_dataset("sensor_00")
-        readings = ds.read_array("readings")
-        assert readings is not None
-        print(f"  sensor_00.readings.shape = {readings.shape}, dtype = {readings.dtype} ✓")
+            # Whatever the codec, the reader is told nothing about it.
+            collection = atlas.Atlas.open(path)
+            assert collection.dataset_count() == N_DATASETS
 
 
 if __name__ == "__main__":

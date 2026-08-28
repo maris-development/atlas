@@ -1,13 +1,11 @@
-"""xarray integration: write an `xr.Dataset` into atlas two equivalent ways, then read it back.
+"""Write xarray Datasets into a collection, one file for the lot.
 
-Demonstrates:
-    1. `store.add_xarray_dataset(ds, name)` — the atlas-side instance method.
-    2. `ds.atlas.write(atlas, name)`    — the xarray accessor (registered automatically
-                                          when `atlas` is imported).
-    3. `store.open_as_xarray_dataset(name)`          — read back as a fresh `xr.Dataset`.
+`add_xarray_dataset` maps an `xarray.Dataset` onto atlas: coordinates and data
+variables become arrays, variable attrs become per-array attributes, dataset
+attrs become dataset-level attributes, and which variables were coordinates is
+recorded so `Atlas.coords` can tell you afterwards.
 
-Per-variable attributes (`units`, `long_name`, …) round-trip through the
-flattened `{var}.{attr}` convention.
+Reading the data back is the Rust API's job. From Python you get the structure.
 
 Run:
     python atlas-python/examples/02_xarray.py
@@ -17,58 +15,64 @@ import tempfile
 import numpy as np
 import xarray as xr
 
-import atlas  # noqa: F401  — registers the ds.atlas accessor
+import atlas
 
 
-def build_dataset() -> xr.Dataset:
-    """A small weather Dataset with named coords, two data variables, and attrs."""
-    temperature = xr.DataArray(
-        np.arange(8 * 16, dtype=np.float32).reshape(8, 16),
-        dims=["lat", "lon"],
-        attrs={"units": "celsius", "long_name": "surface temperature"},
-    )
-    pressure = xr.DataArray(
-        np.full((8, 16), 1013.25, dtype=np.float64),
-        dims=["lat", "lon"],
-        attrs={"units": "hPa"},
-    )
+def monthly_grid(month: int) -> xr.Dataset:
     return xr.Dataset(
-        data_vars={"temperature": temperature, "pressure": pressure},
-        coords={
-            "lat": ("lat", np.arange(8, dtype=np.float32)),
-            "lon": ("lon", np.arange(16, dtype=np.float32)),
+        data_vars={
+            "temperature": xr.DataArray(
+                np.full((4, 6), 10.0 + month, dtype=np.float32),
+                dims=["lat", "lon"],
+                attrs={"units": "celsius", "long_name": "surface temperature"},
+            ),
+            "station": xr.DataArray(
+                np.array(["a", "b", "c", "d"], dtype=object),
+                dims=["lat"],
+            ),
         },
-        attrs={"month": 1, "station": "KNMI"},
+        coords={
+            "lat": ("lat", np.arange(4, dtype=np.float64)),
+            "lon": ("lon", np.arange(6, dtype=np.float64)),
+            "time": np.datetime64(f"2024-{month:02d}-01", "ns"),
+        },
+        attrs={"month": month, "source": "example"},
     )
 
 
 def main() -> None:
-    ds = build_dataset()
+    with tempfile.TemporaryDirectory() as path:
+        # A whole directory of NetCDF files would go in the same loop.
+        with atlas.AtlasWriter.create(path) as writer:
+            for month in (1, 2, 3):
+                writer.add_xarray_dataset(monthly_grid(month), name=f"2024-{month:02d}")
+                print(f"  wrote 2024-{month:02d}")
 
-    with tempfile.TemporaryDirectory() as store_dir:
-        with atlas.Atlas.create(store_dir) as store:
-            # Two equivalent ways to write
-            store.add_xarray_dataset(ds, "jan_2024")
-            ds.atlas.write(store, "feb_2024")
+        # The accessor is the same call spelled the other way round:
+        #     ds.atlas.write(writer, name)
 
-            print(f"Datasets in store: {store.list_datasets()}")
-        # `with` block calls store.close() (== flush) on exit; without it
-        # the in-memory writes would never reach disk.
+        collection = atlas.Atlas.open(path)
+        print(f"\ndatasets: {collection.list_datasets()}")
+        print(f"arrays:   {collection.list_arrays()}")
 
-        # Reopen and read back
-        store = atlas.Atlas.open(store_dir)
-        ds_jan = store.open_as_xarray_dataset("jan_2024")
-        ds_feb = store.open_as_xarray_dataset("feb_2024")
+        name = "2024-01"
+        print(f"\n{name}:")
+        print(f"  coordinates: {collection.coords(name)}")
+        print(f"  attributes:  {collection.attributes(name)}")
 
-        print("\njan_2024 (store.open_as_xarray_dataset):")
-        print(ds_jan)
-        print("\njan_2024.temperature.attrs:", ds_jan["temperature"].attrs)
-        print("feb_2024 attrs:               ", ds_feb.attrs)
+        view = collection.dataset(name)
+        for array in view.list_arrays():
+            meta = view.array_meta(array)
+            print(f"  {array:12s} {meta['dtype']:24s} {meta['shape']}")
 
-        # The roundtrip is bit-identical
-        xr.testing.assert_identical(ds, ds_jan)
-        xr.testing.assert_identical(ds, ds_feb)
-        print("\nBoth Datasets round-tripped identically.")
+        print(f"\n  temperature attrs: {collection.array_attributes(name, 'temperature')}")
+
+        # dtype mapping worth knowing:
+        #   datetime64[ns] -> timestamp_nanoseconds
+        #   timedelta64    -> int64 nanoseconds, plus a marker attribute
+        #   object/bytes/unicode -> variable-length string
+        print(f"\n  time is stored as {view.array_meta('time')['dtype']}")
+        print(f"  station is stored as {view.array_meta('station')['dtype']}")
 
 
 if __name__ == "__main__":

@@ -18,12 +18,12 @@ use object_store::{ObjectStore, ObjectStoreExt};
 /// several dtypes, a chunked array, an array that is defined but never
 /// written, fill values, and attributes at both levels.
 async fn build_fixture(path: &std::path::Path) {
-    let mut w = AtlasWriter::create_path(path, WriterConfig::default())
+    let w = AtlasWriter::create_path(path, WriterConfig::default())
         .await
         .unwrap();
 
     {
-        let mut ds = w.add_dataset("jan_2024").unwrap();
+        let mut ds = w.add_dataset("jan_2024").await.unwrap();
         ds.define_array::<f32>(
             "temperature",
             vec!["lat".into(), "lon".into()],
@@ -57,7 +57,7 @@ async fn build_fixture(path: &std::path::Path) {
 
     {
         // Same array shapes as jan_2024, so the schema interns to one entry.
-        let mut ds = w.add_dataset("feb_2024").unwrap();
+        let mut ds = w.add_dataset("feb_2024").await.unwrap();
         ds.define_array::<f32>(
             "temperature",
             vec!["lat".into(), "lon".into()],
@@ -81,7 +81,7 @@ async fn build_fixture(path: &std::path::Path) {
 
     {
         // A different schema, and the dtypes the xarray layer leans on.
-        let mut ds = w.add_dataset("stations").unwrap();
+        let mut ds = w.add_dataset("stations").await.unwrap();
         ds.define_array::<String>("name", vec!["station".into()], vec![3], None, None)
             .await
             .unwrap();
@@ -125,7 +125,7 @@ async fn build_fixture(path: &std::path::Path) {
 /// the container is genuinely large. Used where a fixture has to exceed the
 /// reader's tail probe.
 async fn build_bulky_fixture(path: &std::path::Path, datasets: usize, len: usize) {
-    let mut w = AtlasWriter::create_path(
+    let w = AtlasWriter::create_path(
         path,
         WriterConfig {
             codec: Codec::Uncompressed,
@@ -135,7 +135,7 @@ async fn build_bulky_fixture(path: &std::path::Path, datasets: usize, len: usize
     .await
     .unwrap();
     for d in 0..datasets {
-        let mut ds = w.add_dataset(&format!("ds{d}")).unwrap();
+        let mut ds = w.add_dataset(&format!("ds{d}")).await.unwrap();
         ds.define_array::<f64>("x", vec!["i".into()], vec![len], Some(vec![len / 4]), None)
             .await
             .unwrap();
@@ -370,10 +370,10 @@ async fn identical_schemas_are_stored_once() {
 async fn timestamps_and_date_shaped_strings_stay_distinct() {
     let tmp = tempfile::tempdir().unwrap();
     {
-        let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+        let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
             .await
             .unwrap();
-        let mut ds = w.add_dataset("d").unwrap();
+        let mut ds = w.add_dataset("d").await.unwrap();
         ds.set_attribute("when", Attr::TimestampNanoseconds(1_700_000_000_000_000_000));
         ds.set_attribute("looks_like", Attr::String("2023-11-14T22:13:20Z".into()));
         ds.finish().await.unwrap();
@@ -610,10 +610,10 @@ async fn a_collection_with_no_datasets_is_valid() {
 async fn a_dataset_with_no_arrays_still_round_trips() {
     let tmp = tempfile::tempdir().unwrap();
     {
-        let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+        let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
             .await
             .unwrap();
-        let mut ds = w.add_dataset("empty").unwrap();
+        let mut ds = w.add_dataset("empty").await.unwrap();
         ds.set_attribute("note", Attr::String("no arrays here".into()));
         ds.finish().await.unwrap();
         w.finish().await.unwrap();
@@ -631,11 +631,11 @@ async fn a_dataset_with_no_arrays_still_round_trips() {
 async fn a_dataset_dropped_without_finish_never_enters_the_container() {
     let tmp = tempfile::tempdir().unwrap();
     {
-        let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+        let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
             .await
             .unwrap();
         {
-            let mut ds = w.add_dataset("abandoned").unwrap();
+            let mut ds = w.add_dataset("abandoned").await.unwrap();
             ds.define_array::<f32>("x", vec!["i".into()], vec![4], None, None)
                 .await
                 .unwrap();
@@ -643,7 +643,7 @@ async fn a_dataset_dropped_without_finish_never_enters_the_container() {
             ds.write_array("x", vec![0], data.view()).await.unwrap();
             // No finish: dropped here.
         }
-        let mut ds = w.add_dataset("kept").unwrap();
+        let mut ds = w.add_dataset("kept").await.unwrap();
         ds.define_array::<f32>("x", vec!["i".into()], vec![2], None, None)
             .await
             .unwrap();
@@ -658,10 +658,10 @@ async fn a_dataset_dropped_without_finish_never_enters_the_container() {
 async fn a_writer_dropped_without_finish_leaves_nothing_readable() {
     let tmp = tempfile::tempdir().unwrap();
     {
-        let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+        let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
             .await
             .unwrap();
-        let mut ds = w.add_dataset("d").unwrap();
+        let mut ds = w.add_dataset("d").await.unwrap();
         ds.define_array::<f32>("x", vec!["i".into()], vec![2], None, None)
             .await
             .unwrap();
@@ -671,19 +671,71 @@ async fn a_writer_dropped_without_finish_leaves_nothing_readable() {
     assert!(Atlas::open_path(tmp.path()).await.is_err());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn datasets_staged_concurrently_land_intact() {
+    let tmp = tempfile::tempdir().unwrap();
+    {
+        let w = Arc::new(
+            AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+                .await
+                .unwrap(),
+        );
+        // Stage all four at once. They finish in whatever order they finish;
+        // the writer's lock is what keeps their segments from interleaving.
+        let mut tasks = Vec::new();
+        for d in 0..4usize {
+            let w = Arc::clone(&w);
+            tasks.push(tokio::spawn(async move {
+                let mut ds = w.add_dataset(&format!("ds{d}")).await.unwrap();
+                ds.define_array::<i32>("x", vec!["i".into()], vec![256], Some(vec![64]), None)
+                    .await
+                    .unwrap();
+                let data = Array1::from_shape_fn(256, |i| (d * 1000 + i) as i32).into_dyn();
+                ds.write_array("x", vec![0], data.view()).await.unwrap();
+                ds.finish().await.unwrap();
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
+        Arc::try_unwrap(w)
+            .unwrap_or_else(|_| panic!("all tasks finished"))
+            .finish()
+            .await
+            .unwrap();
+    }
+
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+    assert_eq!(atlas.dataset_count(), 4);
+    for d in 0..4usize {
+        let ds = atlas.dataset(&format!("ds{d}")).unwrap();
+        let got = ds.read_array::<i32>("x", vec![], vec![]).await.unwrap();
+        assert_eq!(got[[0]], (d * 1000) as i32, "ds{d} got another dataset's data");
+        assert_eq!(got[[255]], (d * 1000 + 255) as i32);
+    }
+    // Segments still tile the container without gaps or overlap.
+    let mut ranges: Vec<_> = (0..4)
+        .map(|d| atlas.dataset(&format!("ds{d}")).unwrap().segment_range())
+        .collect();
+    ranges.sort_by_key(|r| r.start);
+    for pair in ranges.windows(2) {
+        assert_eq!(pair[0].end, pair[1].start, "segments must be contiguous");
+    }
+}
+
 #[tokio::test]
 async fn duplicate_names_are_refused() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+    let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
         .await
         .unwrap();
-    w.add_dataset("d").unwrap().finish().await.unwrap();
+    w.add_dataset("d").await.unwrap().finish().await.unwrap();
     assert!(matches!(
-        w.add_dataset("d"),
+        w.add_dataset("d").await,
         Err(Error::DatasetAlreadyExists(_))
     ));
 
-    let mut ds = w.add_dataset("e").unwrap();
+    let mut ds = w.add_dataset("e").await.unwrap();
     ds.define_array::<f32>("x", vec!["i".into()], vec![2], None, None)
         .await
         .unwrap();
@@ -697,16 +749,16 @@ async fn duplicate_names_are_refused() {
 #[tokio::test]
 async fn invalid_names_are_refused() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+    let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
         .await
         .unwrap();
     for bad in ["", "_hidden", "a/b", "..", "."] {
         assert!(
-            matches!(w.add_dataset(bad), Err(Error::InvalidName(_))),
+            matches!(w.add_dataset(bad).await, Err(Error::InvalidName(_))),
             "expected '{bad}' to be refused"
         );
     }
-    let mut ds = w.add_dataset("ok").unwrap();
+    let mut ds = w.add_dataset("ok").await.unwrap();
     assert!(matches!(
         ds.define_array::<f32>("_x", vec!["i".into()], vec![2], None, None)
             .await,
@@ -717,10 +769,10 @@ async fn invalid_names_are_refused() {
 #[tokio::test]
 async fn writing_an_undefined_array_is_refused() {
     let tmp = tempfile::tempdir().unwrap();
-    let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+    let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
         .await
         .unwrap();
-    let mut ds = w.add_dataset("d").unwrap();
+    let mut ds = w.add_dataset("d").await.unwrap();
     let data = Array1::from_vec(vec![1.0f32]).into_dyn();
     assert!(matches!(
         ds.write_array("nope", vec![0], data.view()).await,
@@ -737,7 +789,7 @@ async fn every_codec_produces_a_readable_collection() {
     for codec in [Codec::Zstd, Codec::Lz4, Codec::Uncompressed] {
         let tmp = tempfile::tempdir().unwrap();
         {
-            let mut w = AtlasWriter::create_path(
+            let w = AtlasWriter::create_path(
                 tmp.path(),
                 WriterConfig {
                     codec,
@@ -746,7 +798,7 @@ async fn every_codec_produces_a_readable_collection() {
             )
             .await
             .unwrap();
-            let mut ds = w.add_dataset("d").unwrap();
+            let mut ds = w.add_dataset("d").await.unwrap();
             ds.define_array::<f64>("x", vec!["i".into()], vec![4], Some(vec![2]), None)
                 .await
                 .unwrap();
@@ -776,7 +828,7 @@ async fn a_dataset_larger_than_one_block_round_trips() {
     let rows = 64;
     let cols = 256;
     {
-        let mut w = AtlasWriter::create_path(
+        let w = AtlasWriter::create_path(
             tmp.path(),
             WriterConfig {
                 codec: Codec::Uncompressed,
@@ -785,7 +837,7 @@ async fn a_dataset_larger_than_one_block_round_trips() {
         )
         .await
         .unwrap();
-        let mut ds = w.add_dataset("big").unwrap();
+        let mut ds = w.add_dataset("big").await.unwrap();
         ds.define_array::<f64>(
             "x",
             vec!["r".into(), "c".into()],
@@ -816,10 +868,10 @@ async fn a_dataset_larger_than_one_block_round_trips() {
 async fn many_slabs_into_one_array_assemble_correctly() {
     let tmp = tempfile::tempdir().unwrap();
     {
-        let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+        let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
             .await
             .unwrap();
-        let mut ds = w.add_dataset("d").unwrap();
+        let mut ds = w.add_dataset("d").await.unwrap();
         ds.define_array::<i32>("x", vec!["i".into()], vec![8], Some(vec![3]), None)
             .await
             .unwrap();
@@ -852,14 +904,14 @@ async fn a_collection_round_trips_on_an_in_memory_store_under_a_prefix() {
     let store: Arc<dyn ObjectStore> = Arc::new(object_store::memory::InMemory::new());
     let prefix = OsPath::from("collections/2024");
     {
-        let mut w = AtlasWriter::create(
+        let w = AtlasWriter::create(
             Arc::clone(&store),
             prefix.clone(),
             WriterConfig::default(),
         )
         .await
         .unwrap();
-        let mut ds = w.add_dataset("d").unwrap();
+        let mut ds = w.add_dataset("d").await.unwrap();
         ds.define_array::<f32>("x", vec!["i".into()], vec![3], None, None)
             .await
             .unwrap();

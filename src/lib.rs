@@ -41,11 +41,11 @@
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! let tmp = tempfile::tempdir().unwrap();
 //!
-//! let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+//! let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
 //!     .await
 //!     .unwrap();
 //! {
-//!     let mut ds = w.add_dataset("jan_2024").unwrap();
+//!     let mut ds = w.add_dataset("jan_2024").await.unwrap();
 //!     ds.define_array::<f32>(
 //!         "temperature",
 //!         vec!["lat".into(), "lon".into()],
@@ -82,10 +82,10 @@
 //! another: the data is immutable, so there is nothing to lock. Segment handles
 //! open once through a `OnceCell` and are shared, as is the block cache.
 //!
-//! [`AtlasWriter`] is single-threaded by construction: [`add_dataset`] borrows
-//! it mutably, because segments are appended to one stream in order.
-//!
-//! [`add_dataset`]: AtlasWriter::add_dataset
+//! [`AtlasWriter`] is `Send + Sync` too, and several [`DatasetWriter`]s may be
+//! staged at once. A dataset touches the shared output only in
+//! [`DatasetWriter::finish`], which holds one lock for the whole append, so
+//! concurrent datasets land in finish order and never interleave.
 
 mod config;
 mod error;
@@ -169,7 +169,10 @@ mod send_check {
         _assert_sync::<DatasetView>();
     }
     #[test]
-    fn writer_is_send() {
+    fn writers_are_send_and_sync() {
         _assert_send::<AtlasWriter>();
+        _assert_sync::<AtlasWriter>();
+        _assert_send::<DatasetWriter>();
+        _assert_sync::<DatasetWriter>();
     }
 }

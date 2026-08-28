@@ -27,7 +27,7 @@ fn fixture_dir() -> PathBuf {
 
 /// Writes the fixture. Kept in sync with what the assertions below expect.
 async fn write_golden(dir: &Path) {
-    let mut w = AtlasWriter::create_path(
+    let w = AtlasWriter::create_path(
         dir,
         WriterConfig {
             codec: Codec::Zstd,
@@ -38,7 +38,7 @@ async fn write_golden(dir: &Path) {
     .unwrap();
 
     {
-        let mut ds = w.add_dataset("grid").unwrap();
+        let mut ds = w.add_dataset("grid").await.unwrap();
         ds.define_array::<f32>(
             "temperature",
             vec!["lat".into(), "lon".into()],
@@ -71,7 +71,7 @@ async fn write_golden(dir: &Path) {
     }
 
     {
-        let mut ds = w.add_dataset("labels").unwrap();
+        let mut ds = w.add_dataset("labels").await.unwrap();
         ds.define_array::<String>("name", vec!["i".into()], vec![3], None, None)
             .await
             .unwrap();
