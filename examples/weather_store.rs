@@ -1,340 +1,156 @@
-//! Demonstrates creating a weather data store with multiple datasets that share physical
-//! array files. Shows chunked and full writes, partial reads, attributes, reopening, and
-//! how the codec is persisted in `atlas.json` so `open` needs no codec argument.
+//! A realistic collection on an object store, read lazily.
+//!
+//! Monthly weather grids plus a station table, written to an in-memory
+//! `ObjectStore` under a prefix. Swap `InMemory` for `AmazonS3` and nothing
+//! else changes: the reader only ever issues range reads.
+//!
+//! The point of the example is what is *not* fetched. Opening reads the footer.
+//! Listing, schemas, and attributes come from that. A window out of one grid
+//! fetches the chunks it overlaps and nothing else.
+//!
+//! Run with: `cargo run --example weather_store`
 
 use std::sync::Arc;
 
-use atlas::{Atlas, Attr, DType, StatValue, StoreConfig};
-use ndarray::{Array1, Array2};
-use object_store::{local::LocalFileSystem, path::Path};
+use atlas::{Atlas, AtlasWriter, Attr, FillValue, TimestampNs, WriterConfig};
+use ndarray::{Array1, ArrayD, IxDyn};
+use object_store::path::Path as OsPath;
+use object_store::{ObjectStore, ObjectStoreExt, memory::InMemory};
 
-// Grid: 8 latitudes × 16 longitudes, stored in 4×8 chunks
-const NLAT: usize = 8;
-const NLON: usize = 16;
-const CHUNK_LAT: usize = 4;
-const CHUNK_LON: usize = 8;
-
-// Time series length
-const NTIME: usize = 24;
+const LAT: usize = 32;
+const LON: usize = 64;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let store: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
-    let prefix = Path::from_absolute_path(tmp.path())?;
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let prefix = OsPath::from("weather/2024");
 
-    // ── Create store ──────────────────────────────────────────────────────────
-    //
-    // StoreConfig sets the codec for this store. It is written to atlas.json
-    // so that Atlas::open() picks it up automatically — no need to pass the
-    // codec again on reopen.
+    // ── Write ────────────────────────────────────────────────────────
 
-    let mut s = Atlas::create(store.clone(), prefix.clone(), StoreConfig::default()).await?;
-    println!("Created store at {}", tmp.path().display());
+    println!("=== Writing ===");
+    let mut w =
+        AtlasWriter::create(Arc::clone(&store), prefix.clone(), WriterConfig::default()).await?;
 
-    // ── Dataset 1: January 2024 ───────────────────────────────────────────────
-    //
-    // Arrays:
-    //   temperature  f32[8, 16]  chunked [4, 8]   – written two chunks at a time
-    //   pressure     f64[8, 16]  chunk = full      – written in one shot
-    //   time         i64[24]     chunk = full      – 1-D, hourly timestamps
+    for (month, name) in [(1u8, "jan"), (2, "feb"), (3, "mar")] {
+        let mut ds = w.add_dataset(name)?;
 
-    {
-        let mut ds = s.create_dataset("jan_2024").await?;
-
-        // --- temperature: define with explicit chunk shape ---
         ds.define_array::<f32>(
             "temperature",
             vec!["lat".into(), "lon".into()],
-            vec![NLAT, NLON],
-            Some(vec![CHUNK_LAT, CHUNK_LON]),
-            None,
+            vec![LAT, LON],
+            Some(vec![8, 16]), // 4 x 4 = 16 chunks
+            Some(FillValue::Float(f64::NAN)),
         )
         .await?;
+        let grid = ArrayD::from_shape_fn(IxDyn(&[LAT, LON]), |i| {
+            (month as f32) + (i[0] as f32) * 0.1 + (i[1] as f32) * 0.01
+        });
+        ds.write_array("temperature", vec![0, 0], grid.view()).await?;
 
-        // Write chunk by chunk. Each chunk is a sub-region of the full grid.
-        for lat in 0..(NLAT / CHUNK_LAT) {
-            for lon in 0..(NLON / CHUNK_LON) {
-                let start = vec![lat * CHUNK_LAT, lon * CHUNK_LON];
-                // Realistic-ish temperature values: warmer at low latitudes
-                let base = 20.0 - (lat as f32) * 3.0 + (lon as f32) * 0.5;
-                let chunk = Array2::<f32>::from_elem([CHUNK_LAT, CHUNK_LON], base).into_dyn();
-                ds.write_array("temperature", start, chunk.view()).await?;
-            }
-        }
-        println!(
-            "jan_2024: wrote temperature in {} chunks",
-            (NLAT / CHUNK_LAT) * (NLON / CHUNK_LON)
-        );
-
-        // --- pressure: no chunk shape → chunk equals full shape ---
-        ds.define_array::<f64>(
-            "pressure",
-            vec!["lat".into(), "lon".into()],
-            vec![NLAT, NLON],
-            None,
-            None,
-        )
-        .await?;
-
-        // Write entire array in one call
-        let pressure = Array2::<f64>::from_elem([NLAT, NLON], 1013.25).into_dyn();
-        ds.write_array("pressure", vec![0, 0], pressure.view())
-            .await?;
-        println!("jan_2024: wrote pressure as single full-array write");
-
-        // --- time: 1-D hourly Unix timestamps ---
-        ds.define_array::<i64>("time", vec!["hour".into()], vec![NTIME], None, None)
-            .await?;
-
-        let base_ts: i64 = 1_704_067_200; // 2024-01-01 00:00 UTC
-        let time = Array1::from_iter((0..NTIME as i64).map(|h| base_ts + h * 3600)).into_dyn();
-        ds.write_array("time", vec![0], time.view()).await?;
-
-        // --- per-dataset attributes ---
-        ds.set_attribute("month", Attr::Int64(1))?;
-        ds.set_attribute("year", Attr::Int64(2024))?;
-        ds.set_attribute("station", Attr::String("KNMI".into()))?;
-        ds.set_attribute("has_qc", Attr::Bool(true))?;
-    }
-    s.flush().await?;
-    println!("jan_2024: flushed");
-
-    // ── Dataset 2: February 2024 ──────────────────────────────────────────────
-    //
-    // Arrays:
-    //   temperature  f32[8, 16]  chunked [4, 8]   – shares physical file with jan_2024
-    //   humidity     f32[8, 16]  chunk = full      – unique to this dataset
-
-    {
-        let mut ds = s.create_dataset("feb_2024").await?;
-
-        // temperature re-uses the same physical file as jan_2024 (keyed by dataset name inside)
         ds.define_array::<f32>(
-            "temperature",
+            "precipitation",
             vec!["lat".into(), "lon".into()],
-            vec![NLAT, NLON],
-            Some(vec![CHUNK_LAT, CHUNK_LON]),
-            None,
+            vec![LAT, LON],
+            Some(vec![8, 16]),
+            Some(FillValue::Float(0.0)),
         )
         .await?;
-
-        // Write the full grid in one call (still within the chunked array)
-        let feb_temp = Array2::<f32>::from_elem([NLAT, NLON], 5.0_f32).into_dyn();
-        ds.write_array("temperature", vec![0, 0], feb_temp.view())
-            .await?;
-        println!("feb_2024: wrote temperature (shared file with jan_2024)");
-
-        // humidity: unique to feb, unchunked
-        ds.define_array::<f32>(
-            "humidity",
-            vec!["lat".into(), "lon".into()],
-            vec![NLAT, NLON],
-            None,
-            None,
-        )
-        .await?;
-
-        let humidity = Array2::<f32>::from_elem([NLAT, NLON], 78.5_f32).into_dyn();
-        ds.write_array("humidity", vec![0, 0], humidity.view())
+        // Only the northern band is written; the rest reads back as the fill.
+        let band = ArrayD::from_shape_fn(IxDyn(&[8, LON]), |i| (i[1] % 7) as f32);
+        ds.write_array("precipitation", vec![0, 0], band.view())
             .await?;
 
-        ds.set_attribute("month", Attr::Int64(2))?;
-        ds.set_attribute("year", Attr::Int64(2024))?;
+        ds.set_attribute("month", Attr::Int64(month as i64));
+        ds.set_attribute("title", Attr::String(format!("2024-{month:02} monthly mean")));
+        ds.set_array_attribute("temperature", "units", Attr::String("celsius".into()))?;
+        ds.set_array_attribute("precipitation", "units", Attr::String("mm".into()))?;
+        ds.finish().await?;
+        println!("  wrote '{name}'");
     }
-    s.flush().await?;
-    println!("feb_2024: flushed");
 
-    // ── Dataset 3: sparse — only a time axis, no spatial grid ─────────────────
-
+    // A dataset with a different schema: the station table.
     {
-        let mut ds = s.create_dataset("station_obs").await?;
-
-        ds.define_array::<f64>("wind_speed", vec!["time".into()], vec![NTIME], None, None)
+        let mut ds = w.add_dataset("stations")?;
+        ds.define_array::<String>("name", vec!["station".into()], vec![3], None, None)
             .await?;
+        let names = Array1::from_vec(vec![
+            "Vlissingen".to_string(),
+            "Den Helder".to_string(),
+            "Terschelling".to_string(),
+        ])
+        .into_dyn();
+        ds.write_array("name", vec![0], names.view()).await?;
 
-        let wind = Array1::from_iter((0..NTIME).map(|i| 3.0 + (i as f64) * 0.1)).into_dyn();
-        ds.write_array("wind_speed", vec![0], wind.view()).await?;
-
-        ds.set_attribute("lat", Attr::Float64(52.1))?;
-        ds.set_attribute("lon", Attr::Float64(5.18))?;
-        ds.set_attribute("name", Attr::String("De Bilt".into()))?;
-    }
-    s.flush().await?;
-    println!("station_obs: flushed");
-
-    // ── Overview before reopening ─────────────────────────────────────────────
-
-    let mut datasets = s.list_datasets();
-    datasets.sort();
-    println!("\nDatasets      : {:?}", datasets);
-    println!("Physical arrays: {:?}", s.list_arrays());
-
-    // ── Reopen and read back ──────────────────────────────────────────────────
-
-    // Codec was saved in atlas.json — open() restores it without any argument.
-    println!("\n─── Reopening store ───────────────────────────────────────────");
-    let s2 = Atlas::open(store, prefix).await?;
-
-    // --- Read jan_2024 ---
-    let ds_jan = s2.open_dataset("jan_2024").await?;
-
-    println!("\njan_2024 attributes:");
-    for (k, v) in &ds_jan.attributes().await? {
-        println!("  {k} = {v:?}");
+        ds.define_array::<TimestampNs>(
+            "installed",
+            vec!["station".into()],
+            vec![3],
+            None,
+            Some(FillValue::TimestampNs(i64::MIN)),
+        )
+        .await?;
+        let installed = Array1::from_vec(vec![
+            TimestampNs(1_000_000_000_000_000_000),
+            TimestampNs(1_100_000_000_000_000_000),
+            TimestampNs(1_200_000_000_000_000_000),
+        ])
+        .into_dyn();
+        ds.write_array("installed", vec![0], installed.view()).await?;
+        ds.finish().await?;
+        println!("  wrote 'stations'");
     }
 
-    println!("\njan_2024 array schemas:");
-    let ds_schema = ds_jan.schema();
-    let mut array_names: Vec<&str> = ds_schema.arrays.keys().map(|s| s.as_str()).collect();
-    array_names.sort();
-    for name in &array_names {
-        let schema = &ds_schema.arrays[*name];
-        println!(
-            "  {name}: dtype={:?}  shape={:?}  chunk_shape={:?}  dims={:?}  codec={:?}",
-            schema.dtype, schema.shape, schema.chunk_shape, schema.dimension_names, schema.codec
-        );
+    w.finish().await?;
+
+    let size = store
+        .head(&prefix.clone().join("data.atlas"))
+        .await?
+        .size;
+    println!("  {} bytes at {prefix}/data.atlas\n", size);
+
+    // ── Read ─────────────────────────────────────────────────────────
+
+    println!("=== Reading ===");
+    let atlas = Atlas::open(Arc::clone(&store), prefix.clone()).await?;
+    println!("  datasets: {:?}", atlas.list_datasets());
+    println!("  arrays:   {:?}", atlas.list_arrays());
+
+    // Metadata for every dataset, still without fetching a single array byte.
+    for name in atlas.list_datasets() {
+        let ds = atlas.dataset(&name)?;
+        let shapes: Vec<String> = ds
+            .schema()
+            .arrays
+            .iter()
+            .map(|(array, schema)| format!("{array}{:?}", schema.shape))
+            .collect();
+        println!("  {name}: {}", shapes.join(", "));
     }
+    println!();
 
-    // Full read of temperature
-    let temp_full = ds_jan
-        .read_array::<f32>("temperature", vec![], vec![])
-        .await?
-        .unwrap();
-    println!("\njan_2024 temperature (full [{NLAT}×{NLON}]):");
-    println!("{temp_full:.1}");
+    // A 2x2 window out of a 32x64 grid. One chunk is fetched, not 16.
+    let jan = atlas.dataset("jan")?;
+    let window = jan
+        .read_array::<f32>("temperature", vec![10, 20], vec![2, 2])
+        .await?;
+    println!("  jan/temperature[10..12, 20..22] = {:?}", window.as_slice().unwrap());
 
-    // Partial read — one chunk region
-    let temp_chunk = ds_jan
-        .read_array::<f32>("temperature", vec![0, 0], vec![CHUNK_LAT, CHUNK_LON])
-        .await?
-        .unwrap();
-    println!("jan_2024 temperature chunk [0..{CHUNK_LAT}, 0..{CHUNK_LON}]:");
-    println!("{temp_chunk:.1}");
+    // Unwritten regions come back as the fill value, with no stored bytes.
+    let dry = jan
+        .read_array::<f32>("precipitation", vec![20, 0], vec![1, 4])
+        .await?;
+    println!("  jan/precipitation[20, 0..4] = {:?} (never written)", dry.as_slice().unwrap());
 
-    // Pressure — unchunked, full read
-    let pressure = ds_jan
-        .read_array::<f64>("pressure", vec![], vec![])
-        .await?
-        .unwrap();
-    println!(
-        "\njan_2024 pressure (full, unchunked — first value = {:.2})",
-        pressure[[0, 0]]
-    );
+    let stations = atlas.dataset("stations")?;
+    let names = stations.read_array::<String>("name", vec![], vec![]).await?;
+    println!("  stations: {:?}", names.as_slice().unwrap());
 
-    // Time — first 4 and last timestamp
-    let time = ds_jan
-        .read_array::<i64>("time", vec![], vec![])
-        .await?
-        .unwrap();
-    println!(
-        "jan_2024 time: first={}, last={}",
-        time[[0]],
-        time[[NTIME - 1]]
-    );
+    // ── Delete ───────────────────────────────────────────────────────
 
-    // --- Read feb_2024 ---
-    let ds_feb = s2.open_dataset("feb_2024").await?;
-    let feb_temp = ds_feb
-        .read_array::<f32>("temperature", vec![], vec![])
-        .await?
-        .unwrap();
-    println!(
-        "\nfeb_2024 temperature (first value = {:.1})",
-        feb_temp[[0, 0]]
-    );
-
-    let feb_hum = ds_feb
-        .read_array::<f32>("humidity", vec![], vec![])
-        .await?
-        .unwrap();
-    println!("feb_2024 humidity  (first value = {:.1})", feb_hum[[0, 0]]);
-
-    // --- Read station_obs ---
-    let ds_obs = s2.open_dataset("station_obs").await?;
-    println!("\nstation_obs attributes:");
-    for (k, v) in &ds_obs.attributes().await? {
-        println!("  {k} = {v:?}");
-    }
-    let wind = ds_obs
-        .read_array::<f64>("wind_speed", vec![0], vec![4])
-        .await?
-        .unwrap();
-    println!("station_obs wind_speed[0..4]: {wind:.2}");
-
-    // Verify the shared temperature file holds both datasets independently
-    let jan_val = ds_jan
-        .read_array::<f32>("temperature", vec![0, 0], vec![1, 1])
-        .await?
-        .unwrap();
-    let feb_val = ds_feb
-        .read_array::<f32>("temperature", vec![0, 0], vec![1, 1])
-        .await?
-        .unwrap();
-    assert_ne!(
-        jan_val[[0, 0]],
-        feb_val[[0, 0]],
-        "jan and feb share the file but hold independent data"
-    );
-    println!(
-        "\nShared 'temperature' file: jan[0,0]={:.1}  feb[0,0]={:.1}  (independent ✓)",
-        jan_val[[0, 0]],
-        feb_val[[0, 0]]
-    );
-
-    // Verify that schema dtype matches what we defined
-    assert_eq!(ds_schema.arrays["temperature"].dtype, DType::Float32);
-    assert_eq!(ds_schema.arrays["pressure"].dtype, DType::Float64);
-    assert_eq!(ds_schema.arrays["time"].dtype, DType::Int64);
-    println!("dtype assertions passed ✓");
-
-    // ── Statistics ────────────────────────────────────────────────────────────
-    //
-    // array_stats returns None until the first flush; after that the stats file
-    // is persisted alongside the .af file and reloaded on open.
-
-    println!("\n─── Statistics ────────────────────────────────────────────────");
-
-    fn fmt_stat(v: &Option<StatValue>) -> String {
-        match v {
-            None => "n/a".into(),
-            Some(StatValue::Float(f)) => format!("{f:.2}"),
-            Some(StatValue::Int(i)) => i.to_string(),
-            Some(StatValue::UInt(u)) => u.to_string(),
-            Some(StatValue::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
-            Some(StatValue::TimestampNs(t)) => t.to_string(),
-        }
-    }
-
-    for array_name in &array_names {
-        if let Some(stats) = ds_jan.array_stats(array_name).await {
-            println!(
-                "jan_2024 / {array_name}: rows={} nulls={}  min={}  max={}",
-                stats.row_count,
-                stats.null_count,
-                fmt_stat(&stats.min),
-                fmt_stat(&stats.max),
-            );
-        }
-    }
-
-    // feb shares the 'temperature' file but has its own stats entry
-    let feb_stats = ds_feb.array_stats("temperature").await.unwrap();
-    println!(
-        "feb_2024 / temperature: rows={}  min={}  max={}",
-        feb_stats.row_count,
-        fmt_stat(&feb_stats.min),
-        fmt_stat(&feb_stats.max),
-    );
-
-    // station_obs: wind_speed stats
-    let wind_stats = ds_obs.array_stats("wind_speed").await.unwrap();
-    println!(
-        "station_obs / wind_speed: rows={}  min={}  max={}",
-        wind_stats.row_count,
-        fmt_stat(&wind_stats.min),
-        fmt_stat(&wind_stats.max),
-    );
+    println!("\n=== Deleting 'feb' ===");
+    atlas.delete_dataset("feb").await?;
+    let after = Atlas::open(store, prefix).await?;
+    println!("  datasets now: {:?}", after.list_datasets());
 
     Ok(())
 }

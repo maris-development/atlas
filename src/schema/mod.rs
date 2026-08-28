@@ -1,17 +1,26 @@
-//! The types describing what a store holds: attribute values, array schemas,
-//! and the type-widening rules that reconcile them across datasets.
+//! What a collection holds, described without reference to where the bytes are.
 //!
-//! - [`attr`] — [`Attr`], atlas's public attribute value, and its mapping to
-//!   the `array_format` storage type
-//! - [`dtype`] — [`widen_dtype`] and the [`DTypeS`] serde wrapper
-//! - [`array`] — [`ArraySchema`]
+//! - [`attr`] — [`Attr`], the public attribute value
+//! - [`array`] — [`ArraySchema`] and [`FillValueS`]
+//! - [`dtype`] — serde support for `array_format`'s [`DType`](array_format::DType)
 
 mod array;
 mod attr;
 mod dtype;
 
-pub use array::ArraySchema;
-pub use attr::Attr;
-pub use dtype::DTypeS;
+use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
-pub(crate) use dtype::widen_dtype;
+pub use array::{ArraySchema, FillValueS};
+pub use attr::Attr;
+
+/// What one dataset holds: its named arrays, in definition order.
+///
+/// Attribute values are not here. They sit beside the schema in the container
+/// footer, so two datasets with the same arrays share one interned schema
+/// however differently they are annotated.
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DatasetSchema {
+    /// Array name to schema, in definition order.
+    pub arrays: IndexMap<String, ArraySchema>,
+}

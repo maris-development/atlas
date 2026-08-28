@@ -1,154 +1,109 @@
-//! Demonstrates how dozens of datasets can share the same physical array files.
+//! Many small datasets in one file.
 //!
-//! A fleet of sensors each record `readings` (f64) and `timestamps` (i64).
-//! Every dataset writes to the same two physical files — `readings/data.af` and
-//! `timestamps/data.af` — keyed by dataset name inside each file. The store
-//! holds only 2 physical arrays regardless of how many sensors exist.
+//! A fleet of sensors, one dataset each. In a directory-per-dataset layout this
+//! would be hundreds of small objects; here it is a single `data.atlas`, and
+//! listing the fleet costs one range read no matter how many sensors there are.
 //!
-//! This example uses `Codec::Lz4` — a good choice for read-heavy analytics
-//! workloads because LZ4 decompresses faster than Zstd at the cost of slightly
-//! larger files. The codec is persisted in `atlas.json`, so `open` picks
-//! it up automatically without any extra argument.
+//! The example also shows what interning buys: every sensor declares the same
+//! two arrays, so the footer stores that schema once and each dataset just
+//! points at it.
 //!
-//! After writing, we scan stats across all sensors to find the one with the
-//! highest peak reading without loading any raw data.
+//! Run with: `cargo run --example sensor_fleet`
 
-use std::sync::Arc;
-
-use atlas::{Atlas, Attr, Codec, StatValue, StoreConfig};
+use atlas::{Atlas, AtlasWriter, Attr, Codec, WriterConfig};
 use ndarray::Array1;
-use object_store::{local::LocalFileSystem, path::Path};
 
-const N_SENSORS: usize = 8;
+const N_SENSORS: usize = 24;
 const N_READINGS: usize = 24; // one per hour
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let store: Arc<dyn object_store::ObjectStore> = Arc::new(LocalFileSystem::new());
-    let prefix = Path::from_absolute_path(tmp.path())?;
 
-    // LZ4 decompresses faster than Zstd — well suited for reading many dataset
-    // entries in a tight stats-scan loop. The codec is stored in atlas.json
-    // so Atlas::open() restores it without any extra argument.
-    let mut s = Atlas::create(
-        store.clone(),
-        prefix.clone(),
-        StoreConfig {
+    // LZ4 decompresses faster than Zstd at the cost of larger files, which
+    // suits a read-heavy collection. Blocks record the codec, so a reader is
+    // never told which was used.
+    let mut w = AtlasWriter::create_path(
+        tmp.path(),
+        WriterConfig {
             codec: Codec::Lz4,
             ..Default::default()
         },
     )
     .await?;
 
-    // ── Write one dataset per sensor ──────────────────────────────────────────
+    println!("=== Writing {N_SENSORS} sensors ===");
+    for sensor in 0..N_SENSORS {
+        let mut ds = w.add_dataset(&format!("sensor-{sensor:03}"))?;
 
-    let base_ts: i64 = 1_700_000_000;
+        ds.define_array::<f64>("readings", vec!["hour".into()], vec![N_READINGS], None, None)
+            .await?;
+        // A rough daily curve, offset per sensor.
+        let readings = Array1::from_shape_fn(N_READINGS, |h| {
+            20.0 + (h as f64 / 4.0).sin() * 5.0 + sensor as f64 * 0.1
+        })
+        .into_dyn();
+        ds.write_array("readings", vec![0], readings.view()).await?;
 
-    for i in 0..N_SENSORS {
-        let name = format!("sensor_{i:02}");
-        let mut ds = s.create_dataset(&name).await?;
+        ds.define_array::<i64>("timestamps", vec!["hour".into()], vec![N_READINGS], None, None)
+            .await?;
+        let base = 1_700_000_000i64;
+        let timestamps =
+            Array1::from_shape_fn(N_READINGS, |h| base + (h as i64) * 3_600).into_dyn();
+        ds.write_array("timestamps", vec![0], timestamps.view())
+            .await?;
 
-        // readings: f64, one reading per hour
-        ds.define_array::<f64>(
-            "readings",
-            vec!["hour".into()],
-            vec![N_READINGS],
-            None,
-            None,
-        )
-        .await?;
-
-        // Give each sensor a distinct baseline so stats differ across the fleet
-        let baseline = 20.0 + i as f64 * 3.0;
-        let values: Vec<f64> = (0..N_READINGS)
-            .map(|h| baseline + (h as f64 * 0.5).sin() * 5.0)
-            .collect();
-        let arr = Array1::from_vec(values).into_dyn();
-        ds.write_array("readings", vec![0], arr.view()).await?;
-
-        // timestamps: i64, shared physical file with all other sensors
-        ds.define_array::<i64>(
-            "timestamps",
-            vec!["hour".into()],
-            vec![N_READINGS],
-            None,
-            None,
-        )
-        .await?;
-
-        let ts = Array1::from_iter((0..N_READINGS as i64).map(|h| base_ts + h * 3600)).into_dyn();
-        ds.write_array("timestamps", vec![0], ts.view()).await?;
-
-        ds.set_attribute("sensor_id", Attr::Int64(i as i64))?;
-        ds.set_attribute("unit", Attr::String("°C".into()))?;
-    }
-    s.flush().await?;
-
-    // ── Two physical files, N_SENSORS logical datasets ────────────────────────
-
-    let datasets = s.list_datasets().len();
-    let arrays = s.list_arrays();
-    println!("Logical datasets : {datasets}");
-    println!("Physical arrays  : {:?}", arrays);
-    println!("  → {N_SENSORS} datasets share {} files", arrays.len());
-
-    // ── Reopen and scan stats without loading raw data ────────────────────────
-
-    println!("\n─── Per-sensor stats (from stats file, no raw I/O) ────────────");
-
-    // Codec is read from atlas.json — no StoreConfig needed on reopen.
-    let s2 = Atlas::open(store, prefix).await?;
-
-    let mut peak_sensor = String::new();
-    let mut peak_max = f64::NEG_INFINITY;
-    let mut peak_min = f64::INFINITY;
-
-    let mut dataset_names: Vec<String> = s2.list_datasets().iter().map(|s| s.to_string()).collect();
-    dataset_names.sort();
-
-    for name in &dataset_names {
-        let ds = s2.open_dataset(name).await?;
-        let stats = ds.array_stats("readings").await.unwrap();
-
-        let (lo, hi) = match (&stats.min, &stats.max) {
-            (Some(StatValue::Float(lo)), Some(StatValue::Float(hi))) => (*lo, *hi),
-            _ => continue,
-        };
-
-        println!(
-            "  {name}: min={lo:.2}  max={hi:.2}  rows={}",
-            stats.row_count
+        ds.set_attribute("sensor_id", Attr::Int64(sensor as i64));
+        ds.set_attribute(
+            "site",
+            Attr::String(if sensor % 2 == 0 { "north" } else { "south" }.into()),
         );
+        ds.set_array_attribute("readings", "units", Attr::String("celsius".into()))?;
+        ds.finish().await?;
+    }
+    w.finish().await?;
 
-        if hi > peak_max {
-            peak_max = hi;
-            peak_min = lo;
-            peak_sensor = name.clone();
+    let size = std::fs::metadata(tmp.path().join("data.atlas"))?.len();
+    println!("  one file, {size} bytes, {N_SENSORS} datasets\n");
+
+    // ── Scanning the fleet without reading any data ──────────────────
+
+    let atlas = Atlas::open_path(tmp.path()).await?;
+    println!("=== Metadata scan (no array bytes fetched) ===");
+    println!("  datasets: {}", atlas.dataset_count());
+    println!("  distinct arrays: {:?}", atlas.list_arrays());
+
+    // Attributes come from the footer, so filtering the fleet by site is free.
+    let mut north = Vec::new();
+    for name in atlas.list_datasets() {
+        let ds = atlas.dataset(&name)?;
+        if ds.get_attribute("site") == Some(Attr::String("north".into())) {
+            north.push(name);
         }
     }
+    println!("  {} sensors at the north site", north.len());
 
-    println!("\nHighest peak: {peak_sensor}  max={peak_max:.2}  min={peak_min:.2}");
+    // Every sensor shares one interned schema.
+    let first = atlas.dataset("sensor-000")?;
+    let last = atlas.dataset(&format!("sensor-{:03}", N_SENSORS - 1))?;
+    println!(
+        "  schemas identical across the fleet: {}\n",
+        first.schema() == last.schema()
+    );
 
-    // ── Verify the timestamps array is the same across all sensors ────────────
+    // ── Reading one sensor ───────────────────────────────────────────
 
-    println!("\n─── Timestamp consistency check ───────────────────────────────");
+    println!("=== Reading one sensor ===");
+    let ds = atlas.dataset("sensor-007")?;
+    let readings = ds.read_array::<f64>("readings", vec![], vec![]).await?;
+    let peak = readings.iter().cloned().fold(f64::MIN, f64::max);
+    println!("  sensor-007 peak reading: {peak:.2}");
 
-    let ds0 = s2.open_dataset("sensor_00").await?;
-    let ts0 = ds0
-        .read_array::<i64>("timestamps", vec![], vec![])
-        .await?
-        .unwrap();
-
-    let ds7 = s2.open_dataset("sensor_07").await?;
-    let ts7 = ds7
-        .read_array::<i64>("timestamps", vec![], vec![])
-        .await?
-        .unwrap();
-
-    assert_eq!(ts0, ts7, "timestamps are identical across sensors");
-    println!("sensor_00 and sensor_07 share identical timestamps ✓");
-    println!("first={} last={}", ts0[[0]], ts0[[N_READINGS - 1]]);
+    // Only the last six hours, which is a sub-region of the array.
+    let tail = ds
+        .read_array::<f64>("readings", vec![N_READINGS - 6], vec![6])
+        .await?;
+    println!("  last six hours: {:?}", tail.as_slice().unwrap());
 
     Ok(())
 }

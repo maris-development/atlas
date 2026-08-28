@@ -1,110 +1,108 @@
 #![warn(missing_docs)]
 
-//! ATLAS (Aggregated Tensor Large Array Store) is a directory-based store for thousands of named datasets.
+//! ATLAS (Aggregated Tensor Large Array Store) keeps thousands of named
+//! datasets in a single immutable file.
 //!
-//! Each dataset is a virtual collection of named N-dimensional arrays with per-dataset and
-//! per-array attributes, backed by the `array-format` crate. Datasets sharing an array name
-//! are co-located in the same physical file, keyed by dataset name.
+//! A dataset is a set of named N-dimensional arrays with attributes, the shape
+//! an xarray `Dataset` or a NetCDF file has. A collection holds many of them.
 //!
-//! # Layout
+//! # The format in one paragraph
+//!
+//! A collection is one write-once file, `data.atlas`. Each dataset occupies a
+//! contiguous segment; a footer at the end records every dataset's name,
+//! schema, attributes, and segment byte range. Opening reads the footer, so
+//! every metadata question is answered by one range read however large the
+//! collection is. Array data is fetched chunk by chunk, only when asked for.
 //!
 //! ```text
-//! my_store/
-//! ├── atlas.json          <- interned per-dataset schema + attribute-key namespace
-//! ├── _global/
-//! │   └── data.af         <- dataset-level (global) attribute VALUES, one entry per dataset
-//! ├── temperature/
-//! │   └── data.af         <- ArrayFile: one entry per dataset + per-variable attribute VALUES
-//! └── latitude/
-//!     └── data.af
+//! my_collection/
+//! ├── data.atlas      ATLS | segment | segment | ... | footer | trailer
+//! └── deleted.mask    optional: ordinals of deleted datasets
 //! ```
 //!
-//! `atlas.json` stores only the *schema* of the collection — each distinct
-//! per-dataset schema once (interned), the attribute-key namespace, and a
-//! collection-wide **merged schema** (every unique array/attribute with its
-//! type widened across datasets; see [`Atlas::merged_schema`]). All attribute
-//! *values* live in the `.af` files: per-variable attributes on the variable's
-//! own file, and dataset-level attributes in the reserved `_global` file.
+//! # Immutability
 //!
-//! Declaring the same array name (or attribute key) in two datasets with
-//! incompatible types is rejected — types may only widen within numeric types
-//! or between string and timestamp.
+//! A collection cannot be changed once written. There is no append, no
+//! in-place update, and no compaction: to change a dataset you rewrite the
+//! whole collection. The single exception is [`Atlas::delete_dataset`], which
+//! adds an ordinal to a small mask sidecar and leaves the container alone.
 //!
-//! # Quick start
+//! That constraint is what makes the format simple. There are no delta layers
+//! to resolve, no tombstones inside the data, and no ordinal that shifts under
+//! a reader. A segment is a complete, self-describing `array-format` file: you
+//! can cut one out of the container with `dd` and open it on its own.
+//!
+//! # Writing
 //!
 //! ```
-//! use atlas::{Atlas, Attr, StoreConfig};
+//! use atlas::{Atlas, AtlasWriter, Attr, WriterConfig};
 //! use ndarray::Array2;
 //!
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
 //! let tmp = tempfile::tempdir().unwrap();
 //!
-//! // Create — codec persists in atlas.json so `open_path` doesn't need it.
-//! let mut s = Atlas::create_path(tmp.path(), StoreConfig::default()).await.unwrap();
+//! let mut w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+//!     .await
+//!     .unwrap();
 //! {
-//!     let mut ds = s.create_dataset("jan_2024").await.unwrap();
+//!     let mut ds = w.add_dataset("jan_2024").unwrap();
 //!     ds.define_array::<f32>(
 //!         "temperature",
 //!         vec!["lat".into(), "lon".into()],
 //!         vec![4, 8],
-//!         None,        // chunk_shape — defaults to full shape (one chunk)
-//!         None,        // fill_value
-//!     ).await.unwrap();
+//!         None, // chunk_shape: defaults to the full shape, one chunk
+//!         None, // fill_value
+//!     )
+//!     .await
+//!     .unwrap();
 //!     let data = Array2::<f32>::from_elem([4, 8], 20.0).into_dyn();
 //!     ds.write_array("temperature", vec![0, 0], data.view()).await.unwrap();
-//!     ds.set_attribute("month", Attr::Int64(1)).unwrap();
+//!     ds.set_attribute("month", Attr::Int64(1));
+//!     ds.finish().await.unwrap();
 //! }
-//! s.flush().await.unwrap();   // single durability boundary
+//! w.finish().await.unwrap();
 //!
-//! // Reopen — no config needed.
-//! let s2 = Atlas::open_path(tmp.path()).await.unwrap();
-//! let ds2 = s2.open_dataset("jan_2024").await.unwrap();
-//! let temp = ds2.read_array::<f32>("temperature", vec![], vec![]).await.unwrap().unwrap();
-//! assert_eq!(temp.shape(), &[4, 8]);
+//! // Reading. Opening touches only the footer.
+//! let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+//! assert_eq!(atlas.list_datasets(), vec!["jan_2024".to_string()]);
+//!
+//! let ds = atlas.dataset("jan_2024").unwrap();
+//! assert_eq!(ds.array_meta("temperature").unwrap().shape, vec![4, 8]);
+//! assert_eq!(ds.get_attribute("month"), Some(Attr::Int64(1)));
+//!
+//! // Only this line fetches array bytes.
+//! let temp = ds.read_array::<f32>("temperature", vec![], vec![]).await.unwrap();
 //! assert_eq!(temp[[0, 0]], 20.0);
 //! # });
 //! ```
 //!
 //! # Thread safety
 //!
-//! `Atlas` and `DatasetView` are `Send + Sync`. Each physical array file
-//! is guarded by a `tokio::sync::RwLock`: concurrent reads (`read_array`,
-//! `array_stats`) proceed in parallel without contention, while writes
-//! (`write_array`, `define_array`, `flush`, `compact`, …) take an exclusive
-//! lock. The cache map uses a `parking_lot::RwLock` that is never held across
-//! an `await` point.
+//! [`Atlas`] and [`DatasetView`] are `Send + Sync`, and reads never block one
+//! another: the data is immutable, so there is nothing to lock. Segment handles
+//! open once through a `OnceCell` and are shared, as is the block cache.
 //!
-//! # Durability
+//! [`AtlasWriter`] is single-threaded by construction: [`add_dataset`] borrows
+//! it mutably, because segments are appended to one stream in order.
 //!
-//! `atlas.json` is loaded **once** when the store is opened or created; from
-//! then on every schema mutation (`create_dataset`, `define_array`, …) only
-//! touches the in-memory `StoreMeta`. Attribute writes (`set_attribute`,
-//! `set_array_attribute`) are buffered in memory too. The store does **not**
-//! persist until [`Atlas::flush`] is called, which drains buffered attributes
-//! into the `.af` files and rewrites `atlas.json`. Dropping an `Atlas` without
-//! flushing abandons every pending in-memory write.
+//! [`add_dataset`]: AtlasWriter::add_dataset
 
-mod array;
 mod config;
-mod dataset;
 mod error;
-mod meta;
-mod pruning;
+mod format;
+mod reader;
 mod schema;
-mod store;
+mod writer;
 
-pub use config::{Codec, MetaFormat, StoreConfig, TypeMismatchPolicy};
-pub use dataset::DatasetView;
+pub use config::{Codec, WriterConfig};
 pub use error::{Error, Result};
-pub use meta::{DatasetSchema, MergedArray, MergedSchema};
-pub use pruning::{ColumnKey, ColumnSummary, ColumnView, PruningIndex, StatColumn, StatVal};
-pub use store::Atlas;
+pub use reader::{Atlas, DatasetView};
+pub use schema::{ArraySchema, Attr, DatasetSchema, FillValueS};
+pub use writer::{AtlasWriter, DatasetWriter};
 
-pub use array_format::{
-    ArrayElement, ArrayStats, DType, DeltaCache, FillValue, MergedArrayMeta, StatValue, TimestampNs,
-};
-pub use schema::{ArraySchema, Attr, DTypeS};
+pub use array_format::{ArrayElement, DType, DeltaCache, FillValue, TimestampNs};
 
+/// Rejects names that would be ambiguous or unsafe as path components.
 pub(crate) fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() || name.starts_with('_') || name.contains('/') || name == ".." || name == "."
     {
@@ -116,28 +114,6 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn create_and_read_dataset() {
-        let tmp = tempfile::tempdir().unwrap();
-
-        {
-            let mut atlas = Atlas::create_path(tmp.path(), StoreConfig::default())
-                .await
-                .unwrap();
-            {
-                let mut view = atlas.create_dataset("ds").await.unwrap();
-                view.define_array::<f32>("temp", vec!["x".into()], vec![4], None, None)
-                    .await
-                    .unwrap();
-            }
-            atlas.flush().await.unwrap();
-        }
-
-        let atlas = Atlas::open_path(tmp.path()).await.unwrap();
-        let view = atlas.open_dataset("ds").await.unwrap();
-        assert_eq!(view.list_arrays(), vec!["temp".to_string()]);
-    }
 
     #[test]
     fn valid_names_pass() {
@@ -183,19 +159,17 @@ mod send_check {
     fn _assert_send<T: Send>() {}
     fn _assert_sync<T: Sync>() {}
     #[test]
-    fn store_send() {
+    fn atlas_is_send_and_sync() {
         _assert_send::<Atlas>();
-    }
-    #[test]
-    fn view_send() {
-        _assert_send::<DatasetView>();
-    }
-    #[test]
-    fn store_sync() {
         _assert_sync::<Atlas>();
     }
     #[test]
-    fn view_sync() {
+    fn view_is_send_and_sync() {
+        _assert_send::<DatasetView>();
         _assert_sync::<DatasetView>();
+    }
+    #[test]
+    fn writer_is_send() {
+        _assert_send::<AtlasWriter>();
     }
 }
