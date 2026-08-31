@@ -1014,18 +1014,6 @@ async fn an_empty_directory_is_not_a_collection() {
 }
 
 #[tokio::test]
-async fn an_atlas_014_store_says_so() {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::write(tmp.path().join("atlas.json"), br#"{"version":3}"#).unwrap();
-    match Atlas::open_path(tmp.path()).await {
-        Err(Error::NotAnAtlasCollection { hint }) => {
-            assert!(hint.contains("0.14"), "unhelpful hint: {hint}");
-        }
-        other => panic!("expected a hinted rejection, got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn a_foreign_file_named_data_atlas_is_rejected() {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::write(tmp.path().join("data.atlas"), vec![0u8; 4096]).unwrap();

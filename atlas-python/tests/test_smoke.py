@@ -372,12 +372,6 @@ def test_opening_an_empty_directory_fails_clearly(tmp_path):
         atlas.Atlas.open(str(tmp_path))
 
 
-def test_opening_an_atlas_014_store_says_so(tmp_path):
-    (tmp_path / "atlas.json").write_text('{"version": 3}')
-    with pytest.raises(ValueError, match="0.14"):
-        atlas.Atlas.open(str(tmp_path))
-
-
 def test_a_damaged_mask_is_reported(tmp_path):
     build(tmp_path)
     (tmp_path / "deleted.mask").write_bytes(b"not a mask at all")

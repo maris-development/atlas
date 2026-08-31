@@ -96,8 +96,8 @@ view.get_attribute("when")        # 1700000000000000000
 view.get_attribute("looks_like")  # '2023-11-14T22:13:20Z'  — still a string
 ```
 
-Atlas 0.14 encoded timestamps as RFC 3339 strings and turned any string that
-parsed as one back into a timestamp. That guess is gone.
+Nothing has to guess at a date-shaped string, because the type is carried on
+the wire rather than inferred from the value.
 
 ## Complex values from xarray
 

@@ -22,12 +22,6 @@ datasets may both declare `temperature`; those are separate arrays that happen
 to share a name. Nothing is shared between them — not bytes, not schema
 identity beyond interning, not dimensions.
 
-> This is the sharpest break from atlas 0.14, where a physical file was keyed by
-> array *name* and every dataset that used that name wrote an entry into it. That
-> layout made array-name normalization load-bearing: datasets inventing unique
-> variable names produced one small file each and exhausted file descriptors.
-> A single container removes the whole concern.
-
 ## Ordinals
 
 A dataset's position in the footer is its **ordinal**, assigned in write order
@@ -76,12 +70,9 @@ bindings. All of them round-trip in the footer as *attribute* values.
 
 Two datasets may declare the same array name with unrelated types — `int32` in
 one, `string` in another — and both are stored as declared. There is no merged
-schema, no widening, and no mismatch policy.
-
-Atlas 0.14 had all three, because it co-located same-named arrays in one
-physical file and had to agree on a type. With one segment per dataset there is
-nothing to reconcile. A reader that wants a collection-wide view builds it from
-the per-dataset schemas, which are all in the footer.
+schema, no widening, and no mismatch policy: with one segment per dataset there
+is nothing to reconcile. A reader that wants a collection-wide view builds it
+from the per-dataset schemas, which are all in the footer.
 
 ## Attributes
 
@@ -99,14 +90,13 @@ beyond the open. See [format.md](format.md#attributes-live-here-not-in-the-segme
 
 ### Timestamps are a real type
 
-`Attr::TimestampNanoseconds` has its own wire tag. In 0.14 timestamps were
-stored as RFC 3339 strings and recovered by trying to parse every string back,
-which meant a string that looked like a date silently became a timestamp. That
-guess is gone: a string stays a string.
+`Attr::TimestampNanoseconds` has its own wire tag, so nothing has to guess at a
+date-shaped string. An RFC 3339 string round-trips as a string; a timestamp
+round-trips as a timestamp.
 
 ## What a collection cannot do
 
-Worth stating plainly, since each of these existed in 0.14:
+Worth stating plainly:
 
 | Not available | Instead |
 |---|---|

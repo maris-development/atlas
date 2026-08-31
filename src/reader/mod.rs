@@ -27,7 +27,7 @@ use tracing::debug;
 use crate::config::{DEFAULT_CACHE_CAPACITY, DEFAULT_IO_CACHE_CAPACITY};
 use crate::format::footer::{CollectionFooter, DatasetEntry};
 use crate::format::segment_store::SegmentStore;
-use crate::format::{self, DATA_FILE, LEGACY_META_FILE, MASK_FILE, child, mask};
+use crate::format::{self, DATA_FILE, MASK_FILE, child, mask};
 use crate::schema::{ArraySchema, Attr, DatasetSchema};
 use crate::{Error, Result};
 
@@ -55,7 +55,9 @@ impl Atlas {
         let size = match store.head(&data_path).await {
             Ok(meta) => meta.size,
             Err(object_store::Error::NotFound { .. }) => {
-                return Err(Self::missing_container_error(&store, &prefix).await);
+                return Err(Error::NotAnAtlasCollection {
+                    hint: format!("no '{DATA_FILE}' under this prefix"),
+                });
             }
             Err(e) => return Err(Error::ObjectStore(e)),
         };
@@ -148,23 +150,6 @@ impl Atlas {
             Ok(r) => mask::decode(&r.bytes().await?, dataset_count),
             Err(object_store::Error::NotFound { .. }) => Ok(BTreeSet::new()),
             Err(e) => Err(Error::ObjectStore(e)),
-        }
-    }
-
-    /// Builds the error for a prefix with no `data.atlas`, naming the 0.14
-    /// layout when that is what is actually there.
-    async fn missing_container_error(store: &Arc<dyn ObjectStore>, prefix: &OsPath) -> Error {
-        let legacy = child(prefix, LEGACY_META_FILE);
-        if store.head(&legacy).await.is_ok() {
-            return Error::NotAnAtlasCollection {
-                hint: format!(
-                    "found '{LEGACY_META_FILE}' instead of '{DATA_FILE}': this is an atlas 0.14 \
-                     store, whose format this build cannot read (rewrite it with atlas 0.15)"
-                ),
-            };
-        }
-        Error::NotAnAtlasCollection {
-            hint: format!("no '{DATA_FILE}' under this prefix"),
         }
     }
 

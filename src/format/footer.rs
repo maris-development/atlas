@@ -235,8 +235,8 @@ impl CollectionFooter {
 /// Serde mirror of [`Attr`].
 ///
 /// [`Attr`] is the public type and carries no serde impl of its own; this is
-/// its wire form. Unlike the 0.14 store, timestamps have their own tag, so an
-/// RFC 3339 string stays a string on the way back.
+/// its wire form. Timestamps carry their own tag, so a string that happens to
+/// look like a date stays a string on the way back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum AttrS {
     Bool(bool),
@@ -453,8 +453,8 @@ mod tests {
 
     #[test]
     fn rfc3339_strings_stay_strings() {
-        // The 0.14 store encoded timestamps as RFC 3339 and guessed on read.
-        // A dedicated tag removes the guess.
+        // Timestamps have a tag of their own, so nothing has to guess at a
+        // date-shaped string.
         let v = Attr::String("2023-11-14T22:13:20Z".into());
         let back: Attr = AttrS::from(v.clone()).into();
         assert_eq!(back, v);

@@ -112,10 +112,9 @@ Every attribute value — dataset-level and per-array — is in the footer.
 Segments carry none. That means a metadata-only open answers every attribute
 question with zero further I/O, which is exactly what the Python reader does.
 
-It also means timestamps keep their own tag. The 0.14 store had no timestamp
-attribute type and encoded them as RFC 3339 strings, then guessed on read;
-a string that happened to look like a date came back as a timestamp. `AttrS`
-has a `TimestampNanoseconds` variant, so that guess is gone.
+It also means timestamps keep their own tag. `AttrS` has a
+`TimestampNanoseconds` variant, so nothing has to guess at a date-shaped
+string: an RFC 3339 string is a string, and a timestamp is a timestamp.
 
 ### Schema is recorded twice
 

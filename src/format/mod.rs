@@ -55,10 +55,6 @@ pub(crate) const DATA_FILE: &str = "data.atlas";
 /// Deletion-mask object name under the collection prefix.
 pub(crate) const MASK_FILE: &str = "deleted.mask";
 
-/// Metadata object of an atlas 0.14 store. Probed only to give a better error
-/// when someone opens an old store with this build.
-pub(crate) const LEGACY_META_FILE: &str = "atlas.json";
-
 /// How many trailing bytes to read speculatively when opening. Sized so the
 /// footer of a small or medium collection arrives in the same request as the
 /// trailer.

@@ -225,9 +225,9 @@ footer is compact MessagePack, so field order is part of the format.
    version.
 3. Update [docs/format.md](docs/format.md) — it is a specification, not a
    summary.
-4. Note it in [docs/migration.md](docs/migration.md).
 
-There is no in-place migration path by design. Collections are rewritten.
+There is no migration path, by design. A collection that predates the change is
+rewritten, not upgraded.
 
 ---
 

@@ -100,7 +100,7 @@ pub use reader::{Atlas, DatasetView};
 pub use schema::{ArraySchema, Attr, DatasetSchema, FillValueS};
 pub use writer::{AtlasWriter, DatasetWriter};
 
-pub use array_format::{ArrayElement, DType, DeltaCache, FillValue, TimestampNs};
+pub use array_format::{ArrayElement, DType, FillValue, TimestampNs};
 
 /// Rejects names that would be ambiguous or unsafe as path components.
 pub(crate) fn validate_name(name: &str) -> Result<()> {

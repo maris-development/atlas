@@ -13,7 +13,6 @@ Read in this order:
 | 4 | [write-path.md](write-path.md) | How a collection is built |
 | 5 | [read-path.md](read-path.md) | How one is read, and what it costs |
 | 6 | [python-xarray.md](python-xarray.md) | The Python bindings and the xarray mapping |
-| 7 | [migration.md](migration.md) | Moving a 0.14 store to 0.15 |
 
 ## The one idea
 

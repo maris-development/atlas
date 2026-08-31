@@ -43,12 +43,10 @@ should leave it alone.
 
 ## What is not configurable
 
-Atlas 0.14 had `meta_format` (json / msgpack) and `meta_compression`, encoded in
-the metadata filename. Both are gone. The collection footer has exactly one wire
-format — MessagePack, zstd-compressed — pinned by the format version.
-
-There is one fewer decision to make, one fewer combination to test, and no way
-for a reader to guess wrong.
+The collection footer has exactly one wire format — MessagePack,
+zstd-compressed — pinned by the format version. There is no metadata-format or
+metadata-compression knob: one decision fewer to make, one combination fewer to
+test, and no way for a reader to guess wrong.
 
 ## Measuring
 

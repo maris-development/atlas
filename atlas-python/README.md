@@ -141,12 +141,6 @@ in the repository.
 [codecs]: https://maris-development.github.io/atlas/guides/codecs/
 [cloud storage]: https://maris-development.github.io/atlas/guides/cloud-storage/
 
-## Migrating from 0.14
-
-0.15 cannot read a 0.14 store — the layouts share no bytes. Migration means
-reading with 0.14 and writing with 0.15, in two environments. See
-[docs/migration.md](https://github.com/maris-development/atlas/blob/main/docs/migration.md).
-
 ## License
 
 Apache-2.0. See [LICENSE](https://github.com/maris-development/atlas/blob/main/LICENSE).

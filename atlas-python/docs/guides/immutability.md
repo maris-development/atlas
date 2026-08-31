@@ -5,10 +5,8 @@ means in practice, because it is the constraint everything else follows from.
 
 ## There is no flush
 
-Atlas 0.14 had a durability boundary: writes accumulated in memory, and
-`flush()` was the moment they reached disk. That concept is gone. A collection
-is a single file that either has a valid trailer or does not exist as a
-collection at all.
+There is no durability boundary to reason about. A collection is a single file
+that either has a valid trailer or does not exist as a collection at all.
 
 ```python
 with atlas.AtlasWriter.create(path) as w:

@@ -41,8 +41,7 @@ in memory.
 > **Architecture?** [`docs/`](docs/) walks through it —
 > [architecture](docs/architecture.md), [data model](docs/data-model.md),
 > [the format](docs/format.md), [write path](docs/write-path.md),
-> [read path](docs/read-path.md), [Python/xarray](docs/python-xarray.md), and
-> [migration from 0.14](docs/migration.md).
+> [read path](docs/read-path.md), and [Python/xarray](docs/python-xarray.md).
 
 ---
 
