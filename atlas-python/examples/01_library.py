@@ -48,7 +48,11 @@ def main() -> None:
         # One dataset per file, named after the file stem. Nothing is
         # readable until every file is written and the footer lands.
         print("Files to ingest:", [p.name for p in atlas.find_netcdf_files(source)])
-        result = atlas.create(source, collection)
+        # Files are opened with dask chunking, so one far larger than memory
+        # would stream block by block. `chunk_size` is the block budget, and
+        # roughly the memory ceiling per variable. These files are tiny, so
+        # every array still lands as a single chunk.
+        result = atlas.create(source, collection, chunk_size="64MiB")
         print(f"created {result['dataset_count']} datasets\n")
 
         # ── 2. list ──────────────────────────────────────────────────

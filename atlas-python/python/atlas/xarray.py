@@ -259,27 +259,58 @@ def _contiguous(a: np.ndarray) -> np.ndarray:
     return a.copy(order="C")
 
 
-# Tuned for the "many small NetCDF chunks" case. batch_size controls how many
-# dask blocks ride one scheduler invocation (lower dask plumbing overhead);
-# prefetch_depth bounds peak memory at batch_size * prefetch_depth chunks.
-_DEFAULT_BATCH_SIZE = 8
+# Batching exists for the "many small NetCDF chunks" case: it collapses N dask
+# scheduler invocations into N/batch_size. But batching by *count* would be
+# ruinous for large blocks — eight 128 MiB blocks per batch, two batches in
+# flight, is 2 GiB resident. So the batch is sized by bytes instead, and the
+# count is only a ceiling.
+_MAX_BATCH_SIZE = 8
 _DEFAULT_PREFETCH_DEPTH = 2
+
+# Bytes a batch aims for. Peak resident work is roughly
+# `prefetch_depth * max(_BATCH_BYTE_BUDGET, one block)`, so a variable chunked
+# at 128 MiB costs two blocks in flight, not sixteen.
+_BATCH_BYTE_BUDGET = 64 * 1024 * 1024
+
+
+def _block_nbytes(arr: Any) -> int:
+    """Bytes in the largest block of a dask array.
+
+    Object arrays (strings) report the pointer size, which understates the real
+    payload — but those arrays are small in practice, and the floor below keeps
+    the batch sane either way.
+    """
+    largest = 1
+    for sizes in arr.chunks:
+        largest *= max(sizes) if sizes else 1
+    return max(1, largest * max(1, arr.dtype.itemsize))
+
+
+def _batch_size_for(arr: Any) -> int:
+    """How many blocks to compute per scheduler call.
+
+    Enough to amortise dask's overhead on small blocks, never enough to hold an
+    unreasonable amount of a large variable in memory.
+    """
+    return max(1, min(_MAX_BATCH_SIZE, _BATCH_BYTE_BUDGET // _block_nbytes(arr)))
 
 
 def _iter_blocks(
     arr: Any,
     var_name: str = "",
-    batch_size: int = _DEFAULT_BATCH_SIZE,
+    batch_size: Optional[int] = None,
     prefetch_depth: int = _DEFAULT_PREFETCH_DEPTH,
 ) -> Iterator[tuple[list[int], np.ndarray]]:
     """Yield ``(start_index, block_np)`` for each chunk in `arr`.
 
     Numpy-backed inputs are yielded as one full-shape block. Dask-backed inputs
-    are prefetched in batches: a single background thread runs
-    ``dask.compute(*K)`` on the next ``batch_size`` blocks while the main thread
-    consumes already-materialised blocks, capping in-flight work at
-    ``prefetch_depth`` batches. This collapses N per-chunk dask scheduler
-    invocations into N/batch_size, and overlaps NetCDF I/O with atlas writes.
+    are prefetched: a single background thread runs ``dask.compute(*K)`` on the
+    next batch while the main thread consumes already-materialised blocks, so
+    NetCDF reads overlap atlas writes.
+
+    The batch is sized by bytes (see :data:`_BATCH_BYTE_BUDGET`), so peak
+    memory tracks the block size rather than the block count. Pass
+    ``batch_size`` to override.
 
     Emits one ``event=dask_compute`` debug event per fulfilled batch via the
     Rust tracing subscriber (see ``log_chunk_event``).
@@ -290,6 +321,9 @@ def _iter_blocks(
         return
 
     import dask
+
+    if batch_size is None:
+        batch_size = _batch_size_for(arr)
 
     chunks = arr.chunks
     offsets = [[0, *itertools.accumulate(c)][:-1] for c in chunks]

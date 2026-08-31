@@ -96,8 +96,10 @@ them, and writes one dataset per file named after the stem. Coordinates and
 data variables become arrays; variable attrs become per-array attributes;
 `_FillValue` becomes the array's fill.
 
-Dask-backed variables stream block by block, so a file far larger than memory
-ingests without trouble.
+Files are opened with dask chunking, so one far larger than memory streams
+block by block rather than being read whole. `--chunk-size` (default 128 MiB)
+sets the block budget and is roughly the memory ceiling per variable; those
+blocks also become the stored chunk shape.
 
 Nothing is readable at the destination until every file is written — a failure
 part-way leaves no collection, not a partial one. `on_error="skip"`

@@ -36,18 +36,53 @@ partial one.
 |---|---|
 | `-r`, `--recursive` | Descend into subdirectories |
 | `--codec {zstd,lz4,none}` | Block compression. Default `zstd` |
-| `--chunks JSON` | Per-variable chunk shape, `'{"temperature": [64, 64]}'` |
+| `--chunk-size SIZE` | Block size to aim for. Default `128MiB` |
+| `--open-chunks MODE` | How files are read: `auto`, `native`, `none`, or a JSON dict |
+| `--chunks JSON` | Override the stored chunk shape, `'{"temperature": [64, 64]}'` |
 | `--skip-errors` | Skip files that fail instead of abandoning the collection |
 | `-q`, `--quiet` | Do not list files as they are written |
 
 Progress goes to stderr, so stdout stays pipeable.
 
+### Large files
+
+Files are read in dask blocks, so a file far larger than memory streams rather
+than being loaded whole. `--chunk-size` sets the block size and is roughly the
+memory ceiling per variable:
+
+```bash
+# A machine with little RAM
+atlas create /data/nc /data/collection --chunk-size 32MiB
+```
+
+Those blocks also become the stored chunk shape, which is the granularity a
+reader later fetches at. `--open-chunks` picks a different strategy:
+
+| Mode | Reads | Stored chunk shape |
+|---|---|---|
+| `auto` *(default)* | blocks sized to `--chunk-size` | those blocks |
+| `native` | the file's own chunk encoding | that encoding |
+| `none` | each variable whole | one full-shape chunk |
+| JSON dict | as given, per dimension | as given |
+
+```bash
+# Match the NetCDF file's own chunking exactly
+atlas create /data/nc /data/collection --open-chunks native
+
+# Per-dimension, explicitly
+atlas create /data/nc /data/collection --open-chunks '{"time": 100, "lat": -1}'
+```
+
+`--chunks` overrides the *stored* shape without changing how the file is read.
+It costs a read-modify-write per misaligned block, so prefer `--open-chunks`
+when you can express what you want that way.
+
 ```bash
 # One collection from a tree of monthly directories, tolerating bad files
 atlas create /data/nc /data/collection --recursive --skip-errors
 
-# Chunk the big variable for selective reads later
-atlas create /data/nc s3://bucket/2024 --chunks '{"temperature": [64, 64]}'
+# A big grid, chunked for selective reads, straight to a bucket
+atlas create /data/nc s3://bucket/2024 --chunk-size 64MiB --region eu-west-1
 ```
 
 ## rm

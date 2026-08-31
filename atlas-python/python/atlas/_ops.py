@@ -17,6 +17,24 @@ from . import xarray as _xarray
 # Files that look like NetCDF. `create` scans a directory for these.
 NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf", ".netcdf")
 
+# How `create` opens a NetCDF file. This decides two things at once: how much
+# of a file is in memory at a time, and — unless `chunks=` overrides it — the
+# chunk shape the arrays are stored with.
+#
+#   "auto"    dask picks block sizes to hit `chunk_size`. The default: a file
+#             far larger than memory streams, and a small one still lands as a
+#             single chunk.
+#   "native"  use the file's own chunk encoding. No read amplification during
+#             ingest, but a netCDF4 file with tiny chunks produces tiny atlas
+#             chunks, and a netCDF3 file has no chunking to use.
+#   None      read each variable whole. Only for files you know are small.
+#   a dict    explicit, per dimension: {"time": 100, "lat": -1}
+OPEN_CHUNK_MODES = ("auto", "native")
+
+# Target size dask aims at per block under "auto". Also the ceiling on how much
+# of one variable is resident while it is written.
+DEFAULT_CHUNK_SIZE = "128MiB"
+
 
 class AtlasError(RuntimeError):
     """An operation could not complete. The message says what went wrong."""
@@ -43,6 +61,29 @@ def find_netcdf_files(
     return sorted(p for p in walk if p.is_file() and p.suffix.lower() in NETCDF_SUFFIXES)
 
 
+def _open_kwargs(open_chunks: Any) -> dict[str, Any]:
+    """Translate `open_chunks` into `xr.open_dataset` keyword arguments."""
+    if open_chunks is None:
+        # No `chunks=` at all: xarray reads each variable whole.
+        return {}
+    if isinstance(open_chunks, str):
+        if open_chunks == "native":
+            # xarray spells "the file's own chunking" as an empty dict.
+            return {"chunks": {}}
+        if open_chunks == "auto":
+            return {"chunks": "auto"}
+        raise AtlasError(
+            f"open_chunks must be one of {OPEN_CHUNK_MODES}, a dict, or None; "
+            f"got {open_chunks!r}"
+        )
+    if isinstance(open_chunks, dict):
+        return {"chunks": open_chunks}
+    raise AtlasError(
+        f"open_chunks must be one of {OPEN_CHUNK_MODES}, a dict, or None; "
+        f"got {type(open_chunks).__name__}"
+    )
+
+
 # ── create ───────────────────────────────────────────────────────────
 
 
@@ -53,6 +94,8 @@ def create(
     recursive: bool = False,
     codec: str = "zstd",
     chunks: Optional[dict[str, Sequence[int]]] = None,
+    open_chunks: Any = "auto",
+    chunk_size: str = DEFAULT_CHUNK_SIZE,
     on_error: str = "stop",
     progress: Optional[Any] = None,
     **store_options: Any,
@@ -63,6 +106,11 @@ def create(
     readable at `destination` until every file has been written and the footer
     lands, so a failure leaves no half-built collection behind.
 
+    Files are opened with dask chunking (`open_chunks="auto"` by default), so a
+    file far larger than memory streams block by block rather than being read
+    whole. Those blocks also become the arrays' stored chunk shape, unless
+    `chunks` names one explicitly.
+
     `on_error` is `"stop"` (the default, abandoning the whole collection) or
     `"skip"` (recording the failure and carrying on). `progress` is called with
     each file's name as it is written.
@@ -72,6 +120,9 @@ def create(
     if on_error not in ("stop", "skip"):
         raise AtlasError(f"on_error must be 'stop' or 'skip', got {on_error!r}")
 
+    open_kwargs = _open_kwargs(open_chunks)
+
+    import dask
     import xarray as xr
 
     files = find_netcdf_files(directory, recursive=recursive)
@@ -83,29 +134,34 @@ def create(
     skipped: list[dict[str, str]] = []
 
     target = _source.resolve(destination, **store_options)
-    with _atlas.AtlasWriter.create(target, codec) as writer:
-        for path in files:
-            name = dataset_name(path)
-            if name in names:
-                message = f"duplicate dataset name {name!r} from {path}"
-                if on_error == "stop":
-                    raise AtlasError(message)
-                skipped.append({"file": str(path), "error": message})
-                continue
+    # `array.chunk-size` is what "auto" sizes blocks against, so it is also the
+    # ceiling on how much of one variable is resident while it is written.
+    with dask.config.set({"array.chunk-size": chunk_size}):
+        with _atlas.AtlasWriter.create(target, codec) as writer:
+            for path in files:
+                name = dataset_name(path)
+                if name in names:
+                    message = f"duplicate dataset name {name!r} from {path}"
+                    if on_error == "stop":
+                        raise AtlasError(message)
+                    skipped.append({"file": str(path), "error": message})
+                    continue
 
-            try:
-                with xr.open_dataset(path) as ds:
-                    _xarray._write_xarray_dataset(writer, ds, name, chunks, None)
-            except Exception as exc:
-                if on_error == "stop":
-                    raise AtlasError(f"{path}: {exc}") from exc
-                skipped.append({"file": str(path), "error": str(exc)})
-                continue
+                try:
+                    # The write happens inside the `with`, so every block is
+                    # materialised before the file is closed.
+                    with xr.open_dataset(path, **open_kwargs) as ds:
+                        _xarray._write_xarray_dataset(writer, ds, name, chunks, None)
+                except Exception as exc:
+                    if on_error == "stop":
+                        raise AtlasError(f"{path}: {exc}") from exc
+                    skipped.append({"file": str(path), "error": str(exc)})
+                    continue
 
-            names.add(name)
-            written.append(name)
-            if progress is not None:
-                progress(name)
+                names.add(name)
+                written.append(name)
+                if progress is not None:
+                    progress(name)
 
     return {
         "destination": _source.describe(destination),

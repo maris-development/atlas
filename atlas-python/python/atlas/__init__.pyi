@@ -39,6 +39,12 @@ Source = Union[str, os.PathLike[str], Any]
 # File suffixes `create` treats as NetCDF.
 NETCDF_SUFFIXES: tuple[str, ...]
 
+# Accepted string values for `create(open_chunks=...)`.
+OPEN_CHUNK_MODES: tuple[str, ...]
+
+# Default block size `open_chunks="auto"` aims for.
+DEFAULT_CHUNK_SIZE: str
+
 class AtlasError(RuntimeError):
     """An operation could not complete. The message says what went wrong."""
 
@@ -52,6 +58,8 @@ def create(
     recursive: bool = False,
     codec: str = "zstd",
     chunks: Optional[dict[str, Sequence[int]]] = None,
+    open_chunks: Union[str, dict[str, int], None] = "auto",
+    chunk_size: str = "128MiB",
     on_error: str = "stop",
     progress: Optional[Callable[[str], None]] = None,
     **store_options: Any,
@@ -66,6 +74,10 @@ def create(
     and the footer lands. A failure part-way leaves no collection at all,
     rather than a partial one.
 
+    Source files are opened with dask chunking, so a file far larger than
+    memory streams block by block instead of being read whole. Those blocks
+    also become each array's stored chunk shape, unless ``chunks`` names one.
+
     Args:
         directory: Where the NetCDF files are.
         destination: Where to write the collection. A local path, or a URL for
@@ -74,9 +86,26 @@ def create(
         codec: Block compression: ``"zstd"`` (default), ``"lz4"``, or
             ``"none"``. Blocks record their own codec, so readers need no
             argument.
-        chunks: Per-variable on-disk chunk shape, ``{var: [d0, d1, ...]}``.
-            Defaults to the dask chunking of the source file, or one
-            full-shape chunk.
+        chunks: Per-variable **stored** chunk shape, ``{var: [d0, d1, ...]}``.
+            Overrides whatever ``open_chunks`` produced. Note that source
+            blocks then no longer align with stored chunks, so writes become
+            read-modify-write — correct, but slower.
+        open_chunks: How source files are read, which also sets the stored
+            chunk shape unless ``chunks`` overrides it.
+
+            - ``"auto"`` (default) — dask picks blocks sized to
+              ``chunk_size``. A large file streams; a small one still lands as
+              a single chunk.
+            - ``"native"`` — use the file's own chunk encoding. No read
+              amplification during ingest, but a netCDF4 file with tiny chunks
+              gives tiny atlas chunks, and a netCDF3 file has no chunking to
+              use.
+            - ``None`` — read each variable whole. Only for files you know
+              are small.
+            - a dict — explicit, per dimension: ``{"time": 100, "lat": -1}``.
+        chunk_size: Block size ``"auto"`` aims for, as a dask size string.
+            Roughly the memory ceiling per variable during ingest. Defaults to
+            ``"128MiB"``.
         on_error: ``"stop"`` (default) abandons the whole collection on the
             first bad file. ``"skip"`` records it and carries on.
         progress: Called with each dataset name as it is written.
@@ -90,7 +119,8 @@ def create(
 
     Raises:
         AtlasError: The directory holds no NetCDF files, two files share a
-            stem, or a file failed under ``on_error="stop"``.
+            stem, ``open_chunks`` is not a recognised mode, or a file failed
+            under ``on_error="stop"``.
         SourceError: ``destination`` could not be resolved.
     """
     ...

@@ -102,9 +102,25 @@ string, so they are replaced with the fill and a warning names the count.
 
 ### Streaming
 
-Dask-backed variables are written one block at a time, prefetched on a
-background thread, so peak memory is one block per variable rather than the
-whole array. A dataset far larger than memory ingests without trouble.
+Files are opened with dask chunking — `chunks="auto"` by default — so every
+variable arrives as blocks rather than whole. Blocks are written one at a time,
+prefetched on a background thread so NetCDF reads overlap atlas writes.
+
+The prefetch batch is sized by **bytes**, not by block count. Batching by count
+is right for the many-small-chunks case, where it amortises dask's scheduler
+overhead; it is ruinous for large blocks, where eight 128 MiB blocks per batch
+and two batches in flight would be 2 GiB resident. `_batch_size_for` computes
+the count from the block size against a 64 MiB budget, so a variable chunked at
+128 MiB holds two blocks in flight rather than sixteen.
+
+Measured on a 500 MiB variable, peak RSS drops from about 1.6 GiB reading whole
+to about 500 MiB with a 16 MiB block budget, and tracks the budget rather than
+the file.
+
+The blocks a file is read in also become its stored chunk shape, unless
+`chunks=` overrides it — one decision, not two. `open_chunks` picks the
+strategy: `"auto"` (dask sizes blocks to `chunk_size`), `"native"` (the file's
+own encoding), `None` (whole), or an explicit per-dimension dict.
 
 ## Conventions Rust does not know about
 

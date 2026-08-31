@@ -51,22 +51,62 @@ A skipped file leaves no trace in the collection; the writer moves to the next.
 The CLI exits `1` when anything was skipped, so a pipeline notices, while still
 writing the collection.
 
-## Chunking
+## Chunking and memory
 
-Chunk shape is the granularity at which a reader later fetches: a region read
-pulls only the chunks it overlaps. It is the one decision worth making
-deliberately.
+These are one decision, because the blocks a file is *read* in are the chunks
+it is *stored* in.
 
-By default an array takes the source file's dask chunking, or one full-shape
-chunk if it has none. Override per variable:
+Files are opened with dask chunking. By default `open_chunks="auto"` lets dask
+pick blocks sized to `chunk_size` (128 MiB), so:
+
+- a file far larger than memory streams block by block rather than being read
+  whole;
+- a small variable still comes out as one chunk, exactly as if nothing were
+  chunked at all;
+- a large variable is stored in blocks of roughly `chunk_size`, which is a
+  sensible read granularity.
+
+```bash
+atlas create /data/nc dest --chunk-size 64MiB
+```
 
 ```python
-atlas.create("/data/nc", dest, chunks={"temperature": [64, 64]})
+atlas.create("/data/nc", dest, chunk_size="64MiB")
 ```
+
+`chunk_size` is roughly the memory ceiling per variable. Lower it on a small
+machine; raise it when you want bigger stored chunks.
+
+### How files are opened
+
+| `open_chunks` | Reads | Stored chunk shape |
+|---|---|---|
+| `"auto"` *(default)* | blocks sized to `chunk_size` | those blocks |
+| `"native"` | the file's own chunk encoding | that encoding |
+| `None` | each variable whole | one full-shape chunk |
+| `{"time": 100}` | as given, per dimension | as given |
+
+`"native"` avoids read amplification during ingest, since dask blocks line up
+with the NetCDF chunks exactly. The catch is that a netCDF4 file often has very
+small chunks — which then become very small atlas chunks — and a netCDF3 file
+has no chunking at all, so `"native"` reads it whole.
+
+`None` is only for files you know are small; it is the fastest path when a
+whole variable fits comfortably.
+
+### Overriding the stored shape
+
+`chunks` sets the stored chunk shape directly, whatever the file was read in:
 
 ```bash
 atlas create /data/nc dest --chunks '{"temperature": [64, 64]}'
 ```
+
+Use it when the read granularity you want on disk differs from the one that
+suits ingest. Note the cost: source blocks no longer align with stored chunks,
+so writes become read-modify-write. Correct, but slower.
+
+### Choosing
 
 Chunk the large variables you expect to slice; leave small coordinate vectors
 alone. A one-chunk array is read whole or not at all.
@@ -78,20 +118,15 @@ arrays = {a["name"]: a for a in atlas.describe(dest, "2024-01")["arrays"]}
 arrays["temperature"]["chunk_shape"]
 ```
 
-## Memory
-
-Dask-backed variables stream one block at a time, so peak memory is one block
-per variable rather than the whole array. A file far larger than RAM ingests
-without trouble, provided xarray opened it lazily:
-
-```python
-# xr.open_dataset(path, chunks=...) inside your own pipeline; `create` opens
-# files itself and streams whatever chunking they carry.
+```bash
+atlas show dest 2024-01 | grep _ChunkShape
 ```
 
+### The writer's own memory
+
 Staging happens on local disk — `array-format` spills compressed chunks to a
-temporary file — so the writer's memory does not grow with the collection
-either.
+temporary file — so the writer's memory does not grow with the number of
+datasets either. A thousand-file ingest costs the same as a one-file ingest.
 
 ## Compression
 

@@ -128,6 +128,127 @@ def test_every_codec_round_trips(netcdf_dir, tmp_path, codec):
     assert len(atlas.list_datasets(str(dest))) == 3
 
 
+# ── chunked ingest ───────────────────────────────────────────────────
+
+
+def test_a_large_variable_streams_in_blocks(tmp_path, monkeypatch):
+    """A file bigger than the block budget is written block by block."""
+    from atlas._atlas import DatasetWriter
+
+    src = tmp_path / "nc"
+    src.mkdir()
+    # 8 MiB of float64, ingested with a 1 MiB block budget.
+    rows, cols = 1024, 1024
+    xr.Dataset(
+        {"big": (("y", "x"), np.zeros((rows, cols), dtype=np.float64))}
+    ).to_netcdf(src / "big.nc")
+
+    calls = []
+    real = DatasetWriter.write_array
+
+    def counting(self, name, start, data):
+        calls.append((name, tuple(data.shape)))
+        return real(self, name, start, data)
+
+    monkeypatch.setattr(DatasetWriter, "write_array", counting)
+    atlas.create(src, str(tmp_path / "c"), chunk_size="1MiB")
+
+    blocks = [c for c in calls if c[0] == "big"]
+    assert len(blocks) > 1, "a large variable should not be written in one call"
+    # No single block is the whole array.
+    assert all(shape != (rows, cols) for _, shape in blocks)
+
+    stored = atlas.describe(str(tmp_path / "c"), "big")["arrays"][0]
+    assert stored["shape"] == [rows, cols]
+    assert stored["chunk_shape"] != [rows, cols]
+
+
+def test_chunk_size_controls_the_stored_chunk_shape(tmp_path):
+    src = tmp_path / "nc"
+    src.mkdir()
+    xr.Dataset(
+        {"big": (("y", "x"), np.zeros((1024, 1024), dtype=np.float64))}
+    ).to_netcdf(src / "big.nc")
+
+    def chunk_shape(dest, **kwargs):
+        atlas.create(src, str(dest), **kwargs)
+        return atlas.describe(str(dest), "big")["arrays"][0]["chunk_shape"]
+
+    small = chunk_shape(tmp_path / "small", chunk_size="1MiB")
+    large = chunk_shape(tmp_path / "large", chunk_size="64MiB")
+
+    # A bigger budget means bigger blocks, so fewer of them.
+    assert np.prod(small) < np.prod(large)
+    # The larger budget covers the whole 8 MiB array in one block.
+    assert large == [1024, 1024]
+
+
+def test_small_files_still_land_as_a_single_chunk(netcdf_dir, tmp_path):
+    """Auto chunking must not fragment arrays that comfortably fit."""
+    atlas.create(netcdf_dir, str(tmp_path / "c"))
+    for array in atlas.describe(str(tmp_path / "c"), "2024-01")["arrays"]:
+        assert array["chunk_shape"] == array["shape"], array["name"]
+
+
+def test_open_chunks_none_reads_each_variable_whole(tmp_path, monkeypatch):
+    from atlas._atlas import DatasetWriter
+
+    src = tmp_path / "nc"
+    src.mkdir()
+    xr.Dataset(
+        {"big": (("y", "x"), np.zeros((1024, 1024), dtype=np.float64))}
+    ).to_netcdf(src / "big.nc")
+
+    calls = []
+    real = DatasetWriter.write_array
+    monkeypatch.setattr(
+        DatasetWriter,
+        "write_array",
+        lambda self, name, start, data: (
+            calls.append((name, tuple(data.shape))), real(self, name, start, data)
+        )[1],
+    )
+    atlas.create(src, str(tmp_path / "c"), open_chunks=None, chunk_size="1MiB")
+
+    blocks = [c for c in calls if c[0] == "big"]
+    assert blocks == [("big", (1024, 1024))], "open_chunks=None should not chunk"
+
+
+def test_open_chunks_native_uses_the_files_own_chunking(tmp_path):
+    src = tmp_path / "nc"
+    src.mkdir()
+    # Ask netCDF4 for a specific on-disk chunking.
+    xr.Dataset(
+        {"big": (("y", "x"), np.zeros((512, 512), dtype=np.float64))}
+    ).to_netcdf(
+        src / "big.nc",
+        engine="netcdf4",
+        encoding={"big": {"chunksizes": (128, 256), "zlib": True}},
+    )
+
+    atlas.create(src, str(tmp_path / "c"), open_chunks="native")
+    stored = atlas.describe(str(tmp_path / "c"), "big")["arrays"][0]
+    assert stored["chunk_shape"] == [128, 256]
+
+
+def test_open_chunks_accepts_an_explicit_dict(tmp_path):
+    src = tmp_path / "nc"
+    src.mkdir()
+    xr.Dataset(
+        {"big": (("y", "x"), np.zeros((512, 512), dtype=np.float64))}
+    ).to_netcdf(src / "big.nc")
+
+    atlas.create(src, str(tmp_path / "c"), open_chunks={"y": 128, "x": 256})
+    stored = atlas.describe(str(tmp_path / "c"), "big")["arrays"][0]
+    assert stored["chunk_shape"] == [128, 256]
+
+
+@pytest.mark.parametrize("bad", ["sometimes", 42, 3.5])
+def test_an_unknown_open_chunks_mode_is_rejected(netcdf_dir, tmp_path, bad):
+    with pytest.raises(atlas.AtlasError, match="open_chunks"):
+        atlas.create(netcdf_dir, str(tmp_path / "c"), open_chunks=bad)
+
+
 def test_explicit_chunks_reach_the_stored_array(netcdf_dir, tmp_path):
     dest = tmp_path / "c"
     atlas.create(netcdf_dir, str(dest), chunks={"temperature": [2, 3]})

@@ -121,8 +121,28 @@ def _add_store_flags(parser: argparse.ArgumentParser) -> None:
 # ── commands ─────────────────────────────────────────────────────────
 
 
+def _parse_open_chunks(value: str) -> Any:
+    """`--open-chunks` accepts a mode name or a JSON dict."""
+    if value in ("auto", "native"):
+        return value
+    if value == "none":
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        raise _ops.AtlasError(
+            f"--open-chunks must be auto, native, none, or a JSON dict; got {value!r}"
+        ) from None
+    if not isinstance(parsed, dict):
+        raise _ops.AtlasError(
+            f"--open-chunks JSON must be an object, e.g. '{{\"time\": 100}}'"
+        )
+    return parsed
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     chunks = json.loads(args.chunks) if args.chunks else None
+    open_chunks = _parse_open_chunks(args.open_chunks)
 
     def progress(name: str) -> None:
         if not args.quiet:
@@ -137,6 +157,8 @@ def cmd_create(args: argparse.Namespace) -> int:
         recursive=args.recursive,
         codec=args.codec,
         chunks=chunks,
+        open_chunks=open_chunks,
+        chunk_size=args.chunk_size,
         on_error="skip" if args.skip_errors else "stop",
         progress=progress,
         **_store_options(args),
@@ -288,7 +310,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--chunks",
         metavar="JSON",
-        help='per-variable chunk shape, e.g. \'{"temperature": [64, 64]}\'',
+        help='per-variable stored chunk shape, e.g. \'{"temperature": [64, 64]}\'',
+    )
+    p.add_argument(
+        "--open-chunks",
+        metavar="MODE",
+        default="auto",
+        help=(
+            "how source files are read: 'auto' (default, dask picks blocks to "
+            "hit --chunk-size), 'native' (the file's own chunking), 'none' "
+            "(read each variable whole), or a JSON dict of per-dimension "
+            "sizes. Also sets the stored chunk shape unless --chunks says "
+            "otherwise"
+        ),
+    )
+    p.add_argument(
+        "--chunk-size",
+        metavar="SIZE",
+        default=_ops.DEFAULT_CHUNK_SIZE,
+        help=(
+            f"block size 'auto' aims for, and roughly the memory ceiling per "
+            f"variable (default: {_ops.DEFAULT_CHUNK_SIZE})"
+        ),
     )
     p.add_argument(
         "--skip-errors",

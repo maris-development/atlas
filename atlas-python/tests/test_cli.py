@@ -57,6 +57,55 @@ def test_create_accepts_chunks_as_json(capsys, netcdf_dir, tmp_path):
     assert arrays["temperature"]["chunk_shape"] == [2, 3]
 
 
+def test_create_chunk_size_controls_the_stored_chunk_shape(capsys, tmp_path):
+    import numpy as np
+    import xarray as xr
+
+    src = tmp_path / "nc"
+    src.mkdir()
+    xr.Dataset(
+        {"big": (("y", "x"), np.zeros((1024, 1024), dtype=np.float64))}
+    ).to_netcdf(src / "big.nc")
+
+    run(capsys, "create", str(src), str(tmp_path / "small"),
+        "--chunk-size", "1MiB", "-q")
+    code, out, _ = run(capsys, "show", str(tmp_path / "small"), "big", "--json")
+    chunked = json.loads(out)["arrays"][0]["chunk_shape"]
+    assert chunked != [1024, 1024]
+
+    run(capsys, "create", str(src), str(tmp_path / "large"),
+        "--chunk-size", "64MiB", "-q")
+    code, out, _ = run(capsys, "show", str(tmp_path / "large"), "big", "--json")
+    assert json.loads(out)["arrays"][0]["chunk_shape"] == [1024, 1024]
+
+
+@pytest.mark.parametrize("mode", ["auto", "native", "none", '{"lat": 2}'])
+def test_open_chunks_modes_are_accepted(capsys, netcdf_dir, tmp_path, mode):
+    code, out, err = run(
+        capsys, "create", str(netcdf_dir), str(tmp_path / mode[:4]),
+        "--open-chunks", mode, "-q",
+    )
+    assert code == 0, err
+
+
+def test_an_unknown_open_chunks_mode_fails_clearly(capsys, netcdf_dir, tmp_path):
+    code, out, err = run(
+        capsys, "create", str(netcdf_dir), str(tmp_path / "c"),
+        "--open-chunks", "sometimes",
+    )
+    assert code == 1
+    assert "--open-chunks" in err
+
+
+def test_open_chunks_rejects_non_object_json(capsys, netcdf_dir, tmp_path):
+    code, out, err = run(
+        capsys, "create", str(netcdf_dir), str(tmp_path / "c"),
+        "--open-chunks", "[1, 2]",
+    )
+    assert code == 1
+    assert "JSON must be an object" in err
+
+
 def test_create_on_an_empty_directory_fails(capsys, tmp_path):
     (tmp_path / "empty").mkdir()
     code, out, err = run(capsys, "create", str(tmp_path / "empty"), str(tmp_path / "c"))
