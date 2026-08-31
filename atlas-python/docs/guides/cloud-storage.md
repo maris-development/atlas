@@ -1,9 +1,8 @@
 # Cloud storage (S3, GCS, Azure)
 
-[`AtlasWriter.create`](../reference/atlas-writer.md) and
-[`Atlas.open`](../reference/atlas.md) both accept an
-[obstore](https://github.com/developmentseed/obstore) store handle in place of a
-filesystem path. obstore is a thin Python binding around the Rust
+Every operation accepts a URL, or an
+[obstore](https://github.com/developmentseed/obstore) store handle, in place of
+a filesystem path. obstore is a thin Python binding around the Rust
 [`object_store`](https://docs.rs/object_store) crate, so any backend it supports
 — S3, GCS, Azure Blob, HTTP, local — works with atlas. Atlas never sees the
 credentials.
@@ -23,31 +22,39 @@ against local filesystem paths as usual.
 
 ## Quickstart — S3
 
+The simplest form is a URL. Credentials come from the usual environment
+variables or `~/.aws/credentials`:
+
+```bash
+atlas create /data/nc s3://my-bucket/collections/2024 --region eu-west-1
+atlas ls   s3://my-bucket/collections/2024 --region eu-west-1
+atlas info s3://my-bucket/collections/2024 --region eu-west-1
+```
+
 ```python
-import numpy as np
-import obstore as obs
 import atlas
 
-# Credentials come from the standard AWS env vars or ~/.aws/credentials
-# unless you pass them explicitly.
+atlas.create("/data/nc", "s3://my-bucket/collections/2024", region="eu-west-1")
+atlas.list_datasets("s3://my-bucket/collections/2024", region="eu-west-1")
+```
+
+For anything the URL cannot express — a custom credential provider, a retry
+policy — build the handle yourself and pass it in:
+
+```python
+import obstore as obs
+
 store = obs.store.S3Store(
     "my-bucket",
     prefix="collections/2024",
-    region="us-east-1",
+    region="eu-west-1",
 )
 
-with atlas.AtlasWriter.create(store, codec="zstd") as w:
-    ds = w.add_dataset("jan_2024")
-    ds.define_array("temperature", dtype="float32", dims=["lat", "lon"],
-                    shape=[8, 16], chunk_shape=[4, 8])
-    ds.write_array("temperature", start=[0, 0],
-                   data=np.full((8, 16), 20.0, dtype=np.float32))
-    ds.set_attribute("month", 1)
-    ds.finish()
-
-collection = atlas.Atlas.open(store)
-collection.list_datasets()
-collection.dataset("jan_2024").array_meta("temperature")
+atlas.create("/data/nc", store)
+atlas.list_datasets(store)
+atlas.describe(store, "2024-01")
+atlas.remove(store, ["2024-02"])
+atlas.info(store)
 ```
 
 The objects land under the store's prefix:
@@ -73,10 +80,9 @@ Nothing else in your code changes.
 
 | Operation | Requests |
 |---|---|
-| `Atlas.open` | 1 range read (tail), plus 1 for the mask if it exists |
-| `list_datasets`, schemas, attributes | 0 — answered from the footer |
-| `delete_dataset` | 1 GET + 1 PUT of the small mask |
-| Writing a collection | 1 multipart upload |
+| `list_datasets`, `describe`, `info` | 1 head + 1 range read of the tail, plus 1 for the mask if present |
+| `remove` | The above, plus 1 GET and 1 PUT of the small mask |
+| `create` | 1 multipart upload |
 | Reading one array region (Rust) | 2 to open the segment, then 1 per chunk touched |
 
 Opening scales with nothing: a collection of ten datasets and one of a million
@@ -93,17 +99,17 @@ mid-write, no trailer is written and the path does not open as a collection; an
 incomplete multipart upload is cleaned up by the bucket's lifecycle rule, as
 usual.
 
-## Deleting
+## Removing
 
-`delete_dataset` re-reads the mask before writing it, so two handles deleting
-different datasets both survive. Two deletes that interleave between the read
+`remove` re-reads the mask before writing it, so two processes removing
+different datasets both survive. Two removals that interleave between the read
 and the write still lose one — object stores have no compare-and-swap here.
-Serialize deletes against a collection if that matters.
+Serialize removals against a collection if that matters.
 
 ## HTTP and read-only backends
 
-A read-only store works for opening a collection and reading metadata. A delete
-will fail, since it needs a PUT.
+A read-only store serves `ls`, `show`, and `info`. `create` and `rm` need a
+PUT and will fail.
 
 ## Version note
 

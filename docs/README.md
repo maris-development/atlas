@@ -12,7 +12,7 @@ Read in this order:
 | 3 | [format.md](format.md) | The on-disk format, byte for byte |
 | 4 | [write-path.md](write-path.md) | How a collection is built |
 | 5 | [read-path.md](read-path.md) | How one is read, and what it costs |
-| 6 | [python-xarray.md](python-xarray.md) | The Python bindings and the xarray mapping |
+| 6 | [python.md](python.md) | The Python package: five operations and a CLI |
 
 ## The one idea
 
@@ -58,6 +58,9 @@ and never touches it. See [format.md](format.md#deletion-mask).
 
 The **file format is entirely Rust**. `src/format/` defines the framing, the
 footer, and the deletion mask; nothing outside the `atlas-rust` crate can
-produce or parse a byte of a container. The Python package is a binding layer
-over that, plus the xarray conventions described in
-[python-xarray.md](python-xarray.md).
+produce or parse a byte of a container.
+
+The Python package is a binding layer over that plus five operations — build a
+collection from NetCDF files, remove datasets, list them, describe one, and
+summarise the lot — available as a library and as the `atlas` command. See
+[python.md](python.md).

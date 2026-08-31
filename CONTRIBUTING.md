@@ -22,7 +22,7 @@ The repository is a Cargo workspace with two crates:
 | Crate | Purpose |
 |---|---|
 | `atlas-rust` (workspace root, `[lib] name = "atlas"`) | The format, the writer, the reader |
-| `atlas-python` ([atlas-python/](atlas-python/)) | PyO3 bindings + xarray integration |
+| `atlas-python` ([atlas-python/](atlas-python/)) | PyO3 bindings, the five operations, the `atlas` command |
 
 ---
 
@@ -73,13 +73,15 @@ Mixed Python/Rust maturin layout:
 ```text
 atlas-python/
 ├── Cargo.toml               cdylib named `_atlas`
-├── pyproject.toml           maturin build backend
+├── pyproject.toml           maturin build backend; declares the `atlas` script
 ├── python/atlas/
-│   ├── __init__.py          re-exports + accessor registration
+│   ├── __init__.py          the five operations. `__all__` is the surface
 │   ├── __init__.pyi         type stubs (PEP 561) — the authoritative contract
 │   ├── py.typed             marker
-│   ├── store.py             the Atlas / AtlasWriter facades
-│   └── xarray.py            xarray write path + ds.atlas accessor
+│   ├── _ops.py              the operations themselves
+│   ├── _cli.py              argument parsing and output formatting
+│   ├── _source.py           path or URL → something the bindings accept
+│   └── xarray.py            the xarray → atlas mapping. Internal
 ├── src/
 │   ├── lib.rs               #[pymodule] wiring
 │   ├── runtime.rs           shared OnceLock<tokio::Runtime>
@@ -87,17 +89,24 @@ atlas-python/
 │   ├── source.rs            AtlasSource (path | obstore handle), codec parsing
 │   ├── dtype.rs             dtype string ⇄ DType
 │   ├── attr.rs              Python value ⇄ Attr
-│   ├── writer.rs            PyAtlasWriter, PyDatasetWriter
-│   └── reader.rs            PyAtlas, PyDatasetView
+│   ├── writer.rs            PyAtlasWriter, PyDatasetWriter — internal
+│   └── reader.rs            PyAtlas, PyDatasetView — internal
 ├── tests/                   pytest, plus make_fixture.py
 └── examples/                runnable scripts
 ```
 
 Key points:
 
-- **Python writes; Rust reads array data.** Python builds collections and reads
-  their *metadata*. There is no `read_array` on the Python side. See
-  [docs/read-path.md](docs/read-path.md) for the reasoning.
+- **Five operations, and that is the whole surface.** `create`, `remove`,
+  `list_datasets`, `describe`, `info`, as a library and as `atlas create|rm|ls|
+  show|info`. `__all__` in `__init__.py` is the contract; a test asserts it.
+- **`_atlas` is private.** It still exposes writer and reader classes because
+  the operations need them, but nothing outside `_ops.py` touches them, and
+  they are not exported.
+- **Python writes; Rust reads array data.** There is no `read_array` on the
+  Python side. See [docs/read-path.md](docs/read-path.md) for the reasoning.
+- **NetCDF is the only ingest route.** `create` scans a directory, sorts it, and
+  writes one dataset per file — sorting is what makes ordinals reproducible.
 - **Sync Python API over a tokio runtime.** Each blocking call uses
   `py.detach(|| runtime().block_on(...))` so other Python threads keep running.
 - **numpy zero-copy on the numeric path**, via the `numpy` crate. Strings are
@@ -204,16 +213,27 @@ python atlas-python/tests/make_fixture.py
    it has a numpy equivalent.
 5. Test in both suites, and extend the cross fixture if it is worth pinning.
 
-### Exposing a new method to Python
+### Adding to the Python surface
 
-1. Implement it on `Atlas` / `DatasetView` / the writers in `src/`.
-2. Wrap it in [atlas-python/src/reader.rs](atlas-python/src/reader.rs) or
-   [writer.rs](atlas-python/src/writer.rs), releasing the GIL with `py.detach`
-   for anything that blocks.
-3. Add the stub to
+The surface is deliberately five operations. Before adding a sixth, check the
+job cannot be done by composing the ones that exist.
+
+If it genuinely needs to be new:
+
+1. Implement whatever it needs on `Atlas` / `DatasetView` in `src/`.
+2. Expose it through [atlas-python/src/reader.rs](atlas-python/src/reader.rs)
+   or [writer.rs](atlas-python/src/writer.rs), releasing the GIL with
+   `py.detach` for anything that blocks.
+3. Add the operation to
+   [atlas-python/python/atlas/_ops.py](atlas-python/python/atlas/_ops.py) and
+   export it from `__init__.py`.
+4. Add a subcommand in
+   [atlas-python/python/atlas/_cli.py](atlas-python/python/atlas/_cli.py), with
+   both a text renderer and `--json`.
+5. Add the stub to
    [atlas-python/python/atlas/\_\_init\_\_.pyi](atlas-python/python/atlas/__init__.pyi)
-   — that file is the contract, not `store.py`.
-4. `maturin develop`, then write a test.
+   — that file is the contract.
+6. `maturin develop`, then test it in both `test_ops.py` and `test_cli.py`.
 
 ### Touching the on-disk format
 

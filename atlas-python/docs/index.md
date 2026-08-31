@@ -1,29 +1,25 @@
-# Atlas
+# atlas
 
-Python bindings to **[`atlas-rust`](https://github.com/maris-development/atlas)** —
-ATLAS (Aggregated Tensor Large Array Store). Think of it as a *zip for
-N-dimensional data*: thousands of NetCDF-style datasets in one immutable file,
-written from [xarray](https://docs.xarray.dev), with a catalogue you can read
-back in a single request.
+Thousands of NetCDF datasets in one immutable file, on local disk or object
+storage.
 
-```python
-import atlas
-import xarray as xr
+```bash
+pip install atlas-python
+atlas create /data/nc /data/collection
+```
 
-with atlas.AtlasWriter.create("/tmp/weather", codec="zstd") as w:
-    for path in nc_files:
-        w.add_xarray_dataset(xr.open_dataset(path), name=path.stem)
-
-collection = atlas.Atlas.open("/tmp/weather")
-collection.list_datasets()          # every dataset, from one range read
-collection.attributes("jan_2024")   # its attributes, no further I/O
+```text
+$ atlas ls /data/collection
+2024-01
+2024-02
+2024-03
 ```
 
 ## The shape of it
 
 A collection is **one write-once file**. Every dataset occupies a contiguous
 byte range; a footer at the end records where each one lives, along with its
-schema and attributes.
+schema, attributes, and statistics.
 
 ```text
 my_collection/
@@ -31,71 +27,94 @@ my_collection/
 └── deleted.mask    optional
 ```
 
-That buys two things:
+That buys one thing above all: **metadata is a single read.** Opening fetches
+the footer and nothing else, so listing datasets, inspecting schemas, and
+reading statistics are free — for three datasets or a million, on a local disk
+or across the Atlantic.
 
-- **Metadata is one read.** Opening fetches the footer and nothing else. Listing
-  datasets, inspecting schemas, and reading attributes are then free — for ten
-  datasets or a million.
-- **Data is fetched by the chunk.** Reading a region of an array fetches only
-  the chunks it overlaps.
+It costs one thing: a collection **cannot be modified once written**. No append,
+no in-place update. To change a dataset you rebuild the collection. The one
+exception is removing datasets, which writes a small mask file and leaves the
+container alone.
 
-And it costs one: a collection **cannot be modified after it is written**. No
-append, no in-place update, no compaction. To change a dataset you rewrite the
-collection. The one exception is deleting a dataset, which writes a small mask
-file and never touches the container.
+## Five operations
+
+| Library | Command | Does |
+|---|---|---|
+| `atlas.create` | `atlas create` | Build a collection from a directory of NetCDF files |
+| `atlas.remove` | `atlas rm` | Remove datasets, in one call |
+| `atlas.list_datasets` | `atlas ls` | What the collection holds |
+| `atlas.describe` | `atlas show` | One dataset in detail, `ncdump` style |
+| `atlas.info` | `atlas info` | The collection as a whole |
+
+Every one takes a local path or a URL — `s3://`, `gs://`, `az://`, `https://` —
+so the same call works against a bucket.
+
+```python
+import atlas
+
+atlas.create("/data/nc", "s3://bucket/2024", region="eu-west-1")
+atlas.list_datasets("s3://bucket/2024", region="eu-west-1")
+```
+
+## What `show` gives you
+
+```text
+$ atlas show /data/collection 2024-01
+dataset 2024-01 {
+dimensions:
+	lat = 4 ;
+	lon = 6 ;
+variables:
+	float32 temperature(lat, lon) ;
+		temperature:units = "celsius" ;
+		// stats: count=24  min=1.0  max=24.0
+	string station(lat) ;
+		// stats: count=4  min="a"  max="d"
+
+// global attributes:
+		:month = 1 ;
+}
+```
+
+Types, shapes, chunking, fill values, attributes, and the statistics recorded
+when each array was written — minimum, maximum, and how many elements are
+missing. All from the footer, so it needs no more I/O than `ls` did.
 
 ## Python writes; Rust reads data
 
-From Python you build collections and read their **metadata**: dataset names,
-array names, dtypes, shapes, chunk shapes, fill values, attributes. There is no
-`read_array` — array data is read through the Rust API.
+Array *values* are read through the Rust API, not from Python. What Python
+gives you is the structure: which datasets exist, what arrays they hold, and
+everything recorded about them.
 
-That split is deliberate. Building collections from xarray and serving a
-catalogue of what they hold is what Python is good for here; pulling array bytes
-through the GIL never was.
+That split is deliberate. Building collections from NetCDF and serving a
+catalogue of what they hold is what Python is good for here; pulling array
+bytes through the GIL never was. See [Reading data](guides/reading-data.md).
 
-## What's here
+## Compared to Zarr and netCDF
 
-- **One file, many datasets** — a collection holds thousands of named datasets,
-  each with its own arrays and attributes.
-- **xarray + dask ingest** — `add_xarray_dataset(ds, name)` maps a whole
-  `xr.Dataset` across. Dask-backed variables stream block by block, so a dataset
-  larger than memory writes without trouble.
-- **numpy arrays** — the low-level `write_array` takes a C-contiguous ndarray,
-  zero-copy for numeric dtypes.
-- **Free metadata** — schemas and attributes come from the footer that opening
-  already read. Filtering a fleet of datasets by an attribute costs no I/O.
-- **Compression** — zstd, lz4, or none. Blocks record their own codec, so a
-  reader is never told which was used.
-- **Local or cloud** — a path string, or an
-  [obstore](https://github.com/developmentseed/obstore) handle for S3 / GCS /
-  Azure / HTTP via `pip install "atlas-python[cloud]"`. See
-  [Cloud storage](guides/cloud-storage.md).
-- **Sync API, GIL released** — a multi-threaded tokio runtime backs every
-  blocking call, so other Python threads keep running.
+netCDF and Zarr put one dataset in one file or one chunk directory, so N
+similar datasets become N stores — N sets of metadata to open, N objects to
+list. Atlas puts all N in one file with one footer, which is what makes "many
+small datasets, same schema" cheap to catalogue.
 
-## How does this compare to Zarr / netCDF?
+It is a poor fit when you need to modify data, when you have one big array
+rather than many small datasets, or when you need the values back in Python.
+See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the honest version.
 
-netCDF and Zarr put one logical dataset in one file or one chunk directory, so a
-fleet of N similar datasets becomes N stores — N sets of metadata to open, N
-handles, N objects to list. Atlas puts all N in one file with one footer, which
-is what makes "many small datasets, same schema" cheap to catalogue.
+## Next
 
-See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the head-to-head.
-
-## Next steps
-
-- [**Installation**](installation.md) — install the wheel, or build from source.
-- [**Quickstart**](quickstart.md) — first collection in five minutes.
-- [**Guides**](guides/datasets-and-arrays.md) — the mental model, dtypes,
-  attributes, xarray, dask, cloud storage.
-- [**API reference**](reference/atlas.md) — generated from the source docstrings.
+- [**Installation**](installation.md)
+- [**Quickstart**](quickstart.md) — a collection in five minutes
+- [**The `atlas` command**](cli.md) — every subcommand and flag
+- [**Guides**](guides/creating.md) — creating, inspecting, removing, cloud storage
+- [**API reference**](reference/api.md)
 
 ## Status
 
 - Local filesystem and any [`object_store`](https://docs.rs/object_store)
   backend (S3 / GCS / Azure / HTTP) via the optional obstore dependency.
-- Array data is read from Rust only. Python is metadata-only on the read side.
-- `bool`, `binary`, `list[...]`, and `fixed_size_list[...,N]` are not yet
-  available as array element types from Python. All of them work as *attribute*
-  values.
+- NetCDF is the only ingest route from Python.
+- Array data is read from Rust only.
+- `bool`, `binary`, and the list types are not yet available as array element
+  types. They work as attribute values.

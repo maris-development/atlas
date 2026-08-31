@@ -1,114 +1,107 @@
 # atlas-python
 
-Python bindings for **ATLAS** (Aggregated Tensor Large Array Store) — thousands
-of N-dimensional datasets in one immutable file, on local disk or any object
-store (S3 / GCS / Azure / HTTP). A Rust core with a synchronous, NumPy-native
-write API and first-class [xarray](https://docs.xarray.dev) integration.
+Thousands of NetCDF datasets in one immutable file, on local disk or object
+storage (S3 / GCS / Azure / HTTP). A Rust core, five operations, and a command.
 
 ```bash
 pip install atlas-python
+```
+
+```bash
+atlas create /data/nc /data/collection
+atlas ls     /data/collection
+atlas show   /data/collection 2024-01
+atlas info   /data/collection
+atlas rm     /data/collection 2024-02 2024-03
 ```
 
 | Extra | Install | Adds |
 |---|---|---|
 | cloud | `pip install "atlas-python[cloud]"` | S3 / GCS / Azure / HTTP via [obstore](https://github.com/developmentseed/obstore) |
 
-`numpy`, `xarray`, and `dask` are installed automatically.
+`numpy`, `xarray`, and `dask` install automatically.
 
-## Quick start
+## Five operations
+
+The same five as a library:
 
 ```python
-import numpy as np
 import atlas
 
-# Nothing is readable until the `with` block exits and the footer is written.
-with atlas.AtlasWriter.create("/tmp/my_collection", codec="zstd") as w:
-    ds = w.add_dataset("jan_2024")
-    ds.define_array(
-        "temperature",
-        dtype="float32",
-        dims=["lat", "lon"],
-        shape=[8, 16],
-        chunk_shape=[4, 8],
-        fill_value=float("nan"),
-    )
-    ds.write_array("temperature", start=[0, 0],
-                   data=np.full((8, 16), 20.0, dtype=np.float32))
-    ds.set_attribute("month", 1)
-    ds.set_array_attribute("temperature", "units", "celsius")
-    ds.finish()
+atlas.create("/data/nc", "/data/collection")   # from a directory of NetCDF files
+atlas.list_datasets("/data/collection")        # ['2024-01', '2024-02', '2024-03']
+atlas.describe("/data/collection", "2024-01")  # types, shapes, attrs, statistics
+atlas.info("/data/collection")                 # counts, size, codec
+atlas.remove("/data/collection", ["2024-02"])  # updates the mask
+```
 
-# Reopen. One range read, whatever the collection size.
-collection = atlas.Atlas.open("/tmp/my_collection")
-collection.list_datasets()              # ['jan_2024']
-collection.attributes("jan_2024")       # {'month': 1}
+Every one takes a local path, a URL, or an obstore handle:
 
-view = collection.dataset("jan_2024")
-view.array_meta("temperature")
-# {'dtype': 'float32', 'shape': [8, 16], 'chunk_shape': [4, 8],
-#  'dimension_names': ['lat', 'lon'], 'fill_value': nan}
+```bash
+atlas ls s3://my-bucket/collections/2024 --region eu-west-1
+```
+
+```python
+atlas.list_datasets("s3://my-bucket/collections/2024", region="eu-west-1")
 ```
 
 ## Two things to internalise
 
-**A collection is written once.** There is no append, no in-place update, no
-compaction, and no `flush` — the file either has a valid trailer or it is not a
-collection. To change a dataset you rewrite the collection. The one exception is
-`delete_dataset`, which writes a small mask file and never touches the container.
+**A collection is written once.** No append, no in-place update, no `flush` —
+the file either has a valid trailer or it is not a collection. To change a
+dataset, rebuild the collection. The one exception is `remove`, which writes a
+small mask file and never touches the container, so it reclaims no space and
+moves no ordinals.
 
 **Python writes; Rust reads array data.** From Python you build collections and
-read their *metadata* — dataset names, array names, dtypes, shapes, chunk
-shapes, fill values, attributes. There is no `read_array`. Array values are read
-through the Rust API.
+read their *metadata* — dataset names, array types, shapes, chunk shapes, fill
+values, attributes, and the statistics recorded at write time. There is no
+`read_array`; array values come from the Rust API.
 
 That split is why the read side is free: every metadata call is answered from
-the footer that `open` already fetched, so cataloguing a thousand datasets is
+the footer that opening already fetched, so cataloguing a thousand datasets is
 one request.
 
-## xarray
+## What `show` gives you
 
-```python
-import atlas
-import xarray as xr
-from pathlib import Path
+```text
+$ atlas show /data/collection 2024-01
+dataset 2024-01 {
+dimensions:
+	lat = 4 ;
+	lon = 6 ;
+variables:
+	float32 temperature(lat, lon) ;
+		temperature:_FillValue = nan ;
+		temperature:units = "celsius" ;
+		// stats: count=24  min=1.0  max=24.0
+	string station(lat) ;
+		// stats: count=4  min="a"  max="d"
 
-with atlas.AtlasWriter.create("/data/collection") as w:
-    for p in sorted(Path("/data/nc").glob("*.nc")):
-        w.add_xarray_dataset(xr.open_dataset(p), name=p.stem)
+// global attributes:
+		:month = 1 ;
+
+// ordinal 0, segment bytes 8..1691
+}
 ```
 
-Coordinates and data variables become arrays, variable attrs become per-array
-attributes, dataset attrs become dataset-level attributes, and which variables
-were coordinates is recorded so `Atlas.coords()` can tell you afterwards.
+Shaped like `ncdump -h`, plus the statistics — minimum, maximum, and how many
+elements are missing — computed when each array was written. `--json` on any
+read command gives the same thing as a structure.
 
-Dask-backed variables stream one block at a time, so a dataset far larger than
-memory writes without trouble, and the dask chunking becomes the on-disk chunk
-shape.
+## Ingest
 
-The write is atomic per dataset: one that fails partway never enters the
-collection, and the writer carries on.
+`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf`, sorts
+them, and writes one dataset per file named after the stem. Coordinates and
+data variables become arrays; variable attrs become per-array attributes;
+`_FillValue` becomes the array's fill.
 
-The accessor form is equivalent:
+Dask-backed variables stream block by block, so a file far larger than memory
+ingests without trouble.
 
-```python
-ds.atlas.write(w, "jan_2024")
-```
-
-## Cloud storage
-
-```python
-import obstore as obs
-
-store = obs.store.S3Store("my-bucket", prefix="collections/2024", region="us-east-1")
-
-with atlas.AtlasWriter.create(store) as w:
-    ...
-
-collection = atlas.Atlas.open(store)
-```
-
-Writing is one multipart upload; opening is one range read. Credentials are
-obstore's business — atlas never sees them.
+Nothing is readable at the destination until every file is written — a failure
+part-way leaves no collection, not a partial one. `on_error="skip"`
+(`--skip-errors`) trades that for progress.
 
 ## dtypes
 
@@ -124,21 +117,19 @@ available as array element types.
 
 ## Documentation
 
-Full docs at **<https://maris-development.github.io/atlas/>** — guides for
-[datasets and arrays], [immutability], [reading data], [attributes], [dtypes],
-[xarray], [dask], [codecs], and [cloud storage], plus the API reference.
+Full docs at **<https://maris-development.github.io/atlas/>** — the
+[command reference], plus guides for [creating], [inspecting], [removing],
+[dtypes], [reading data], and [cloud storage].
 
-The format itself is documented in [`docs/`](https://github.com/maris-development/atlas/tree/main/docs)
-in the repository.
+The format itself is documented in
+[`docs/`](https://github.com/maris-development/atlas/tree/main/docs).
 
-[datasets and arrays]: https://maris-development.github.io/atlas/guides/datasets-and-arrays/
-[immutability]: https://maris-development.github.io/atlas/guides/immutability/
-[reading data]: https://maris-development.github.io/atlas/guides/reading-data/
-[attributes]: https://maris-development.github.io/atlas/guides/attributes/
+[command reference]: https://maris-development.github.io/atlas/cli/
+[creating]: https://maris-development.github.io/atlas/guides/creating/
+[inspecting]: https://maris-development.github.io/atlas/guides/inspecting/
+[removing]: https://maris-development.github.io/atlas/guides/removing/
 [dtypes]: https://maris-development.github.io/atlas/guides/dtypes/
-[xarray]: https://maris-development.github.io/atlas/guides/xarray/
-[dask]: https://maris-development.github.io/atlas/guides/dask/
-[codecs]: https://maris-development.github.io/atlas/guides/codecs/
+[reading data]: https://maris-development.github.io/atlas/guides/reading-data/
 [cloud storage]: https://maris-development.github.io/atlas/guides/cloud-storage/
 
 ## License

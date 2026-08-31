@@ -30,6 +30,9 @@ Homepage = "https://github.com/maris-development/atlas"
 Repository = "https://github.com/maris-development/atlas"
 Issues = "https://github.com/maris-development/atlas/issues"
 
+[project.scripts]
+atlas = "atlas._cli:main"
+
 [project.optional-dependencies]
 # Tooling needed to run the test suite (`pytest atlas-python/tests`). The
 # numpy/xarray/dask runtime deps come from `[project].dependencies`; this adds

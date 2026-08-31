@@ -86,7 +86,15 @@ struct DatasetEntry {
     seg_offset: u64,
     seg_len: u64,
     global_attrs: Vec<(u32, AttrS)>,      // (key_pool index, value)
-    array_attrs: Vec<(u32, Vec<(u32, AttrS)>)>,  // (array position, attributes)
+    array_attrs: Vec<(u32, Vec<(u32, AttrS)>)>,   // (array position, attributes)
+    array_stats: Vec<(u32, ArrayStatsS)>,         // (array position, statistics)
+}
+
+struct ArrayStatsS {
+    min: Option<StatValueS>,   // None for a dtype with no ordering
+    max: Option<StatValueS>,
+    null_count: u64,           // elements equal to the fill value
+    row_count: u64,            // total elements across every chunk
 }
 ```
 
@@ -105,6 +113,22 @@ two datasets that differ only in their annotations still share one.
 
 **Attribute keys** are interned as strings, so a key repeated across every
 dataset costs four bytes per use rather than its length.
+
+### Statistics live here too
+
+`array-format` computes a minimum, a maximum, and a null count for every array
+while the dataset is being staged — it has to walk the data anyway to write it.
+Recording the result in the footer therefore costs nothing at write time, and
+makes it free at read time.
+
+`null_count` counts elements equal to the fill value, which is how a
+never-written cell is stored. An array declared and never written reports
+`row_count == null_count`: every element is a hole. `min` and `max` are `None`
+for a dtype with no ordering, and raw bytes for strings, compared
+lexicographically.
+
+This is what `atlas show` prints under each variable, and it is why doing so
+needs no more I/O than listing the datasets did.
 
 ### Attributes live here, not in the segments
 

@@ -23,14 +23,15 @@ A collection's entire metadata — every dataset name, every array's dtype, shap
 chunking, and every attribute — lives in one footer at the end of one file.
 Opening reads it in a single range request.
 
-```python
-collection = atlas.Atlas.open("s3://bucket/collections/2024")   # 1 request
-
-for name in collection.list_datasets():        # 0 requests
-    view = collection.dataset(name)            # 0 requests
-    view.array_meta("temperature")             # 0 requests
-    view.get_attribute("station")              # 0 requests
+```bash
+$ atlas info s3://bucket/collections/2024      # 1 request
+$ atlas ls   s3://bucket/collections/2024      # 1 request
+$ atlas show s3://bucket/collections/2024 jan  # 1 request
 ```
+
+Each of those reads the footer and answers everything from it — dataset names,
+every array's type and shape, every attribute, and the statistics recorded when
+each array was written.
 
 The same catalogue over N netCDF files means opening N files; over N Zarr stores
 or groups it means fetching N sets of `zarr.json`. On object storage, where each
@@ -55,6 +56,9 @@ across workers in a way atlas's single-stream writer does not.
 **You need the data back in Python.** Atlas reads array values from Rust only.
 Zarr and netCDF hand you numpy and dask directly. If the analysis is in Python
 and the storage layer needs to feed it, that is a real cost.
+
+**Your data is not in NetCDF.** NetCDF is the only ingest route atlas offers
+from Python. Zarr will take anything you can put in a numpy array.
 
 **You need an ecosystem.** Zarr and netCDF have decades of tooling, viewers,
 converters, and institutional familiarity. Atlas has this documentation.
@@ -103,7 +107,7 @@ is layout and access cost, not bytes saved.
 
 ```rust
 let atlas = Atlas::open_path("/data/collection").await?;
-let ds = atlas.dataset("jan_2024")?;
+let ds = atlas.dataset("2024-01")?;
 let window = ds.read_array::<f32>("temperature", vec![1, 3], vec![2, 2]).await?;
 ```
 

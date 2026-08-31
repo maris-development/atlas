@@ -3,13 +3,11 @@
 Python reads a collection's **metadata**. It does not read array values.
 
 ```python
-collection = atlas.Atlas.open(path)
+atlas.list_datasets(collection)            # ✓
+atlas.describe(collection, "jan")          # ✓  types, shapes, attrs, stats
+atlas.info(collection)                     # ✓
 
-collection.list_datasets()                 # ✓
-collection.dataset("jan").array_meta("t")  # ✓
-collection.attributes("jan")               # ✓
-
-collection.dataset("jan").read_array("t")  # ✗ does not exist
+atlas.read_array(collection, "jan", "t")   # ✗ does not exist
 ```
 
 ## Why
@@ -30,28 +28,33 @@ Enough to build a catalogue, validate an ingest, or decide which datasets are
 worth fetching:
 
 ```python
-view = collection.dataset("jan_2024")
+detail = atlas.describe(collection, "2024-01")
 
-view.list_arrays()            # ['lat', 'lon', 'temperature']
-view.array_meta("temperature")
-# {'dtype': 'float32', 'shape': [4, 8], 'chunk_shape': [2, 4],
-#  'dimension_names': ['lat', 'lon'], 'fill_value': nan}
+detail["dimensions"]     # {'lat': 4, 'lon': 6}
+detail["coordinates"]    # ['lat', 'lon']
+detail["attributes"]     # decoded, markers hidden
+detail["ordinal"]        # stable position in the collection
+detail["segment_range"]  # [start, end] byte offsets in data.atlas
 
-view.array_fill_value("temperature")
-view.ordinal                  # stable position in the collection
-view.segment_range            # (start, end) byte offsets in data.atlas
-
-collection.coords("jan_2024")                       # which vars were coords
-collection.attributes("jan_2024")                   # decoded dataset attrs
-collection.array_attributes("jan_2024", "temperature")
+for array in detail["arrays"]:
+    array["dtype"], array["shape"], array["chunk_shape"]
+    array["fill_value"], array["attributes"], array["is_coordinate"]
+    array["stats"]       # {'min', 'max', 'null_count', 'row_count'}
 ```
 
-Attribute filtering across a whole collection costs nothing beyond the open:
+Statistics deserve a mention: minimum, maximum, and how many elements are
+missing, for every array, recorded when it was written. Often that is the
+question you actually had — *does this dataset contain anything above 30?* —
+and it is answered without fetching a byte of data.
+
+Filtering across a whole collection costs nothing beyond the footer reads:
 
 ```python
-northern = [
-    name for name in collection.list_datasets()
-    if collection.dataset(name).get_attribute("site") == "north"
+hot = [
+    name
+    for name in atlas.list_datasets(collection)
+    for array in atlas.describe(collection, name)["arrays"]
+    if array["name"] == "temperature" and array["stats"]["max"] > 30
 ]
 ```
 
@@ -77,18 +80,18 @@ The first read on a dataset opens its segment; subsequent reads reuse it. See
 
 Three options, in order of how much work they are.
 
-**Keep the source data.** Collections are usually built from NetCDF files or a
-database query. If you need values in Python, read the source rather than the
-collection.
+**Keep the source data.** A collection is built from NetCDF files, and those
+files are the obvious place to read values from. `xr.open_dataset` on the
+original is simpler than anything else here.
 
 **Extract a segment.** `segment_range` gives the byte offsets of a complete,
 standalone `array-format` file. Cut it out and any `array-format` reader opens
 it directly:
 
 ```python
-start, end = collection.dataset("jan_2024").segment_range
-blob = open(f"{path}/data.atlas", "rb").read()[start:end]
-open("jan_2024.af", "wb").write(blob)
+start, end = atlas.describe(collection, "2024-01")["segment_range"]
+blob = open(f"{collection}/data.atlas", "rb").read()[start:end]
+open("2024-01.af", "wb").write(blob)
 ```
 
 **Write a small Rust service.** If the values are wanted over a network anyway,

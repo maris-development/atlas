@@ -6,10 +6,8 @@
 - A working C/Rust toolchain *only* for source installs; wheels (when
   available) install with no compiler in scope.
 
-`xarray` and `dask` are required runtime dependencies. They install
-automatically with `pip install atlas-python` — there is no "without xarray"
-build of `atlas`. The xarray accessor at `xr.Dataset.atlas` is registered
-the moment you `import atlas`.
+`xarray` and `dask` are required runtime dependencies — NetCDF is the only
+ingest route, so there is no "without xarray" build.
 
 ## From PyPI
 
@@ -17,7 +15,12 @@ the moment you `import atlas`.
 pip install atlas-python
 ```
 
-This pulls in `numpy>=1.23`, `xarray>=2023.1`, and `dask>=2023.1`.
+This pulls in `numpy>=1.23`, `xarray>=2023.1`, and `dask>=2023.1`, and puts the
+`atlas` command on your PATH:
+
+```bash
+atlas --help
+```
 
 ## From source (development)
 
@@ -56,14 +59,16 @@ install the `cloud` extra. This pulls in
 pip install "atlas-python[cloud]"
 ```
 
-Then construct an obstore handle and pass it where you'd otherwise pass
-a path:
+Then pass a URL where you would otherwise pass a path:
+
+```bash
+atlas ls s3://my-bucket/collections/2024 --region eu-west-1
+```
 
 ```python
-import obstore as obs, atlas
+import atlas
 
-store = obs.store.S3Store("my-bucket", prefix="stores/jan_2024", region="us-east-1")
-atlas = atlas.Atlas.open(store)
+atlas.list_datasets("s3://my-bucket/collections/2024", region="eu-west-1")
 ```
 
 See [Cloud storage (S3, GCS, Azure)](guides/cloud-storage.md) for the

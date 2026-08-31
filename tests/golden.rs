@@ -18,7 +18,7 @@
 
 use std::path::{Path, PathBuf};
 
-use atlas::{Atlas, AtlasWriter, Attr, Codec, FillValue, WriterConfig};
+use atlas::{Atlas, AtlasWriter, Attr, Codec, FillValue, StatValue, WriterConfig};
 use ndarray::{Array1, ArrayD, IxDyn};
 
 fn fixture_dir() -> PathBuf {
@@ -151,7 +151,34 @@ async fn the_committed_v1_container_still_opens() {
         .unwrap();
     assert_eq!(counts.as_slice().unwrap(), &[0, 0, 0, 0]);
 
+    // Statistics were computed at write time and live in the footer.
+    let stats = grid
+        .array_stats("temperature")
+        .expect("temperature has stats");
+    assert_eq!(stats.name, "temperature");
+    assert_eq!(stats.row_count, 24);
+    assert_eq!(stats.min, Some(StatValue::Float(0.0)));
+    assert_eq!(stats.max, Some(StatValue::Float(23.0)));
+    // Every cell was written, and none of them is NaN.
+    assert_eq!(stats.null_count, 0);
+
+    // counts was declared and never written, so every one of its elements is
+    // the fill value — which is exactly what the null count says.
+    let counts_stats = grid.array_stats("counts").expect("counts has stats");
+    assert_eq!(counts_stats.row_count, 4);
+    assert_eq!(counts_stats.null_count, 4);
+    assert_eq!(counts_stats.min, None);
+
+    // An array this dataset does not declare has none.
+    assert!(grid.array_stats("missing").is_none());
+
+    // Strings get a lexicographic min and max, as raw bytes.
     let labels = atlas.dataset("labels").unwrap();
+    let name_stats = labels.array_stats("name").expect("name has stats");
+    assert_eq!(name_stats.row_count, 3);
+    assert_eq!(name_stats.min, Some(StatValue::Bytes(b"alpha".to_vec())));
+    assert_eq!(name_stats.max, Some(StatValue::Bytes(b"gamma".to_vec())));
+
     let names = labels
         .read_array::<String>("name", vec![], vec![])
         .await

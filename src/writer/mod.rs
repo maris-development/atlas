@@ -53,7 +53,7 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::config::{Codec, WriterConfig};
-use crate::format::footer::{AttrS, CollectionFooter, DatasetEntry, Interner};
+use crate::format::footer::{ArrayStatsS, AttrS, CollectionFooter, DatasetEntry, Interner};
 use crate::format::{self, DATA_FILE, child};
 use crate::schema::{ArraySchema, Attr, DatasetSchema};
 use crate::{Error, Result, validate_name};
@@ -389,6 +389,22 @@ impl DatasetWriter {
                 file.flush().await?;
             }
         }
+        // Harvest the statistics array-format computed during the flush, while
+        // the file is still open. They go into the footer, so a reader gets
+        // them without touching the segment.
+        let array_stats: Vec<(u32, ArrayStatsS)> = match self.file.as_ref() {
+            Some(file) => self
+                .arrays
+                .keys()
+                .enumerate()
+                .filter_map(|(position, array)| {
+                    let stats = file.array_stats(array)?;
+                    Some((position as u32, ArrayStatsS::from(stats)))
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+
         // Release the file before reading it back: array-format holds an open
         // handle and a cache that are no longer wanted.
         self.file = None;
@@ -433,6 +449,7 @@ impl DatasetWriter {
             seg_len,
             global_attrs,
             array_attrs,
+            array_stats,
         });
         drop(state);
         // Staging is large; reclaim it now rather than at the end of the write.

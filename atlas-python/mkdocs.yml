@@ -39,9 +39,9 @@ plugins:
               python:
                   paths: ["python"] # python-source layout: package lives at python/atlas
                   options:
-                      # `Atlas`, `DatasetView`, `init_tracing` are re-exported from the
-                      # compiled Rust extension `atlas._atlas`. griffe can't analyse a
-                      # .pyd statically, so dynamically import it to resolve the aliases.
+                      # `init_tracing` is re-exported from the compiled Rust
+                      # extension `atlas._atlas`. griffe can't analyse a .so
+                      # statically, so import it to resolve the alias.
                       preload_modules: ["atlas._atlas"]
                       docstring_style: numpy
                       show_root_heading: true
@@ -73,21 +73,14 @@ nav:
     - Home: index.md
     - Installation: installation.md
     - Quickstart: quickstart.md
+    - The atlas command: cli.md
     - vs Zarr / netCDF: vs-zarr-netcdf.md
     - Guides:
-          - Datasets and arrays: guides/datasets-and-arrays.md
-          - Immutability: guides/immutability.md
-          - Reading data: guides/reading-data.md
-          - Attributes: guides/attributes.md
+          - Creating a collection: guides/creating.md
+          - Inspecting a collection: guides/inspecting.md
+          - Removing datasets: guides/removing.md
           - Supported dtypes: guides/dtypes.md
-          - xarray integration: guides/xarray.md
-          - Dask streaming: guides/dask.md
-          - Codecs: guides/codecs.md
+          - Reading data: guides/reading-data.md
           - Cloud storage (S3, GCS, Azure): guides/cloud-storage.md
     - Examples: examples.md
-    - API reference:
-          - AtlasWriter: reference/atlas-writer.md
-          - DatasetWriter: reference/dataset-writer.md
-          - Atlas: reference/atlas.md
-          - DatasetView: reference/dataset-view.md
-          - xarray accessor: reference/xarray-accessor.md
+    - API reference: reference/api.md

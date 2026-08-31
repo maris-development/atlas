@@ -33,15 +33,16 @@ chunked-array encoding and [`object_store`](https://crates.io/crates/object_stor
 for I/O, so a collection works identically on local disk, S3, GCS, Azure, or
 in memory.
 
-> **Python?** `pip install atlas-python`, then `import atlas`. Python builds
-> collections from xarray and reads their metadata; array data is read from
-> Rust. See [`atlas-python/`](atlas-python/) and the
+> **Python?** `pip install atlas-python` gives you the `atlas` command:
+> `atlas create` a collection from a directory of NetCDF files, then `ls`,
+> `show`, `info`, and `rm` — locally or against a bucket. Array data is read
+> from Rust. See [`atlas-python/`](atlas-python/) and the
 > [documentation site](https://maris-development.github.io/atlas/).
 >
 > **Architecture?** [`docs/`](docs/) walks through it —
 > [architecture](docs/architecture.md), [data model](docs/data-model.md),
 > [the format](docs/format.md), [write path](docs/write-path.md),
-> [read path](docs/read-path.md), and [Python/xarray](docs/python-xarray.md).
+> [read path](docs/read-path.md), and [the Python package](docs/python.md).
 
 ---
 
@@ -153,8 +154,10 @@ schema, and attributes. Two pools keep it small: schemas are interned by content
 hash, so a fleet of a thousand identically-shaped datasets stores one copy; and
 attribute keys are interned as strings.
 
-Attribute **values** live here too, not in the segments — which is what makes a
-metadata-only open answer every attribute question with no further I/O.
+Attribute **values** live here too, not in the segments, along with each array's
+minimum, maximum, and null count — computed while the dataset was staged, since
+the writer had to walk the data anyway. That is what makes a metadata-only open
+answer every question about a collection with no further I/O.
 
 Full byte-level detail in [`docs/format.md`](docs/format.md).
 
@@ -172,6 +175,7 @@ ds.schema();
 ds.array_meta("temperature");
 ds.attributes();
 ds.array_fill_value("temperature");
+ds.array_stats("temperature");               // min, max, null count, row count
 ```
 
 None of that touches the store after the open. `tests/integration.rs` proves it

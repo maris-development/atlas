@@ -17,7 +17,9 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use array_format::{ArrayElement, ArrayFile, DeltaCache, FileConfig, FillValue, NoCompression};
+use array_format::{
+    ArrayElement, ArrayFile, ArrayStats, DeltaCache, FileConfig, FillValue, NoCompression,
+};
 use indexmap::IndexMap;
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -46,6 +48,8 @@ pub struct Atlas {
     /// One lazily-opened `ArrayFile` per dataset ordinal.
     segments: Arc<Vec<tokio::sync::OnceCell<Arc<ArrayFile>>>>,
     cache: Arc<DeltaCache>,
+    /// Size of `data.atlas`, learned from the head request that opened it.
+    container_bytes: u64,
 }
 
 impl Atlas {
@@ -84,6 +88,7 @@ impl Atlas {
                 DEFAULT_CACHE_CAPACITY,
                 DEFAULT_IO_CACHE_CAPACITY,
             )),
+            container_bytes: size,
         })
     }
 
@@ -194,6 +199,34 @@ impl Atlas {
     /// When the collection was written, in milliseconds since the Unix epoch.
     pub fn created_unix_ms(&self) -> i64 {
         self.footer.created_unix_ms
+    }
+
+    /// The container format version this collection was written with.
+    pub fn format_version(&self) -> u32 {
+        self.footer.version
+    }
+
+    /// The block codec the writer used. Informational: every block records its
+    /// own codec, so reading never consults this.
+    pub fn codec(&self) -> crate::Codec {
+        self.footer.codec
+    }
+
+    /// Size of `data.atlas` in bytes.
+    pub fn container_bytes(&self) -> u64 {
+        self.container_bytes
+    }
+
+    /// Datasets in the container, including those the mask hides.
+    pub fn total_datasets(&self) -> usize {
+        self.footer.datasets.len()
+    }
+
+    /// How many distinct schemas the datasets share between them. Lower than
+    /// [`total_datasets`](Self::total_datasets) whenever datasets have the same
+    /// arrays, which is the common case.
+    pub fn interned_schemas(&self) -> usize {
+        self.footer.schema_pool.len()
     }
 
     /// A view of one dataset. No I/O: the view answers metadata from the
@@ -342,6 +375,20 @@ impl DatasetView {
     /// One attribute of one array.
     pub fn get_array_attribute(&self, array: &str, key: &str) -> Option<Attr> {
         self.array_attributes(array).shift_remove(key)
+    }
+
+    /// What was recorded about one array's values when it was written: minimum,
+    /// maximum, how many elements equal the fill value, and how many there are.
+    ///
+    /// Comes from the footer, so it costs nothing. `None` for an array this
+    /// dataset does not declare, or one that was declared and never written.
+    pub fn array_stats(&self, array: &str) -> Option<ArrayStats> {
+        let position = self.schema().arrays.get_index_of(array)?;
+        self.entry()
+            .array_stats
+            .iter()
+            .find(|(pos, _)| *pos as usize == position)
+            .map(|(_, stats)| stats.to_array_stats(array))
     }
 
     /// Reads a region of `array`.

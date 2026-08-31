@@ -50,6 +50,11 @@ from committed layers only — could produce dangling attribute indices.
 
 The result is one self-contained file, which is what a segment has to be.
 
+The flush also computes each array's minimum, maximum, and null count. Those
+are harvested into the footer entry before the staged file is closed, so a
+reader gets them without opening the segment — see
+[format.md](format.md#statistics-live-here-too).
+
 > **Cost.** This pass re-reads, decompresses, and recompresses every chunk, and
 > computes statistics twice, all on local scratch. Ingest therefore pays roughly
 > double the compression CPU of a hypothetical one-shot builder. It is isolated

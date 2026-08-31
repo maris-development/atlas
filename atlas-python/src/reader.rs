@@ -5,7 +5,7 @@
 //! split is deliberate: a collection is written from Python and then served,
 //! and serving does not need to pull array bytes through the GIL.
 
-use atlas::{Atlas, DatasetView, FillValue};
+use atlas::{Atlas, DatasetView, FillValue, StatValue};
 use object_store::path::Path as ObjStorePath;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -67,6 +67,20 @@ impl PyAtlas {
     #[getter]
     fn created_unix_ms(&self) -> i64 {
         self.inner.created_unix_ms()
+    }
+
+    /// Everything the collection knows about itself: format version, creation
+    /// time, codec, container size, dataset counts, and how many distinct
+    /// schemas its datasets share.
+    fn summary<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("format_version", self.inner.format_version())?;
+        dict.set_item("created_unix_ms", self.inner.created_unix_ms())?;
+        dict.set_item("codec", codec_name(self.inner.codec()))?;
+        dict.set_item("container_bytes", self.inner.container_bytes())?;
+        dict.set_item("total_datasets", self.inner.total_datasets())?;
+        dict.set_item("interned_schemas", self.inner.interned_schemas())?;
+        Ok(dict)
     }
 
     /// A metadata view of one dataset. Raises `KeyError` if it is absent or
@@ -202,6 +216,29 @@ impl PyDatasetView {
             .transpose()
     }
 
+    /// `{"min", "max", "null_count", "row_count"}` for `array`, as recorded
+    /// when the collection was written, or `None` if this dataset does not
+    /// declare it.
+    ///
+    /// `null_count` counts elements equal to the fill value, which is how a
+    /// never-written cell is stored. `min` and `max` are `None` for a dtype
+    /// with no ordering, and raw `bytes` for strings.
+    fn array_stats<'py>(
+        &self,
+        py: Python<'py>,
+        array: &str,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let Some(stats) = self.inner.array_stats(array) else {
+            return Ok(None);
+        };
+        let dict = PyDict::new(py);
+        dict.set_item("min", stat_value_to_py(py, stats.min.as_ref())?)?;
+        dict.set_item("max", stat_value_to_py(py, stats.max.as_ref())?)?;
+        dict.set_item("null_count", stats.null_count)?;
+        dict.set_item("row_count", stats.row_count)?;
+        Ok(Some(dict))
+    }
+
     fn __contains__(&self, array: &str) -> bool {
         self.inner.array_meta(array).is_some()
     }
@@ -216,6 +253,29 @@ impl PyDatasetView {
             self.inner.name(),
             self.inner.list_arrays().len()
         )
+    }
+}
+
+fn codec_name(codec: atlas::Codec) -> &'static str {
+    match codec {
+        atlas::Codec::Zstd => "zstd",
+        atlas::Codec::Lz4 => "lz4",
+        atlas::Codec::Uncompressed => "none",
+    }
+}
+
+/// Convert a statistic to a Python scalar. Strings and binary come back as
+/// `bytes` rather than a list of integers, because a min/max is a value you
+/// compare against.
+fn stat_value_to_py(py: Python<'_>, val: Option<&StatValue>) -> PyResult<Py<PyAny>> {
+    use pyo3::IntoPyObjectExt;
+    let Some(val) = val else { return Ok(py.None()) };
+    match val {
+        StatValue::Int(v) => v.into_py_any(py),
+        StatValue::UInt(v) => v.into_py_any(py),
+        StatValue::Float(v) => v.into_py_any(py),
+        StatValue::Bytes(v) => pyo3::types::PyBytes::new(py, v).into_py_any(py),
+        StatValue::TimestampNs(v) => v.into_py_any(py),
     }
 }
 

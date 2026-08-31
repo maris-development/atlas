@@ -1,100 +1,151 @@
 # Quickstart
 
-The smallest useful collection: one dataset, one 2-D array, a couple of
-attributes. Then reopen it and inspect what landed.
+A directory of NetCDF files in, one collection out, then a look at what landed.
 
-## Write
+## Build
+
+```bash
+atlas create /data/nc /data/collection
+```
+
+```text
+Writing /data/collection
+  2024-01
+  2024-02
+  2024-03
+3 dataset(s) written to /data/collection
+```
+
+Each file became one dataset, named after its stem. The result is a single
+file:
+
+```bash
+$ ls /data/collection
+data.atlas
+```
+
+Nothing was readable there until the last file was written — a failure part-way
+would have left no collection at all, rather than a partial one.
+
+From Python:
 
 ```python
-import numpy as np
 import atlas
 
-with atlas.AtlasWriter.create("/tmp/my_collection", codec="zstd") as w:   # (1)
-    ds = w.add_dataset("jan_2024")                                        # (2)
-    ds.define_array(
-        "temperature",
-        dtype="float32",
-        dims=["lat", "lon"],
-        shape=[8, 16],
-        chunk_shape=[4, 8],                                               # (3)
-        fill_value=float("nan"),                                          # (4)
-    )
-    ds.write_array(
-        "temperature",
-        start=[0, 0],
-        data=np.full((8, 16), 20.0, dtype=np.float32),                    # (5)
-    )
-    ds.set_attribute("month", 1)
-    ds.set_array_attribute("temperature", "units", "celsius")
-    ds.finish()                                                           # (6)
-# (7)
+atlas.create("/data/nc", "/data/collection")
 ```
 
-1. **`AtlasWriter.create(path, codec=...)`** — codec is `"zstd"` (default),
-   `"lz4"`, or `"none"`. See [Codecs](guides/codecs.md).
-2. **`add_dataset(name)`** returns a
-   [`DatasetWriter`](reference/dataset-writer.md).
-3. **`chunk_shape`** is the storage granularity, and it is what makes a later
-   partial read cheap. Defaults to `shape` — one chunk, read whole or not at all.
-4. **`fill_value`** is what a read returns for cells never written. They cost no
-   bytes.
-5. **numpy in, zero copy** — a C-contiguous array whose dtype matches the
-   declared one.
-6. **`ds.finish()`** is when the dataset enters the file. Drop the writer
-   instead and it never does.
-7. **The `with` exit writes the footer.** Nothing at the path is readable before
-   that, and an exception inside the block leaves nothing at all.
+## Look
 
-## Reopen
+```bash
+$ atlas ls /data/collection
+2024-01
+2024-02
+2024-03
+```
+
+```bash
+$ atlas info /data/collection
+collection /data/collection
+  format version    1
+  created           2026-08-31T08:32:57Z
+  codec             zstd
+  container size    5.4 KiB
+  datasets          3
+  interned schemas  1
+  distinct arrays   4
+      lat
+      lon
+      station
+      temperature
+```
+
+Both come from one range read of the container's tail — the same cost whether
+the collection holds three datasets or a million.
+
+`interned schemas 1` means all three months declare the same arrays, so that
+schema is stored once.
+
+## Inspect one dataset
+
+```bash
+$ atlas show /data/collection 2024-01
+dataset 2024-01 {
+dimensions:
+	lat = 4 ;
+	lon = 6 ;
+variables:
+	float64 lat(lat) ;  // coordinate
+		lat:_FillValue = nan ;
+		// stats: count=4  min=0.0  max=3.0
+	float32 temperature(lat, lon) ;
+		temperature:_FillValue = nan ;
+		temperature:units = "celsius" ;
+		// stats: count=24  min=1.0  max=24.0
+	string station(lat) ;
+		station:_FillValue = "" ;
+		// stats: count=4  min="a"  max="d"
+
+// global attributes:
+		:month = 1 ;
+		:source = "example" ;
+
+// ordinal 0, segment bytes 8..1691
+}
+```
+
+Shaped like `ncdump -h`, with the statistics that were computed when each array
+was written. Those are in the footer too, so printing them cost nothing extra.
+
+From Python, the same thing as a structure:
 
 ```python
-collection = atlas.Atlas.open("/tmp/my_collection")   # one range read
-
-collection.list_datasets()      # ['jan_2024']
-collection.list_arrays()        # ['temperature']
-len(collection)                 # 1
-"jan_2024" in collection        # True
-
-view = collection.dataset("jan_2024")
-view.list_arrays()              # ['temperature']
-view.array_meta("temperature")
-# {'dtype': 'float32', 'shape': [8, 16], 'chunk_shape': [4, 8],
-#  'dimension_names': ['lat', 'lon'], 'fill_value': nan}
-
-collection.attributes("jan_2024")                       # {'month': 1}
-collection.array_attributes("jan_2024", "temperature")  # {'units': 'celsius'}
+detail = atlas.describe("/data/collection", "2024-01")
+detail["dimensions"]                                    # {'lat': 4, 'lon': 6}
+detail["coordinates"]                                   # ['lat', 'lon']
+{a["name"]: a["stats"] for a in detail["arrays"]}
 ```
 
-Every call after `open` is answered from the footer, with no further I/O.
+## Remove
+
+```bash
+$ atlas rm /data/collection 2024-02
+removed 1: 2024-02
+2 dataset(s) remain
+```
+
+That wrote a small `deleted.mask` beside the container. The container itself is
+untouched, so nothing was reclaimed and no ordinal moved. Rebuild the
+collection to get the space back.
+
+## Against a bucket
+
+Every command takes a URL in place of a path:
+
+```bash
+atlas create /data/nc s3://my-bucket/collections/2024 --region eu-west-1
+atlas ls s3://my-bucket/collections/2024 --region eu-west-1
+```
+
+Needs `pip install "atlas-python[cloud]"`. See
+[Cloud storage](guides/cloud-storage.md).
 
 ## Reading the data
 
-You don't — not from Python. There is no `read_array` on `Atlas` or
-`DatasetView`. Array data is read through the Rust API:
+Not from Python — array values are read through the Rust API:
 
 ```rust
-let atlas = Atlas::open_path("/tmp/my_collection").await?;
-let ds = atlas.dataset("jan_2024")?;
-let window = ds.read_array::<f32>("temperature", vec![0, 0], vec![4, 8]).await?;
+let atlas = Atlas::open_path("/data/collection").await?;
+let ds = atlas.dataset("2024-01")?;
+let window = ds.read_array::<f32>("temperature", vec![0, 0], vec![2, 3]).await?;
 ```
 
 See [Reading data](guides/reading-data.md) for why, and what to do if you need
 values in Python.
 
-## Deleting
+## Next
 
-```python
-collection.delete_dataset("jan_2024")
-```
-
-Writes a small `deleted.mask` beside the container and hides the dataset. The
-container itself is untouched, so this reclaims no space and moves no ordinals.
-Rewrite the collection to get the bytes back.
-
-## Next steps
-
-- [**Datasets and arrays**](guides/datasets-and-arrays.md) — the mental model
-  and the full `define_array` / `write_array` surface.
-- [**xarray integration**](guides/xarray.md) — write a whole `xr.Dataset` with
-  one call.
-- [**Dask streaming**](guides/dask.md) — datasets larger than memory.
+- [**The `atlas` command**](cli.md) — every flag
+- [**Creating a collection**](guides/creating.md) — chunking, errors, memory
+- [**Inspecting a collection**](guides/inspecting.md) — what the metadata holds
+- [**Removing datasets**](guides/removing.md) — the mask, and what it costs

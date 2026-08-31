@@ -1,22 +1,11 @@
-"""xarray integration for atlas: the write path.
+"""Turning `xarray.Dataset` objects into atlas datasets.
 
-`xarray` and `dask` are required dependencies.
+Internal: `atlas.create` is the public way in. This module holds the mapping —
+dtypes, fill values, attribute encoding, and the block-by-block streaming that
+keeps memory flat for dask-backed variables.
 
-This module turns `xarray.Dataset` objects into atlas datasets. It has no read
-path, and that is deliberate: a collection opened from Python is metadata only.
-Use the Rust API to read array data back.
-
-Dask-backed variables stream block by block, so a dataset far larger than memory
-can be written. The on-disk chunk grid follows the dask chunking unless
-`chunks=` says otherwise.
-
-Bulk ingestion, one collection from many files:
-
-    with atlas.AtlasWriter.create(path) as w:
-        for nc_path in nc_paths:
-            ds = xr.open_dataset(nc_path)
-            w.add_xarray_dataset(ds, name=Path(nc_path).stem)
-    # w.finish() runs on __exit__; nothing is readable before it.
+There is no read path here, deliberately. A collection opened from Python is
+metadata only; array data is read through the Rust API.
 """
 from __future__ import annotations
 
@@ -456,14 +445,11 @@ def _write_xarray_dataset(
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
 ) -> None:
-    """Write an ``xarray.Dataset`` into an open :class:`AtlasWriter` as ``name``.
+    """Write an ``xarray.Dataset`` into an open writer as ``name``.
 
-    Both ``AtlasWriter.add_xarray_dataset`` and the ``ds.atlas.write`` accessor
-    route through here.
-
-    The write is atomic. A ``DatasetWriter`` reaches the container only when it
-    finishes, so a failure partway through — an unsupported dtype, say — is
-    discarded by aborting it, and the collection never sees the dataset.
+    Atomic: a dataset reaches the container only when it finishes, so a failure
+    partway through — an unsupported dtype, say — is discarded by aborting it,
+    and the collection never sees the dataset.
     """
     dataset_writer = writer.add_dataset(name)
     try:
@@ -472,37 +458,3 @@ def _write_xarray_dataset(
         dataset_writer.abort()
         raise
     dataset_writer.finish()
-
-
-# --- xarray accessor ----------------------------------------------------------
-# Registered as `ds.atlas` once `atlas` is imported. The whole module is
-# side-effect-imported from `atlas/__init__.py`, so importing `atlas` is enough
-# to activate this.
-
-import xarray as _xr  # noqa: E402
-
-
-@_xr.register_dataset_accessor("atlas")
-class _AtlasAccessor:
-    """Methods exposed on an `xr.Dataset` as `ds.atlas.*`."""
-
-    def __init__(self, ds: "_xr.Dataset") -> None:
-        self._ds = ds
-
-    def write(
-        self,
-        writer: "AtlasWriter",
-        name: str,
-        chunks: Optional[dict[str, Sequence[int]]] = None,
-        fill_value: Any = None,
-    ) -> None:
-        """Write this Dataset into the open collection under `name`.
-
-        Equivalent to `writer.add_xarray_dataset(self_ds, name, chunks, fill_value)`.
-
-        `fill_value` overrides the per-array fill: a bare scalar applies to
-        numeric arrays, a `{var: scalar}` dict targets named vars (`None`
-        disables the default for that var). When omitted, float arrays default
-        to a `NaN` fill so mask_and_scale'd missing cells are recorded as null.
-        """
-        writer.add_xarray_dataset(self._ds, name, chunks, fill_value)

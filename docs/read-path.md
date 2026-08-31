@@ -22,6 +22,7 @@ ds.array_meta("temperature");
 ds.attributes();
 ds.array_attributes("temperature");
 ds.array_fill_value("temperature");
+ds.array_stats("temperature");         // min, max, null count, row count
 ```
 
 `tests/integration.rs` asserts this with a request-counting `ObjectStore`:

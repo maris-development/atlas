@@ -6,6 +6,10 @@
 //! `tests/fixtures/from_python/`, which is committed, and the Rust reader
 //! asserts every value here.
 //!
+//! The fixture is built the way `atlas create` builds any collection: from a
+//! directory of NetCDF files. So this also covers the round trip through
+//! NetCDF, which is the only ingest route Python offers.
+//!
 //! Regenerate after an intentional change to the write path:
 //!
 //! ```text
@@ -17,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use atlas::{Atlas, Attr, DType, FillValue, TimestampNs};
+use atlas::{Atlas, Attr, DType, FillValue, StatValue, TimestampNs};
 
 fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/from_python")
@@ -153,22 +157,48 @@ async fn the_two_python_datasets_share_one_interned_schema() {
     let grid = atlas.dataset("grid").unwrap();
     let copy = atlas.dataset("grid_copy").unwrap();
 
-    // grid_copy was written without the explicit chunking, so its schema
-    // differs: same arrays, different chunk shape for temperature.
+    // Both were written from identical files under one `chunks=` setting, so
+    // they declare the same arrays and the footer stores that schema once.
     assert_eq!(grid.list_arrays(), copy.list_arrays());
-    assert_eq!(
-        copy.array_meta("temperature").unwrap().chunk_shape,
-        vec![4, 6]
-    );
-    assert_ne!(grid.schema(), copy.schema());
-
-    // Attributes are identical, and they live outside the schema.
+    assert_eq!(grid.schema(), copy.schema());
     assert_eq!(grid.attributes(), copy.attributes());
 
-    // The copy's data is the same.
+    // The copy's data is the same, and it lives in its own segment.
+    assert_ne!(grid.segment_range(), copy.segment_range());
     let copy_counts = copy
         .read_array::<i64>("counts", vec![], vec![])
         .await
         .unwrap();
     assert_eq!(copy_counts.as_slice().unwrap(), &[10, 20, 30, 40]);
+}
+
+#[tokio::test]
+async fn the_python_written_fixture_carries_statistics() {
+    let atlas = Atlas::open_path(fixture_dir()).await.unwrap();
+    let grid = atlas.dataset("grid").unwrap();
+
+    // Computed while the dataset was staged, then stored in the footer.
+    let temperature = grid.array_stats("temperature").unwrap();
+    assert_eq!(temperature.row_count, 24);
+    assert_eq!(temperature.null_count, 0);
+    assert_eq!(temperature.min, Some(StatValue::Float(0.0)));
+    assert_eq!(temperature.max, Some(StatValue::Float(23.0)));
+
+    let counts = grid.array_stats("counts").unwrap();
+    assert_eq!(counts.min, Some(StatValue::Int(10)));
+    assert_eq!(counts.max, Some(StatValue::Int(40)));
+
+    // Strings compare lexicographically, as raw bytes.
+    let label = grid.array_stats("label").unwrap();
+    assert_eq!(label.min, Some(StatValue::Bytes(b"alpha".to_vec())));
+    assert_eq!(label.max, Some(StatValue::Bytes(b"gamma".to_vec())));
+
+    // Timestamps keep their own statistic type.
+    let observed = grid.array_stats("observed").unwrap();
+    let jan_1_2024 = 1_704_067_200_000_000_000i64;
+    assert_eq!(observed.min, Some(StatValue::TimestampNs(jan_1_2024)));
+    assert_eq!(
+        observed.max,
+        Some(StatValue::TimestampNs(jan_1_2024 + 3 * 86_400_000_000_000))
+    );
 }

@@ -5,7 +5,7 @@
 ```text
 ┌─────────────────────────────────────────────────────────────┐
 │ atlas-python/python/atlas/                                  │
-│   xarray conventions, attribute encoding, the facade        │  Python
+│   five operations, the `atlas` CLI, the xarray mapping      │  Python
 ├─────────────────────────────────────────────────────────────┤
 │ atlas-python/src/                                           │
 │   PyO3 bindings: numpy ⇄ ndarray, Python ⇄ Attr, errors     │  Rust (glue)
@@ -33,7 +33,7 @@
 | Chunk layout, blocks, compression, fill values | `array-format` |
 | Byte-range I/O against any backend | `object_store` |
 | numpy ⇄ Rust arrays, Python exceptions | `atlas-python/src/` |
-| xarray mapping, attribute encoding | `atlas-python/python/` |
+| NetCDF ingest, the CLI, xarray mapping | `atlas-python/python/` |
 
 The **file format is Rust only**. `atlas-python` holds no format knowledge: it
 cannot construct a header, a footer, or a mask. Grep it for `ATLS` and you get

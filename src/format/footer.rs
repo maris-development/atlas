@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use array_format::DType;
+use array_format::{ArrayStats, DType, StatValue};
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,13 @@ pub(crate) struct DatasetEntry {
     /// Per-array attributes as `(array position in the schema, attributes)`.
     /// Position rather than name, because the schema is shared.
     pub array_attrs: Vec<(u32, Vec<(u32, AttrS)>)>,
+    /// Per-array statistics as `(array position in the schema, stats)`.
+    ///
+    /// `array-format` computes these while the dataset is staged, so recording
+    /// them here costs nothing at write time and makes them free at read time —
+    /// no different from any other footer metadata. An array that was declared
+    /// but never written has no entry.
+    pub array_stats: Vec<(u32, ArrayStatsS)>,
 }
 
 /// Content hash of a schema, consistent with its `PartialEq`. Used to intern.
@@ -202,6 +209,15 @@ impl CollectionFooter {
                     })?;
                 }
             }
+            for (array_pos, _) in ds.array_stats.iter() {
+                if schema.arrays.get_index(*array_pos as usize).is_none() {
+                    return Err(Error::CorruptCollection(format!(
+                        "dataset '{}' has statistics for array {array_pos} but its schema holds {}",
+                        ds.name,
+                        schema.arrays.len()
+                    )));
+                }
+            }
             if ds.seg_len == 0 {
                 return Err(Error::CorruptCollection(format!(
                     "dataset '{}' (ordinal {ordinal}) has an empty segment",
@@ -229,6 +245,86 @@ impl CollectionFooter {
             .iter()
             .filter_map(|(k, v)| Some((self.key(*k)?.to_string(), v.clone().into())))
             .collect()
+    }
+}
+
+/// Serde mirror of [`array_format::StatValue`], which implements rkyv only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum StatValueS {
+    /// Signed integer.
+    Int(i64),
+    /// Unsigned integer.
+    UInt(u64),
+    /// Floating point.
+    Float(f64),
+    /// String or binary, as raw bytes in lexicographic order.
+    Bytes(Vec<u8>),
+    /// Nanoseconds since the Unix epoch.
+    TimestampNs(i64),
+}
+
+impl From<StatValue> for StatValueS {
+    fn from(v: StatValue) -> Self {
+        match v {
+            StatValue::Int(v) => Self::Int(v),
+            StatValue::UInt(v) => Self::UInt(v),
+            StatValue::Float(v) => Self::Float(v),
+            StatValue::Bytes(v) => Self::Bytes(v),
+            StatValue::TimestampNs(v) => Self::TimestampNs(v),
+        }
+    }
+}
+
+impl From<StatValueS> for StatValue {
+    fn from(v: StatValueS) -> Self {
+        match v {
+            StatValueS::Int(v) => Self::Int(v),
+            StatValueS::UInt(v) => Self::UInt(v),
+            StatValueS::Float(v) => Self::Float(v),
+            StatValueS::Bytes(v) => Self::Bytes(v),
+            StatValueS::TimestampNs(v) => Self::TimestampNs(v),
+        }
+    }
+}
+
+/// What `array-format` recorded about one array while it was written.
+///
+/// `null_count` counts elements equal to the array's fill value, which is how
+/// a never-written cell is represented. `row_count` is the total element count
+/// across every chunk that exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArrayStatsS {
+    /// Smallest value across the array, or `None` for a dtype with no ordering.
+    pub min: Option<StatValueS>,
+    /// Largest value across the array, or `None` for a dtype with no ordering.
+    pub max: Option<StatValueS>,
+    /// Elements equal to the fill value.
+    pub null_count: u64,
+    /// Total elements across all chunks.
+    pub row_count: u64,
+}
+
+impl From<&ArrayStats> for ArrayStatsS {
+    fn from(s: &ArrayStats) -> Self {
+        Self {
+            min: s.min.clone().map(Into::into),
+            max: s.max.clone().map(Into::into),
+            null_count: s.null_count,
+            row_count: s.row_count,
+        }
+    }
+}
+
+impl ArrayStatsS {
+    /// Rebuilds the `array-format` form, which needs the array's name.
+    pub(crate) fn to_array_stats(&self, name: &str) -> ArrayStats {
+        ArrayStats {
+            name: name.to_string(),
+            min: self.min.clone().map(Into::into),
+            max: self.max.clone().map(Into::into),
+            null_count: self.null_count,
+            row_count: self.row_count,
+        }
     }
 }
 
@@ -377,6 +473,15 @@ mod tests {
             seg_len: 128,
             global_attrs: vec![(0, AttrS::Int64(1))],
             array_attrs: vec![(0, vec![(0, AttrS::String("kelvin".into()))])],
+            array_stats: vec![(
+                0,
+                ArrayStatsS {
+                    min: Some(StatValueS::Float(-1.5)),
+                    max: Some(StatValueS::Float(31.0)),
+                    null_count: 2,
+                    row_count: 32,
+                },
+            )],
         }
     }
 
