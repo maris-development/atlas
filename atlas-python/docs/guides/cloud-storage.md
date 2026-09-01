@@ -1,151 +1,119 @@
 # Cloud storage (S3, GCS, Azure)
 
-[`Atlas.create`](../reference/atlas.md) and
-[`Atlas.open`](../reference/atlas.md) both accept an
-[obstore](https://github.com/developmentseed/obstore) store handle in
-place of a filesystem path. obstore is a thin Python binding around the
-Rust [`object_store`](https://docs.rs/object_store) crate, so any
-backend obstore supports — S3, GCS, Azure Blob, HTTP, local fs — works
-with atlas, transparently. atlas itself never sees the credentials.
+Every operation takes a URL, or an
+[obstore](https://github.com/developmentseed/obstore) store handle, in place of
+a filesystem path. obstore is a thin Python binding around the Rust
+[`object_store`](https://docs.rs/object_store) crate. Every backend it supports
+therefore works with atlas: S3, GCS, Azure Blob, HTTP, and local. Atlas never
+sees a credential.
+
+The single-file format suits object storage well. A write is one multipart
+upload. An open is one range read of the tail, whatever the number of datasets.
 
 ## Install
-
-`obstore` is an optional dependency:
 
 ```bash
 pip install "atlas-python[cloud]"
 ```
 
-Equivalent to `pip install atlas-python obstore`. Without it, atlas continues
-to work against local filesystem paths exactly as before.
+That equals `pip install atlas-python obstore`. Without it, atlas still works
+against a local filesystem path.
 
-## Quickstart — S3
+## Quickstart on S3
+
+A URL is the simplest form. The credentials come from the usual environment
+variables, or from `~/.aws/credentials`:
+
+```bash
+atlas create /data/nc s3://my-bucket/collections/2024 --region eu-west-1
+atlas ls   s3://my-bucket/collections/2024 --region eu-west-1
+atlas info s3://my-bucket/collections/2024 --region eu-west-1
+```
 
 ```python
-import numpy as np
-import obstore as obs
 import atlas
 
-# Construct the obstore handle. Credentials are loaded from the standard
-# AWS env vars / ~/.aws/credentials by default; pass them explicitly to
-# override.
+atlas.create("/data/nc", "s3://my-bucket/collections/2024", region="eu-west-1")
+atlas.list_datasets("s3://my-bucket/collections/2024", region="eu-west-1")
+```
+
+Build the handle yourself for anything a URL cannot say, such as a custom
+credential provider or a retry policy. Then pass it in:
+
+```python
+import obstore as obs
+
 store = obs.store.S3Store(
     "my-bucket",
-    prefix="stores/jan_2024",
-    region="us-east-1",
+    prefix="collections/2024",
+    region="eu-west-1",
 )
 
-# Pass the handle into Atlas.create / Atlas.open exactly where you would
-# have passed a path. Everything below this line — define_array,
-# write_array, set_attribute, flush, add_xarray_dataset, open_as_xarray_dataset, all of
-# the bulk reads — works identically against S3.
-with atlas.Atlas.create(store, codec="zstd") as atlas:
-    ds = atlas.create_dataset("jan_2024")
-    ds.define_array(
-        "temperature",
-        dtype="float32",
-        dims=["lat", "lon"],
-        shape=[8, 16],
-        chunk_shape=[4, 8],
-    )
-    ds.write_array(
-        "temperature",
-        start=[0, 0],
-        data=np.full((8, 16), 20.0, dtype=np.float32),
-    )
-    ds.set_attribute("month", 1)
+atlas.create("/data/nc", store)
+atlas.list_datasets(store)
+atlas.describe(store, "2024-01")
+atlas.remove(store, ["2024-02"])
+atlas.info(store)
+```
 
-# Reopen — codec / meta format / meta compression are auto-detected just
-# like on local fs.
-atlas2 = atlas.Atlas.open(store)
-arr = atlas2.open_dataset("jan_2024").read_array("temperature")
+The objects land under the store's prefix:
+
+```text
+s3://my-bucket/collections/2024/data.atlas
+s3://my-bucket/collections/2024/deleted.mask     (only after a delete)
 ```
 
 ## Other backends
 
-The same pattern works for every obstore backend:
-
 ```python
-import obstore as obs
-import atlas
-
-# Google Cloud Storage
-gcs = obs.store.GCSStore("my-bucket", prefix="stores/jan_2024")
-atlas.Atlas.open(gcs)
-
-# Azure Blob Storage
-azure = obs.store.AzureStore(container_name="my-container", prefix="stores/jan_2024")
-atlas.Atlas.open(azure)
-
-# Generic HTTP (read-only)
-http = obs.store.HttpStore.from_url("https://example.com/atlas-store/")
-atlas.Atlas.open(http)
-
-# Plain local filesystem via obstore (equivalent to passing a path string)
-local = obs.store.LocalStore("/tmp/my_store")
-atlas.Atlas.open(local)
+store = obs.store.GCSStore("my-bucket", prefix="collections/2024")
+store = obs.store.AzureStore("my-container", prefix="collections/2024")
+store = obs.store.HTTPStore("https://example.org/data")   # read-only
+store = obs.store.LocalStore("/data")
+store = obs.store.MemoryStore()
 ```
 
-See [obstore's
-documentation](https://developmentseed.org/obstore/latest/) for the full
-list of backends and their credential / region / endpoint options.
+Nothing else in your code changes.
 
-A complete runnable script — create / write / `add_xarray_dataset` /
-`open_as_xarray_dataset` / `array_stats`, then reopen and verify — lives at
-[`atlas-python/examples/08_object_store.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/08_object_store.py).
-It uses `LocalStore` by default so it runs without credentials; swap in
-the S3 / GCS / Azure block at the top to point at a real backend.
+## What it costs
 
-## Read/write parity
+| Operation | Requests |
+|---|---|
+| `list_datasets`, `describe`, `info` | 1 head + 1 range read of the tail, plus 1 for the mask if present |
+| `remove` | The above, plus 1 GET and 1 PUT of the small mask |
+| `create` | 1 multipart upload |
+| Reading one array region (Rust) | 2 to open the segment, then 1 per chunk touched |
 
-Everything atlas exposes works identically against any obstore backend:
+An open scales with nothing. Ten datasets and a million cost one request each,
+because the footer is one object range.
 
-| Operation | Local fs | Cloud (S3 / GCS / Azure) |
-|---|---|---|
-| `create_dataset` / `open_dataset` / `delete_dataset` | ✓ | ✓ |
-| `define_array` / `write_array` / `read_array` / `delete_array` | ✓ | ✓ |
-| `set_attribute` / `get_attribute` / `attributes` | ✓ | ✓ |
-| `flush` (the single durability boundary) | fsync + rename | atomic PutObject |
-| `compact` | rewrite array files | rewrite array files |
-| `read_array_across_stacked` / `open_as_many_xarray_dataset` | tokio fan-out | tokio fan-out, capped at `num_cpus` |
-| Dask streaming `add_xarray_dataset` | ✓ | ✓ |
-| Dask-backed lazy reads (`open_as_xarray_dataset`) | threaded scheduler only | threaded scheduler only |
+## Writing
 
-The [single-flush durability model](durability.md) carries over cleanly:
-on S3, `PutObject` is atomic for the full object, so the in-memory
-buffering of `flush()` maps onto one `PutObject` per touched array file
-plus one for the metadata. Flush latency will be noticeably higher than
-on local fs — call `flush()` at coarse grain (per-batch, not
-per-dataset).
+The output streams through a buffered writer. That writer becomes a multipart
+upload once the data passes its buffer. The footer sits at the end, which makes
+this one forward pass. Nothing needs a rewrite.
 
-## Limitations specific to cloud backends
+Nothing at the target is readable until the writer finishes. A process that
+dies during a write leaves no trailer, and the path then opens as no
+collection. The lifecycle rule of the bucket clears an incomplete multipart
+upload, as usual.
 
-- **Bulk-read concurrency.** `read_array_across_stacked` and
-  `open_as_many_xarray_dataset` dispatch on the shared tokio runtime via a `JoinSet`
-  capped at `num_cpus`. On S3 the bottleneck is usually HTTP
-  concurrency, not CPU — let us know if you'd find a configurable cap
-  useful.
-- **`MemoryStore` can't be reconstructed across the FFI boundary.**
-  `obstore.store.MemoryStore` keeps its data in process memory and can't
-  be cloned through `pyo3-object_store`'s external-store path. Use
-  `obstore.store.LocalStore` (against a `tempfile.TemporaryDirectory`)
-  if you want an ephemeral in-tests backend.
-- **A warning on first store reconstruction.** You will see one
-  `RuntimeWarning: Successfully reconstructed a store defined in another
-  Python module. Connection pooling will not be shared across store
-  instances.` per store. This is expected — atlas re-creates obstore's
-  ObjectStore on its side of the FFI boundary using the constructor
-  arguments. Connection pools are independent but functionality is
-  identical.
-- **Single writer.** atlas assumes a single process is writing to any
-  given store at a time. The cloud backends inherit that constraint —
-  concurrent writers from multiple processes are not coordinated.
+## Removing
 
-## Where Zarr / netCDF still win on the cloud
+`remove` reads the mask again before it writes. Two processes that remove
+different datasets therefore both survive. Two removes that interleave between
+the read and the write still lose one. An object store has no compare-and-swap
+here. Serialize the removes against one collection if that matters.
 
-See [vs Zarr / netCDF](../vs-zarr-netcdf.md) — Zarr is still the natural
-choice for write-heavy workloads with many independent processes (chunk
-files are independent and parallel-writable), and netCDF has the
-longest tooling lineage. atlas is a focused fit for "N small datasets,
-same schema" workloads where the bulk-read APIs pay back the per-store
-constraint.
+## HTTP and read-only backends
+
+A read-only store serves `ls`, `show`, and `info`. `create` and `rm` need a
+PUT, so they fail.
+
+## Version note
+
+An obstore handle reaches atlas in one of two ways. It passes straight through
+when both sides build against the same `pyo3-object_store`. Otherwise atlas
+rebuilds it from its configuration. A rebuild raises a `RuntimeWarning` about
+connection pooling. It works for any store with a URL or a path to rebuild
+from. A `MemoryStore` has nothing to rebuild, so it needs two matching builds.

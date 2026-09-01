@@ -5,9 +5,9 @@ members = ["atlas-python"]
 # Registry name on crates.io (`atlas` is taken). The library is still
 # imported as `atlas` — see `[lib]` below.
 name = "atlas-rust"
-version = "0.14.0"
+version = "0.16.0"
 edition = "2024"
-description = "Directory-based store for thousands of N-dimensional datasets local or remote using object storage."
+description = "Single-file immutable store for thousands of N-dimensional datasets, local or on object storage."
 license = "Apache-2.0"
 repository = "https://github.com/maris-development/atlas"
 readme = "README.md"
@@ -22,23 +22,24 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
-array-format = "0.12.0"
+# Exact pin: the container format embeds this crate's files verbatim, so a
+# change to its bytes is a change to the atlas format.
+array-format = "=0.12.0"
 object_store = "0.13"
+async-trait = "0.1"
+bytes = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 rmp-serde = "1"
 zstd = "0.13"
-lz4_flex = "0.11"
 thiserror = "2"
 ndarray = "0.17"
 indexmap = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 parking_lot = "0.12"
-tokio = { version = "1", features = ["fs", "sync", "rt"] }
+tempfile = "3"
+tokio = { version = "1", features = ["fs", "io-util", "sync", "rt"] }
 tracing = "0.1"
 futures = "0.3"
-num_cpus = "1"
 
 [dev-dependencies]
-tempfile = "3"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }

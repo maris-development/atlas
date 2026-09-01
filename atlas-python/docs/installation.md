@@ -3,13 +3,11 @@
 ## Requirements
 
 - **Python 3.10+**
-- A working C/Rust toolchain *only* for source installs; wheels (when
-  available) install with no compiler in scope.
+- A C and Rust toolchain, for a source install *only*. A wheel installs with no
+  compiler, where a wheel exists.
 
-`xarray` and `dask` are required runtime dependencies. They install
-automatically with `pip install atlas-python` — there is no "without xarray"
-build of `atlas`. The xarray accessor at `xr.Dataset.atlas` is registered
-the moment you `import atlas`.
+`xarray` and `dask` are runtime dependencies. NetCDF is the one ingest route,
+so there is no build without xarray.
 
 ## From PyPI
 
@@ -17,27 +15,31 @@ the moment you `import atlas`.
 pip install atlas-python
 ```
 
-This pulls in `numpy>=1.23`, `xarray>=2023.1`, and `dask>=2023.1`.
+This installs `numpy>=1.23`, `xarray>=2023.1`, and `dask>=2023.1`. It also puts
+the `atlas` command on your PATH:
+
+```bash
+atlas --help
+```
 
 ## From source (development)
 
 `atlas-python` is a thin [PyO3](https://pyo3.rs/) binding layer over the
-**[`atlas-rust`](https://github.com/maris-development/atlas)** core crate — all
-storage, compression, and I/O live in Rust. The binding crate lives in
-`atlas-python/` and depends on the core crate at the repo root, both built with
-[maturin](https://www.maturin.rs/).
+**[`atlas-rust`](https://github.com/maris-development/atlas)** core crate. All
+storage, compression, and I/O live in Rust. The binding crate sits in
+`atlas-python/`, and depends on the core crate at the repository root.
+[maturin](https://www.maturin.rs/) builds both.
 
 ```bash
 python3.13 -m venv .venv
 source .venv/bin/activate
 pip install maturin numpy
 cd atlas-python
-maturin develop --release    # builds the Rust extension and installs it editable
+maturin develop --release    # build the Rust extension, and install it editable
 ```
 
-`maturin develop --release` is what every benchmark / test script in this
-repo expects — the unoptimised debug build is correct but much slower for
-large reads.
+Every benchmark and test script here expects `maturin develop --release`. The
+debug build is correct, and much slower on a large read.
 
 To run the test suite:
 
@@ -47,48 +49,40 @@ pytest atlas-python/tests/ -v
 
 ## Optional: cloud storage (S3, GCS, Azure)
 
-To open or create atlas stores backed by S3, GCS, Azure Blob, or any
-other [`object_store`](https://docs.rs/object_store)-supported backend,
-install the `cloud` extra. This pulls in
+Install the `cloud` extra to open or create an atlas store on S3, GCS, Azure
+Blob, or any other backend
+[`object_store`](https://docs.rs/object_store) supports. It installs
 [obstore](https://github.com/developmentseed/obstore):
 
 ```bash
 pip install "atlas-python[cloud]"
 ```
 
-Then construct an obstore handle and pass it where you'd otherwise pass
-a path:
+Then pass a URL where you would otherwise pass a path:
+
+```bash
+atlas ls s3://my-bucket/collections/2024 --region eu-west-1
+```
 
 ```python
-import obstore as obs, atlas
+import atlas
 
-store = obs.store.S3Store("my-bucket", prefix="stores/jan_2024", region="us-east-1")
-atlas = atlas.Atlas.open(store)
+atlas.list_datasets("s3://my-bucket/collections/2024", region="eu-west-1")
 ```
 
 See [Cloud storage (S3, GCS, Azure)](guides/cloud-storage.md) for the
 full guide.
 
-## Optional: benchmark dependencies
-
-The cross-backend benchmark harness pulls in `zarr` and `netCDF4`:
-
-```bash
-pip install -e "atlas-python[bench]"
-```
-
-See [Benchmarks](benchmarks.md) for how to run them.
-
 ## Tracing / structured logging
 
-`atlas.init_tracing()` enables tracing-subscriber-backed structured
-logs from the Rust core to stderr. Pass an
+`atlas.init_tracing()` turns on structured logs from the Rust core to stderr.
+They run through tracing-subscriber. Pass an
 [`env_filter`](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html)
 directive to override the default:
 
 ```python
 import atlas
 atlas.init_tracing("debug")           # everything
-atlas.init_tracing("atlas_python=info")    # just atlas crate at info+
-atlas.init_tracing()                  # re-read ATLAS_LOG / RUST_LOG env vars
+atlas.init_tracing("atlas=info")      # the atlas crate alone, at info and above
+atlas.init_tracing()                  # read ATLAS_LOG and RUST_LOG again
 ```

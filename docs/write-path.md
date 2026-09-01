@@ -1,101 +1,126 @@
-# 5. The Write Path & Durability
+# Write path
 
-Atlas batches aggressively: **every mutation updates in-memory state only —
-nothing reaches disk until `flush()`.** This is what makes bulk ingestion of
-many datasets fast, and it's the single durability boundary.
+## The shape of a write
 
-## create → define → write (all in memory)
+```rust
+let w = AtlasWriter::create_path(dir, WriterConfig::default()).await?;
 
-```
-   atlas.create_dataset("ds0")            registers ds0 in StoreMeta (ordinal assigned)
-     └─ returns DatasetView
-          view.define_array("temp", …)    records the array in the schema;
-                                          opens temp/data.af lazily (ArrayCache)
-          view.write_array("temp", start, data)
-              └─ ArrayFile buffers into its PENDING delta layer:
-                   encodes chunks, packs them into 4 MiB blocks;
-                   a full block is compressed and spilled to a per-array TEMPFILE;
-                   the current partial block stays in RAM.
+let mut ds = w.add_dataset("jan_2024").await?;
+ds.define_array::<f32>("temperature", dims, shape, chunk_shape, fill).await?;
+ds.write_array("temperature", vec![0, 0], data.view()).await?;
+ds.set_attribute("month", Attr::Int64(1));
+ds.finish().await?;          // the dataset enters the container here
+
+w.finish().await?;           // the collection becomes readable here
 ```
 
-Key consequence: **bulk array data does not accumulate in RAM.** It streams into
-per-array tempfiles as blocks fill. What stays in memory between flushes is the
-much smaller per-array metadata (the pending delta's index).
+There are two commit points, and nothing is visible before them. A
+`DatasetWriter` you drop without `finish()` never enters the container. An
+`AtlasWriter` you drop without `finish()` leaves no trailer. Nothing at the
+target then opens as a collection.
 
-```
-   memory during ingest                 disk during ingest
-   ┌───────────────────────────┐        ┌────────────────────────────┐
-   │ StoreMeta (schema/ordinals)│       │ temp/  (tempfile, growing) │
-   │ per-array pending index    │  ───► │ psal/  (tempfile, growing) │
-   │ ≤ one 4 MiB block / array  │       │ (nothing committed yet)    │
-   └───────────────────────────┘        └────────────────────────────┘
-```
+## Staging
 
-## flush() — the durability boundary
+Each dataset builds as a complete `array-format` file, in a local scratch
+directory. The writer then copies that file into the output stream, byte for
+byte:
 
-```
-   atlas.flush():
-     1. drain buffered attribute writes into their .af files
-     2. force-init every array referenced in meta
-     3. for each touched ArrayFile:  commit pending delta → new immutable
-        SIDECAR LAYER; compute/refresh its StatsFile
-     4. bump meta_epoch
-     5. write atlas.json
+```text
+add_dataset("jan")  ──▶ scratch/1/data.af      define, write, define, write, …
+  finish()          ──▶ flush → compact → copy ──▶ container[8 .. 4_100]
+
+add_dataset("feb")  ──▶ scratch/2/data.af
+  finish()          ──▶ flush → compact → copy ──▶ container[4_100 .. 9_002]
+
+AtlasWriter::finish ──▶ footer, trailer, done
 ```
 
-After a flush, an array file looks like:
+Local staging bounds the memory. `array-format` spills each compressed chunk to
+a temporary file on arrival. The copy into the container streams in 8 MiB
+pieces. A dataset far larger than RAM therefore writes without trouble. The
+scratch directory goes as soon as its segment lands.
 
+### flush, then compact
+
+Run both, in that order. The order matters.
+
+`flush()` commits the buffered writes into a sidecar layer. `compact()` merges
+every layer into one base file. A `compact()` without a `flush()` first leaves
+the buffered writes behind. It can also produce a dangling attribute index,
+because `compact` builds its attribute dictionary from committed layers only.
+
+The result is one self-contained file, which is what a segment must be.
+
+The flush also computes the minimum, the maximum, and the null count of each
+array. Those reach the footer entry before the staged file closes. A reader
+therefore gets them without the segment. See
+[format.md](format.md#statistics-live-here-too).
+
+> **Cost.** This pass reads, decompresses, and compresses every chunk again. It
+> also computes the statistics twice. All of it happens on local scratch.
+> Ingest therefore spends about twice the compression CPU of a one-shot
+> builder. The work sits in `create_staging_file` and `DatasetWriter::finish`.
+> An `array-format` API that writes a base directly would replace it as it
+> stands.
+
+## Streaming to the container
+
+The output goes through `object_store::buffered::BufWriter`. It holds a small
+collection in one atomic PUT. It moves to a multipart upload once the data
+passes its capacity. The footer sits at the end, which makes this one forward
+pass. Nothing needs a rewrite.
+
+The writer keeps a running byte offset. Each segment records
+`(seg_offset, seg_len)` in its footer entry. A segment therefore needs no
+alignment, no padding, and no separator.
+
+## Concurrent datasets
+
+`add_dataset` returns an owned `DatasetWriter`. Several can therefore stay open
+at once:
+
+```rust
+let w = Arc::new(AtlasWriter::create_path(dir, cfg).await?);
+for path in files {
+    let w = Arc::clone(&w);
+    tasks.push(tokio::spawn(async move {
+        let mut ds = w.add_dataset(&name).await?;
+        // … stage it …
+        ds.finish().await
+    }));
+}
 ```
-   temp/data.af
-   ┌───────────────────────────────────────────────┐
-   │  base layer         (datasets flushed earlier) │
-   │  sidecar layer #1   (this flush's datasets)    │  ← newest wins on read
-   │  StatsFile          (per-dataset min/max/…)    │
-   │  footer                                        │
-   └───────────────────────────────────────────────┘
-```
 
-Nothing is durable until step 5 completes. If the process dies mid-ingest before
-a flush, the on-disk store is exactly as it was after the previous flush.
+Staging is parallel. Only the append serializes. A `DatasetWriter` takes the
+writer's lock once, in `finish()`, for its append and its footer entry.
+Concurrent datasets therefore land in finish order, and never interleave their
+bytes. `tests/integration.rs` asserts that the segments still tile the
+container without a gap under concurrent staging.
 
-## What a failed insert leaves behind
+## Failure
 
-Because writes buffer in memory, a mid-insert error persists nothing by itself.
-But a partially-created dataset can linger in the *in-memory* store; the Python
-`add_xarray_dataset` makes this atomic by rolling back with `delete_dataset` on
-failure (see [python-xarray.md](python-xarray.md)).
+| What happens | Result |
+|---|---|
+| A drop or an abort of a `DatasetWriter` | That dataset never appears. The others stay |
+| A failure in `define_array` or `write_array` | The same. Abandon that dataset, and keep the others |
+| A drop of the `AtlasWriter` before `finish` | No trailer. Nothing at the target opens |
+| A dead process during a write | The same. No trailer, and no collection |
 
-## compact() — reclaim and renumber
+There is no half-written collection to find, and none to clean up. A container
+without a trailer is no collection. The Python layer depends on this. A failed
+`add_xarray_dataset` aborts its `DatasetWriter`, and the collection continues.
 
-Over time, deletes leave tombstones and array files accumulate sidecar layers.
-`compact`:
+The backend decides whether a partial object stays after a dropped writer. A
+lifecycle rule clears an incomplete S3 multipart upload. This is a question of
+hygiene, not of correctness.
 
-```
-   atlas.compact():
-     1. commit + compact every ArrayFile (merge delta layers → one base,
-        physically drop deleted datasets' entries)
-     2. drop_tombstones() in StoreMeta   ← ordinals RENUMBER here
-     3. invalidate the ordinal-map cache
-     4. bump meta_epoch, write atlas.json
-```
+## Interning as you write
 
-`compact` is the **only** operation that changes ordinals. Any ordinal you held
-from before a compact is invalid afterward.
+The writer holds an `Interner`. Each finished dataset hands it a
+`DatasetSchema`, and gets back a `u32`. Two equal schemas land on one pool
+entry. A content hash resolves them, and `PartialEq` settles a hash collision.
+Attribute keys intern the same way.
 
-## Why this shape
-
-| Goal | Mechanism |
-|------|-----------|
-| Fast bulk ingest | buffer in memory, one flush at the end |
-| Bounded write memory | array-format spills blocks to tempfiles |
-| Crash safety | single durability boundary; nothing partial persists pre-flush |
-| Cheap deletes | tombstone (logical); reclaim later at compact |
-| Stable cross-dataset row numbers | ordinals only renumber at compact |
-
-## A note on flush cost at scale
-
-`flush` does per-entry work in each array file (committing the delta, computing
-stats). For very large collections (≈1M dataset-entries) this is currently the
-dominant wall-clock cost of ingestion — far more than the metadata handling.
-It's a write-path concern independent of the (on-demand) read path; see the
-benchmark in [pruning-index.md](pruning-index.md).
+One detail matters. `FillValueS` compares floats by bit pattern, so one NaN
+fill equals another. Without that, every float array with the default NaN fill
+takes its own pool entry, and interning never fires on the common case.

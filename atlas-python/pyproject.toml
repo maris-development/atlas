@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "atlas-python"
-version = "0.14.0"
+version = "0.16.0"
 description = "Python bindings for the ATLAS array store"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -30,6 +30,9 @@ Homepage = "https://github.com/maris-development/atlas"
 Repository = "https://github.com/maris-development/atlas"
 Issues = "https://github.com/maris-development/atlas/issues"
 
+[project.scripts]
+atlas = "atlas._cli:main"
+
 [project.optional-dependencies]
 # Tooling needed to run the test suite (`pytest atlas-python/tests`). The
 # numpy/xarray/dask runtime deps come from `[project].dependencies`; this adds
@@ -38,13 +41,8 @@ test = [
     "pytest",
     "netCDF4",
 ]
-bench = [
-    "zarr>=3",
-    "numcodecs",
-    "netCDF4",
-]
 # Optional — installs the `obstore` Python package so that `Atlas.open` /
-# `Atlas.create` can accept an obstore-constructed S3 / GCS / Azure /
+# `AtlasWriter.create` can accept an obstore-constructed S3 / GCS / Azure /
 # HTTP store handle. The path-based local-fs API works without this.
 cloud = [
     "obstore>=0.9",

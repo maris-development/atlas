@@ -1,37 +1,44 @@
 # Examples
 
-Runnable scripts live in
+The runnable scripts sit in
 [`atlas-python/examples/`](https://github.com/maris-development/atlas/tree/main/atlas-python/examples).
-Each one is self-contained, writes to a temp directory, and runs in under
-a minute.
+Each one stands alone, writes to a temporary directory, and runs in seconds.
 
 | File | What it shows |
 |---|---|
-| [`01_basics.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/01_basics.py) | Create a store, define arrays, set attributes, reopen, read back. The minimal end-to-end loop. |
-| [`02_xarray.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/02_xarray.py) | Round-trip an `xr.Dataset` through atlas using both `atlas.add_xarray_dataset(...)` and the `ds.atlas.write(...)` accessor. |
-| [`03_dask_streaming.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/03_dask_streaming.py) | Stream a dask-chunked `xr.Dataset` into atlas one chunk at a time, preserving the chunk shape on disk; read back lazily. |
-| [`04_meta_formats.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/04_meta_formats.py) | Compare the six metadata format × compression combinations (`atlas.json`, `atlas.msgpack.zst`, …) on a 30-dataset store. Confirms auto-detection on reopen. |
-| [`05_codecs.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/05_codecs.py) | Compare `zstd` / `lz4` / `none` array codecs on a smooth `float32` field. Demonstrates per-array codec recording. |
-| [`06_stats_scan.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/06_stats_scan.py) | Find the dataset with the highest peak reading across a fleet of 32 sensors by scanning `array_stats` only — no raw data read. |
-| [`07_shared_arrays.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/07_shared_arrays.py) | 50 datasets sharing 2 physical array files. Prints the on-disk directory listing to confirm the layout. |
-| [`08_object_store.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/08_object_store.py) | Pass an [obstore](https://github.com/developmentseed/obstore) handle into `Atlas.create` / `Atlas.open` and run the full create / read / xarray / stats loop against it. Demos with `obstore.store.LocalStore` (no credentials); S3 / GCS / Azure variants are commented in at the top. Requires `pip install "atlas-python[cloud]"`. |
-| [`09_missing_data.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/09_missing_data.py) | Ingest an `xr.Dataset` with masked (missing) cells across float / datetime / string / integer vars. Shows the default `NaN` / `NaT` / `""` fills, the resulting `null_count`, and overriding per variable with `fill_value=`. |
-
-## Running
-
-From a clone of the repository:
+| [`01_library.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/01_library.py) | All five operations as a library. It builds a collection from NetCDF files, lists it, summarizes it, and inspects one dataset with its statistics. It then removes datasets, and shows the container stay put. |
+| [`02_object_store.py`](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/02_object_store.py) | The same five, against an obstore handle. It uses `LocalStore`, so it needs no credential. The S3, GCS, and Azure lines sit in a comment at the top. It needs `pip install "atlas-python[cloud]"`. |
 
 ```bash
-python atlas-python/examples/01_basics.py
+python atlas-python/examples/01_library.py
 ```
 
-Every script can be run standalone; there's no shared state between them.
-Each writes into a `tempfile.TemporaryDirectory()` that cleans up on exit.
+## The same thing on the command line
+
+```bash
+atlas create /data/nc /data/collection
+atlas ls     /data/collection
+atlas info   /data/collection
+atlas show   /data/collection 2024-01
+atlas rm     /data/collection 2024-02 2024-03
+```
+
+See [The `atlas` command](cli.md).
+
+## Rust examples
+
+Rust reads array data, so the read-side examples sit in
+[`examples/`](https://github.com/maris-development/atlas/tree/main/examples)
+at the repository root:
+
+```bash
+cargo run --example lifecycle       # build, read, delete, reopen
+cargo run --example sensor_fleet    # many small datasets in one file
+cargo run --example weather_store   # an object store, read lazily
+```
 
 ## See also
 
-- [Quickstart](quickstart.md) — the same idea as `01_basics.py`, walked
-  through line-by-line.
-- [Datasets and arrays](guides/datasets-and-arrays.md) — the mental model
-  behind every script.
-- [Benchmarks](benchmarks.md) — the cross-backend harness, also runnable.
+- [Quickstart](quickstart.md). The same ground, line by line.
+- [Creating a collection](guides/creating.md). Chunking, errors, and memory.
+- [Reading data](guides/reading-data.md). Why the read examples are in Rust.

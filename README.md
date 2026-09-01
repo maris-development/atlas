@@ -1,4 +1,4 @@
-# ATLAS — Aggregated Tensor Large Array Store
+# ATLAS: Aggregated Tensor Large Array Store
 
 [![CI](https://github.com/maris-development/atlas/actions/workflows/ci.yaml/badge.svg)](https://github.com/maris-development/atlas/actions/workflows/ci.yaml)
 [![crates.io](https://img.shields.io/crates/v/atlas-rust.svg?logo=rust)](https://crates.io/crates/atlas-rust)
@@ -7,430 +7,263 @@
 [![Python docs](https://img.shields.io/badge/docs-atlas--python-blue?logo=materialformkdocs&logoColor=white)](https://maris-development.github.io/atlas/)
 [![License](https://img.shields.io/crates/l/atlas-rust.svg)](LICENSE)
 
-A directory-based store for thousands of named datasets, each holding N-dimensional typed arrays. Built on top of the [`array-format`](https://github.com/robinskil/array-format) (`.af`) binary format, with configurable compression (Zstd, LZ4, or none), chunked I/O, and an [`object_store`](https://crates.io/crates/object_store) backend that works on local disk, S3, GCS, Azure Blob, and in-memory.
+**Thousands of N-dimensional datasets in one immutable file.**
 
-**Think of it as a "zip" for N-dimensional datasets.** Where a `.zip` bundles many files into one archive, ATLAS gathers many NetCDF / Zarr-style datasets — anything that's a set of named N-dimensional arrays — into a single high-performance collection. But it's more than a bundle: instead of storing each dataset whole, ATLAS lays the data out **variable-first**, so every dataset's `temperature` lives in one file. That makes it cheap to scan or slice a single variable across thousands of datasets at once, while still reading back any individual dataset as a normal NetCDF/xarray-like object.
-
-> **Looking for Python?** The Python bindings live in [`atlas-python/`](atlas-python/) — `pip install atlas-python`, then `import atlas`. They add a NumPy-native API and first-class [xarray](https://docs.xarray.dev) integration. See the [atlas-python README](atlas-python/README.md) for usage.
->
-> The rest of this document covers **how the format works and the Rust crate**.
->
-> **Architecture deep-dive?** [`docs/`](docs/) has focused walkthroughs with diagrams — [architecture](docs/architecture.md), [storage layout](docs/storage-layout.md), [data model](docs/data-model.md), [metadata](docs/metadata.md), [write path & durability](docs/write-path.md), [the pruning index](docs/pruning-index.md), and [Python/xarray](docs/python-xarray.md).
-
----
-
-## What it does
-
-`atlas` is designed for workloads where you have a large collection of similarly-shaped datasets — such as one dataset per time step, sensor station, or simulation run — and you want to query a single variable (e.g. `temperature`) across all of them efficiently.
-
-Each dataset is a named group of N-dimensional arrays with typed attributes — both dataset-level (global) attributes and per-variable attributes. Datasets that share an array name (e.g. every `jan_2024`, `feb_2024`, … all have `temperature`) are stored together in the same physical file, keyed by dataset name inside the file.
+A collection is one write-once file. A dataset is a set of named N-dimensional
+arrays with attributes. It has the shape of a NetCDF file or an
+`xarray.Dataset`. Each dataset occupies one contiguous byte range inside the
+file. A footer at the end records where each one lives, with its schema and its
+attributes.
 
 ```text
-my_store/
-├── atlas.json               ← interned per-dataset schema + attribute-key namespace (JSON)
-├── _global/
-│   └── data.af         ← dataset-level (global) attribute values, one entry per dataset
-├── temperature/
-│   └── data.af         ← one ArrayFile: temperature + its per-variable attributes, per dataset
-├── pressure/
-│   └── data.af
-└── time/
-    └── data.af
+my_collection/
+├── data.atlas      ATLS │ segment │ segment │ … │ footer │ trailer
+└── deleted.mask    optional: ordinals of deleted datasets
 ```
 
-`atlas.json` holds only the **schema** of the collection. Attribute **values** live in the `.af` files: per-variable attributes on the variable's own file, and dataset-level attributes in the reserved `_global` file. There is **no separate index file** — the cross-dataset pruning index is built on demand from the `.af` statistics (see below), so it can never go stale and adds nothing to a write.
+Two results follow, and they are most of the point:
 
----
+- **Metadata is one read.** An open of a collection fetches the footer and
+  nothing else. To list the datasets, to inspect a schema, and to read an
+  attribute are then free. Ten datasets and a million datasets cost the same.
+- **Data arrives chunk by chunk.** A read of a region of an array fetches only
+  the chunks that region overlaps.
 
-## Durability model
+Atlas builds on [`array-format`](https://github.com/robinskil/array-format) for
+the chunked-array encoding, and on
+[`object_store`](https://crates.io/crates/object_store) for I/O. A collection
+therefore behaves the same on local disk, S3, GCS, Azure, and in memory.
 
-`atlas.json` is read **once** when the store is opened or created. Every subsequent mutation — `create_dataset`, `define_array`, `set_attribute`, `set_array_attribute`, `delete_array`, `delete_dataset` — only touches in-memory state; array writes buffer inside the per-array in-memory layer and attribute writes buffer in a pending-attribute map. **Nothing reaches disk until `Atlas::flush()` (or `Atlas::close()`).** Dropping an `Atlas` without flushing abandons every pending in-memory write.
-
-A single `Atlas::flush()` drains the buffered attributes into their `.af` files, walks every cached `ArrayFile` (writing deltas + stats), and then serialises the in-memory schema to `atlas.json`. This gives one durability boundary for the whole store: N datasets ⇒ one delta file per touched array name (not one per dataset) and one `atlas.json` rewrite (not N). There is no index to write — the pruning index is derived from the `.af` stats on demand.
-
-`DatasetView` is a borrowed handle into the atlas's shared meta — it has no `flush()` of its own.
-
----
-
-## File format
-
-### `atlas.json`
-
-The schema is a plain JSON file written on `Atlas::flush()` / `Atlas::close()`. It stores:
-
-- **Store version** — for format upgrades. The current version is `3`; stores written by an older atlas are rejected on open with a clear `Error::UnsupportedVersion` (re-export to upgrade). Version 3 added the per-dataset **row ordinals + tombstone mask** that back the pruning index.
-- **Interned schema pool** — each *distinct* per-dataset schema is stored once and referenced by index. A dataset's schema is its array schemas (per array: dtype, shape, chunk shape, named dimensions, codec) plus its **attribute-key namespace** (the names of its global and per-variable attribute keys). A collection of thousands of homogeneous datasets stores its schema a single time.
-- **Dataset registry** — a map of dataset name → schema-pool index.
-- **Merged schema** — a collection-wide summary listing every unique array (with its dtype widened across all datasets, its dimensions, and its per-variable attribute types) and every global attribute type. Descriptive only — reads always use each dataset's own schema — but handy for tools that want one view of "what's in here." Also exposed programmatically via `Atlas::merged_schema()`.
-
-When the same array name (or attribute key) appears in more than one dataset with different types, the merged type is **widened**. Widening is allowed only within numeric types (e.g. `int16` ∪ `int32` → `int32`; `int32` ∪ `float32` → `float64`) or between `string` and `timestamp` (→ `string`).
-
-Any other combination — e.g. an `int32` array in one dataset and a `string` array under the same name in another — can't merge. The dataset is **still stored** under its own type (each dataset keeps the type it declared, and its data reads back normally); the merged schema simply keeps the **first-seen** type. Whether that's reported as a warning or an error is set by `StoreConfig::on_type_mismatch`:
-
-| `TypeMismatchPolicy` | Behaviour |
-| --- | --- |
-| `Warn` (default) | Logs a `tracing` warning and carries on — an ingest of many heterogeneous files won't abort because one disagrees. |
-| `Error` | `define_array` / `set_attribute` / `set_array_attribute` return `Error::TypeMismatch`. |
-
-The policy is a **per-session** choice, not an on-disk property: pass it to `Atlas::create`, or to `Atlas::open_with_config` / `Atlas::open_path_with_config` when opening an existing collection (plain `open` / `open_path` use the default). Note that these open variants honour only `on_type_mismatch` — the codec and metadata format are always detected from disk.
-
-Attribute **values** are **not** in `atlas.json` — only their key names are (as part of the schema). Values live in the `.af` files and are read via the `array-format` attribute API. Because `atlas.json` is human-readable and self-describing, you can still inspect or audit the collection's schema with any JSON tool without needing the library.
-
-### `<array_name>/data.af`
-
-Each array variable gets its own subdirectory with a single `data.af` binary file. The `.af` format (from the `array-format` crate) is a columnar, chunk-oriented binary format:
-
-- **Multiple datasets in one file** — every dataset that owns this variable is stored as a named entry inside the same file.
-- **Chunked layout** — arrays are split into chunks of a user-specified shape, so partial reads and writes touch only the relevant blocks.
-- **Configurable compression** — each block is compressed with the codec set when the store was created (default: Zstd; also LZ4 and uncompressed). The codec is persisted in `atlas.json` and restored automatically on `open` — no need to pass it again. Block target size is 8 MiB.
-- **Per-array fill value** — `define_array` accepts an optional `FillValue` (one of `Bool`/`Int`/`UInt`/`Float`/`String`). Unwritten cells read back as the fill value, and any *written* cell equal to it is counted as a null in the persisted stats (see below). Fill values are stored in the per-array footer; `atlas.json` is not extended.
-- **Attribute values** — per-variable attributes (e.g. `units`) are stored in the footer of the variable's own `data.af`, keyed by dataset. Dataset-level (global) attributes live the same way in the reserved `_global/data.af`. Atlas's `Attr` type mirrors `array-format`'s `AttributeValue` (bool, sized ints/uints, `f32`/`f64`, string, binary, and typed lists) plus a nanosecond timestamp variant stored as an RFC 3339 string.
-- **Persisted statistics** — on `Atlas::flush()`, min, max, null count, and row count are computed per array per dataset and stored alongside the data. Cells equal to the array's fill value are tallied in `null_count` and excluded from `min`/`max` (NaN fills match NaN cells by bit pattern). Statistics survive store reopening.
-- **In-memory caches** — a 256 MiB decoded block cache and a 64 MiB raw I/O cache sit in front of the object store for repeated reads.
-
-### Pruning index (built on demand — no index file)
-
-The per-array `.af` stats above answer "what's the min/max of `temperature` in *this* dataset?" one dataset at a time. The **pruning index** answers the **cross-dataset** question — "which of my 1 000 000 datasets could possibly contain a value above 25?" — as a single vectorised scan.
-
-There is **no `pruning.idx` file**. The `.af` stats *are* the source of truth, so the index is a denormalized pivot of data that already exists — Atlas rebuilds it **on demand** for the requested columns instead of persisting (and maintaining) a copy:
-
-- `pruning_index(cols)` reads each requested array's `StatsFile` once and scatters its per-dataset entries into a flat, length-N column by dataset ordinal. Cost is proportional to the *requested* columns, not the (possibly 50 000+) total — so wide collections stay cheap.
-- **One logical row per dataset**, positional — row *i* is the dataset at ordinal *i*. Deleted datasets keep their slot and are hidden by a liveness mask.
-- **Columns**: one per array, per global attribute, and per (array, attribute) pair. Each holds, per dataset, a `present` bit, a `stats_valid` bit, `min`, `max`, `row_count`, `null_count`. Attribute columns now carry each dataset's **value** as a point range `[v, v]`, so you can range-prune on attributes too.
-- Always consistent (no epoch, nothing to go stale), zero extra write memory, and nothing to write at `flush()`. Columns are built in parallel and the `name → ordinal` pivot map is cached across calls.
-
-```rust
-use atlas::{ColumnKey, StatVal};
-
-// Fetch just the columns you need. The returned index is self-describing:
-// it carries the liveness mask and the row↔name mapping.
-let key = ColumnKey::array("temperature");
-let index = store.pruning_index(std::slice::from_ref(&key)).await?;
-if let Some(view) = index.view(&key) {
-    // Deleted and absent rows are already excluded.
-    for row in view.candidates(|_, hi| hi > &StatVal::Float(25.0)) {
-        println!("candidate: {}", index.dataset_name(row).unwrap());
-    }
-}
-
-// column_summaries() folds each column's collection-wide min/max/present_count
-// (touches every column — a decide-what-to-read helper, not a hot path).
-```
-
-`min`/`max` keep the type the statistic was computed with (string min/max are lexicographic bytes; timestamps are integer nanoseconds). **See [`docs/pruning-index.md`](docs/pruning-index.md) for the full design, diagrams, and benchmarks.**
-
----
-
-## Deletes and compaction
-
-`delete_dataset` and `delete_array` are **logical**. A deleted dataset is *tombstoned* — its slot stays in `atlas.json` (so every later dataset keeps its row ordinal) and a liveness bit is cleared; its entries in the shared `.af` files are marked deleted but the bytes remain. Reads, `list_datasets`, the merged schema, and the pruning index all skip tombstoned datasets, so a delete is invisible to consumers immediately, but nothing is reclaimed yet.
-
-`Atlas::compact()` is the garbage collector. It rewrites every cached `.af` file with the tombstoned regions dropped, **renumbers** the surviving datasets to close the ordinal holes, and rebuilds the pruning index against the new numbering. It is the only operation that changes a dataset's row ordinal — so a row number cached from before a compact is stale afterwards.
-
-Re-creating a deleted name reuses its slot (and pruning-index row), starting from a clean schema — the revived dataset never inherits the previous occupant's stats.
+> **Python?** `pip install atlas-python` gives the `atlas` command. Run
+> `atlas create` on a directory of NetCDF files, then `ls`, `show`, `info`, and
+> `rm`. Each works on a local path and on a bucket. The Rust API reads array
+> data. See [`atlas-python/`](atlas-python/) and the
+> [documentation site](https://maris-development.github.io/atlas/).
+>
+> **Architecture?** [`docs/`](docs/) walks through it:
+> [architecture](docs/architecture.md), [data model](docs/data-model.md),
+> [the format](docs/format.md), [write path](docs/write-path.md),
+> [read path](docs/read-path.md), and [the Python package](docs/python.md).
 
 ---
 
 ## Quick start
 
 ```rust
-use atlas::{Atlas, Attr, FillValue, StoreConfig};
+use atlas::{Atlas, AtlasWriter, Attr, WriterConfig};
 use ndarray::Array2;
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a new store — codec is persisted to atlas.json
-    let mut s = Atlas::create_path("/tmp/my_store", StoreConfig::default()).await?;
-
-    {
-        // Create a dataset and write arrays
-        let mut ds = s.create_dataset("jan_2024").await?;
-        ds.define_array::<f32>(
-            "temperature",
-            vec!["lat".into(), "lon".into()],
-            vec![8, 16],
-            Some(vec![4, 8]),         // chunk shape
-            Some(FillValue::Float(f64::NAN)),  // returned for unwritten cells; counted as nulls in stats
-        ).await?;
-
-        let data = Array2::<f32>::from_elem([8, 16], 20.0).into_dyn();
-        ds.write_array("temperature", vec![0, 0], data.view()).await?;
-
-        ds.set_attribute("month", Attr::UInt32(1));
-        ds.set_attribute("station", Attr::String("KNMI".into()));
-    }
-
-    // One flush persists atlas.json + every cached array file.
-    s.flush().await?;
-
-    // Reopen — codec is read from atlas.json, no StoreConfig needed
-    let s2 = Atlas::open_path("/tmp/my_store").await?;
-    let ds2 = s2.open_dataset("jan_2024").await?;
-
-    // Full read
-    let temp = ds2.read_array::<f32>("temperature", vec![], vec![]).await?.unwrap();
-
-    // Partial read — one chunk region
-    let chunk = ds2.read_array::<f32>("temperature", vec![0, 0], vec![4, 8]).await?.unwrap();
-
-    // Query persisted statistics
-    let stats = ds2.array_stats("temperature").await.unwrap();
-    println!("rows={} min={:?} max={:?}", stats.row_count, stats.min, stats.max);
-
-    Ok(())
+# async fn run() -> atlas::Result<()> {
+// Build. Nothing is readable until finish().
+let w = AtlasWriter::create_path("/data/weather", WriterConfig::default()).await?;
+{
+    let mut ds = w.add_dataset("jan_2024").await?;
+    ds.define_array::<f32>(
+        "temperature",
+        vec!["lat".into(), "lon".into()],
+        vec![4, 8],
+        Some(vec![2, 4]),   // chunk shape
+        None,               // fill value
+    ).await?;
+    ds.write_array("temperature", vec![0, 0],
+                   Array2::<f32>::from_elem([4, 8], 20.0).into_dyn().view()).await?;
+    ds.set_attribute("month", Attr::Int64(1));
+    ds.finish().await?;
 }
+w.finish().await?;
+
+// Read. Opening touches only the footer.
+let atlas = Atlas::open_path("/data/weather").await?;
+assert_eq!(atlas.list_datasets(), vec!["jan_2024".to_string()]);
+
+let ds = atlas.dataset("jan_2024")?;
+assert_eq!(ds.array_meta("temperature").unwrap().shape, vec![4, 8]);
+assert_eq!(ds.get_attribute("month"), Some(Attr::Int64(1)));
+
+// Only this line fetches array bytes, and only the chunks it needs.
+let window = ds.read_array::<f32>("temperature", vec![0, 0], vec![2, 4]).await?;
+# Ok(())
+# }
+```
+
+```bash
+cargo add atlas-rust
 ```
 
 ---
 
-## Key concepts
+## Immutability
 
-| Concept | Description |
-| --- | --- |
-| **Store** | The root directory, managed by `Atlas`. |
-| **Dataset** | A named group of arrays + typed attributes, accessed via `DatasetView`. |
-| **Array** | An N-dimensional typed array with named dimensions and an optional chunk shape. |
-| **Attribute** | A typed scalar attached to a dataset (metadata, not array data). |
-| **Array file** | One `data.af` file per variable name, shared across all datasets that define that variable. |
-| **Pruning index** | A columnar min/max/count table across all datasets, **built on demand** from the `.af` stats (no index file). Query it with `Atlas::pruning_index(&[ColumnKey])` / `column_summaries()` to prune to candidate datasets without reading array data. |
-| **Flush** | `Atlas::flush()` — the single durability boundary. Persists every cached array file, the pruning index, and rewrites `atlas.json` from the in-memory `StoreMeta`. Must be called explicitly (or via `Atlas::close()` / Python's `with atlas:`). |
-| **Compact** | `Atlas::compact()` rewrites every cached `.af` file to reclaim space after deletes, and renumbers dataset row ordinals. |
-| **StoreConfig** | Configuration passed to `Atlas::create`. Currently holds the compression `Codec`. |
-| **Codec** | Compression codec for new array blocks: `Codec::Zstd` (default), `Codec::Lz4`, or `Codec::Uncompressed`. Persisted in `atlas.json`; `open` reads it automatically. |
+A collection cannot change after a write. There is no append, no in-place
+update, and no compaction. To change a dataset, rewrite the whole collection.
+
+That constraint keeps the format simple. It removes the delta layers a read
+must resolve. It removes the tombstones between the data. It removes the
+ordinal that moves under a reader. It removes the durability boundary. The file
+has a trailer, or it is no collection.
+
+**A delete** is the one exception. It adds an ordinal to a small
+`deleted.mask` file beside the container, and never touches the container. Each
+ordinal stays put, and this reclaims no space. `Atlas::delete_datasets` takes
+any number of names, and still writes the mask once.
+
+| Not available | Instead |
+|---|---|
+| Append to a finished collection | Rewrite it |
+| Change an array | Rewrite it |
+| `flush` or `compact` | Nothing to flush, and no layer to compact |
+| Reclaim the space of a deleted dataset | Rewrite it |
 
 ---
 
-## Supported dtypes
+## What is in the file
 
-`bool`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `f32`, `f64`, `TimestampNs`, `String`, `Binary`, `List<T>`, `FixedSizeList<T, N>`
-
-0-D scalar arrays (`shape = []`) are supported for any element type — useful for single-valued metadata variables like a trajectory identifier.
-
----
-
-## Comparison with NetCDF and Zarr
-
-### Similarities
-
-- All three formats are chunked, N-dimensional array stores.
-- All support named dimensions, per-variable metadata, and compression.
-- All are designed for scientific/numerical data.
-
-### Layout: the key difference
-
-The critical architectural distinction is how datasets and variables are organized on disk.
-
-**NetCDF / Zarr** use a *dataset-first* layout:
+### Container
 
 ```text
-zarr_store/
-├── jan_2024/
-│   ├── temperature/   ← chunks for temperature
-│   └── pressure/      ← chunks for pressure
-└── feb_2024/
-    ├── temperature/
-    └── pressure/
+offset 0     b"ATLS"                     4 B   leading magic
+offset 4     format_version u32 LE = 1   4 B
+offset 8     segment[0]                        a complete array-format file
+             segment[1] …                      back to back, no padding
+             footer_bytes                      zstd(msgpack(CollectionFooter))
+end - 16     footer_size u64 LE          8 B  ┐
+end - 8      format_version u32 LE = 1   4 B  ├ trailer
+end - 4      b"ATLS"                     4 B  ┘
 ```
 
-Reading `temperature` for 1 000 time steps means opening 1 000 separate directories/files.
+An open reads the last 64 KiB and checks the trailer. The footer usually
+arrives in the same request. The magic appears at both ends. A reader checks
+the trailing copy. The leading copy lets `file` and `xxd` name the file.
 
-**ATLAS** uses a *variable-first* layout:
+### Segments
+
+One per dataset. Each is a complete `array-format` file that describes itself.
+Cut one out, and it opens on its own:
+
+```bash
+# offsets from DatasetView::segment_range()
+dd if=data.atlas of=jan.af bs=1 skip=8 count=1438
+```
+
+Inside, each array keys on its real name, and each block records its own codec.
+Nothing therefore needs to tell a reader how a collection compresses.
+
+### Footer
+
+MessagePack, then zstd. It holds every dataset name, segment byte range,
+schema, and attribute. Two pools keep it small. Schemas intern by content hash,
+so a fleet of a thousand datasets of one shape stores one copy. Attribute keys
+intern as strings.
+
+Attribute **values** live here too, and not in the segments. So do the minimum,
+the maximum, and the null count of each array. The staging step computes those,
+because the writer walks the data anyway. A metadata-only open therefore
+answers every question about a collection with no further I/O.
+
+Full byte-level detail in [`docs/format.md`](docs/format.md).
+
+---
+
+## Reading
+
+```rust
+let atlas = Atlas::open_path(path).await?;   // 1–2 requests, any collection size
+
+atlas.list_datasets();
+atlas.list_arrays();
+atlas.array_stats("temperature");            // every live dataset, combined
+atlas.array_stats_by_dataset("temperature"); // the same, split per dataset
+let ds = atlas.dataset("jan_2024")?;         // no I/O
+ds.schema();
+ds.array_meta("temperature");
+ds.attributes();
+ds.array_fill_value("temperature");
+ds.array_stats("temperature");               // min, max, null count, row count
+```
+
+None of that touches the store after the open. `tests/integration.rs` proves it
+with a request-counting `ObjectStore`.
+
+An array read is lazy and partial:
+
+```rust
+let all    = ds.read_array::<f32>("temperature", vec![], vec![]).await?;
+let window = ds.read_array::<f32>("temperature", vec![1, 3], vec![2, 2]).await?;
+```
+
+The first read on a dataset opens its segment, in two small range reads. The
+handle then stays in the cache. The read fetches the overlapping chunks, and no
+more. Every cell nobody wrote comes from the fill value, and costs no I/O.
+
+---
+
+## Writing
+
+`AtlasWriter` streams one object. Each dataset stages as a complete
+`array-format` file on local scratch. The writer then copies that file into the
+stream, byte for byte:
 
 ```text
-atlas_store/
-├── temperature/
-│   └── data.af        ← temperature for ALL datasets in one file
-└── pressure/
-    └── data.af
+add_dataset("jan")  ──▶ scratch/1/data.af      define, write, define, write, …
+  finish()          ──▶ flush, compact, copy   ──▶ container[8 .. 4_100]
+AtlasWriter::finish ──▶ footer, trailer, done
 ```
 
-Reading `temperature` for 1 000 datasets means opening exactly **one file**. This is the primary design goal of this format.
+Memory stays bounded, whatever the dataset size. `array-format` spills each
+compressed chunk to a temporary file, and the copy streams in 8 MiB pieces.
 
-### Feature comparison
-
-| Feature | NetCDF-4 | Zarr v3 | ATLAS |
-| --- | --- | --- | --- |
-| Layout | Dataset-first | Dataset-first | Variable-first |
-| Compression | Deflate / Zstd / … | Any codec plugin | Zstd / LZ4 / None |
-| Chunking | Yes | Yes | Yes |
-| Cloud object store | No (needs FUSE/etc) | Yes (native) | Yes (via `object_store`) |
-| Multiple datasets in one file | No | No | Yes (all datasets per variable) |
-| Metadata format | Binary (HDF5) | JSON | JSON |
-| Cross-dataset column scan | Slow (N file opens) | Slow (N directory opens) | Fast (1 file open) |
-| Partial reads | Yes | Yes | Yes |
-| Statistics (min/max/nulls) | No | No | Yes (persisted on flush) |
-| Cross-dataset stat pruning | No | No | Yes (on-demand columnar index, vectorised) |
-| Self-describing metadata | Yes | Yes | Yes (`atlas.json`) |
-| Language support | C/Python/Julia/… | Python/Java/… | Rust |
-| Mutable after write | Limited | Yes | Yes (chunked overwrites + compact) |
-
-### When to choose ATLAS
-
-- You have many homogeneous datasets (same variable schema, different instances — time steps, stations, runs).
-- Your primary query is "give me variable X across all datasets" — a column scan across the dataset dimension.
-- You want a simple on-disk layout with no special runtime dependencies and human-readable metadata.
-- You are working in Rust with an async runtime and an `object_store`-compatible backend.
-
-### When to choose Zarr or NetCDF
-
-- You need wide ecosystem support (Python, Julia, C libraries, GIS tools).
-- Your primary query pattern is "give me all variables for one dataset" (dataset-first access).
-- You need hierarchical group nesting beyond two levels.
-- You need a codec ecosystem with many options (blosc, gzip, numcodecs, …).
+`add_dataset` returns an owned writer, so several datasets can stage at once.
+Each takes the writer's lock for its append alone. The segments therefore land
+in finish order, and never interleave.
 
 ---
 
-## Performance characteristics
+## Types
 
-### Cross-dataset scans (where this format excels)
+Scalars: `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`, `Float32`, `Float64`,
+`String`, `Binary`, `TimestampNs`. Nested: `List<T>`, `FixedSizeList<T, n>`.
 
-Because all datasets share a single `.af` file per variable, scanning `temperature` across N datasets costs:
+Two datasets can declare one array name with unrelated types. Atlas stores each
+as declared. There is no merged schema, and no type widening. One segment per
+dataset leaves nothing to reconcile. `Atlas::array_stats` leaves such a dataset
+out, because two dtypes do not compare.
 
-- **1 file open** regardless of N.
-- Sequential reads within one file, which are friendly to OS read-ahead and object-store range requests.
-- Decompression only for the blocks actually read.
-
-In a dataset-first format, the same scan requires N file or directory opens, which is bounded by metadata latency, not throughput — especially painful on object stores where each `HEAD`/`GET` has ~10 ms overhead.
-
-### Chunked I/O
-
-Chunk shapes are set per-array at definition time. A chunk shape equal to the full array shape (the default when `chunk_shape` is omitted) gives a single compressed block per dataset entry, minimising overhead for small arrays. Smaller chunks allow fine-grained partial reads and updates at the cost of more blocks.
-
-### In-memory caches
-
-Two caches sit in front of the object store:
-
-| Cache | Default size | What it holds |
-| --- | --- | --- |
-| Decoded block cache | 256 MiB | Decompressed array chunks, ready for use |
-| I/O cache | 64 MiB | Raw compressed bytes from the object store |
-
-The decoded cache means repeated reads of the same chunk cost only a hash-map lookup. Both caches are shared across all `DatasetView`s that open the same `Atlas`.
-
-### Persisted statistics and pruning
-
-Min, max, null count, and row count are computed and persisted on every `Atlas::flush()`. Downstream systems can read these statistics from the opened `DatasetView` without touching array data at all — useful for query planning, dashboards, or data-quality checks.
-
-For **cross-dataset** query planning, the [pruning index](#pruning-index-built-on-demand--no-index-file) turns "which datasets could match?" into a vectorised scan over the array statistics. It's built on demand: `pruning_index(&[…])` reads just the requested columns' `.af` stats and pivots them into flat per-dataset vectors (columns built in parallel, the ordinal map cached); `column_summaries()` folds every column's collection-wide range to rule whole columns out. So a query engine can prune a fleet of datasets to a handful of candidates before opening a single `.af` file — with nothing to persist or keep in sync. See [`docs/pruning-index.md`](docs/pruning-index.md).
-
-### Compression
-
-The codec is chosen once at store creation via `StoreConfig` and written into `atlas.json`. `Atlas::open` reads it from there, so callers never need to repeat the codec choice. Each array also records its own codec in `atlas.json`, so a store can theoretically hold arrays written with different codecs if the schema is migrated.
-
-| Codec | Trade-off |
-| --- | --- |
-| `Codec::Zstd` (default) | Best compression ratio; moderate CPU cost |
-| `Codec::Lz4` | Faster compression/decompression; larger files |
-| `Codec::Uncompressed` | Fastest write path; no size reduction |
-
-Choose LZ4 when decompression throughput matters more than storage size (e.g. large in-memory analytics). Choose Uncompressed for already-compressed data or when profiling shows decompression is the bottleneck.
-
-### Write path
-
-Writes are buffered in-memory across the whole atlas. Attribute writes buffer in a shared, **interned** pending map — identical values (a NetCDF collection is ~94 % duplicate attribute values) are stored once and shared, so the buffer stays small during a large ingest. Calling `Atlas::flush()` compresses and writes every modified block across every cached array file, writes the pruning index, then rewrites `atlas.json` atomically (a single `PUT`). The write path scales with the number of modified chunks, not the number of datasets, and N consecutive `add_xarray_dataset` / `create_dataset` calls amortise to a single flush.
-
-### Compaction
-
-After deleting arrays or datasets, the underlying `.af` files may retain dead space. Calling `Atlas::compact()` rewrites every cached file in place, reclaiming storage.
+An attribute takes any scalar type, or a list of one type. It sits at dataset
+scope or at array scope. A timestamp has its own wire tag, so a string that
+looks like a date stays a string.
 
 ---
 
-## Benchmarks
+## Compression
 
-A reproducible comparison against NetCDF (`netCDF4`) and Zarr v3 lives in [`pyatlas/benchmarks/`](pyatlas/benchmarks/). The harness writes the **same** deterministic data through each backend, then measures three things:
-
-1. **Write** — total wall time to populate the collection.
-2. **Read slice** — read a fixed slice of every variable from every dataset, summed.
-3. **Storage** — total bytes on disk for the backend's directory.
-
-Each backend uses its **canonical "many datasets" layout** rather than a forced apples-to-apples one — `atlas` uses one store with N datasets, `netcdf` uses N separate `.nc` files (the standard CMIP layout, read via `xr.open_mfdataset(parallel=True)`), `zarr` uses N separate `.zarr` stores (also read via `open_mfdataset`). The point is to compare "what's the fastest each library can do for this workload using its idiomatic pattern," not to handicap any of them.
-
-### Workloads
-
-The harness ships two named workloads (`--case`):
-
-| Case | Variables | Per-dataset shape | Typical use |
-|---|---|---|---|
-| `sensors` (default) | `temperature`, `pressure`, `humidity` (f32/f64/f32) | `(24,)` on `(time,)` | Hourly weather-station fleet — tiny per-dataset I/O, per-dataset overhead dominates |
-| `gridded` | same three vars | `(100, 100, 48)` on `(lon, lat, time)` | Geophysical-style grid — actual decompression dominates |
-
-Both workloads run N=1000 datasets by default. Read slice is the first 25% of each dimension (`--slice-fraction 0.25`).
-
-### Results
-
-Numbers are wall-clock seconds on a single laptop (Apple Silicon, AC power, single run — treat as relative not absolute):
-
-#### `--case gridded --datasets 1000` (1.8 GB raw — decompression dominates)
-
-`(100, 100, 48)` per variable × 3 variables × 1000 datasets, chunk
-shape `(50, 50, 24)` (8 chunks per variable). All three backends push
-the `(0:25, 0:25, 0:12)` slice down to chunk-level reads.
-
-| Backend | Layout / pattern | Read slice (s) | Write (s) | Storage (MiB) |
-|---|---|---:|---:|---:|
-| **atlas-bulk** | 1 store, `read_array_across_stacked` with slice push-down | **2.12** | 59 | 6387 |
-| **atlas + `--use-dask`** | 1 store, dask-threaded per-dataset `view.read_arrays(...)` | **3.21** | 60 | 6387 |
-| zarr | 1000 separate stores, `xr.open_mfdataset(parallel=True).isel(...)` | 5.99 | 38 | 6392 |
-| atlas (default) | 1 store, serial per-dataset `open_as_xarray_dataset(...).isel(...).load()` | 10.23 | 51 | 6387 |
-| netcdf | 1000 `.nc` files, `xr.open_mfdataset(parallel=True).isel(...)` | 13.91 | 122 | 5596 |
-
-#### `--case profile --datasets 1000` (~67 MB raw — per-dataset overhead dominates)
-
-2 variables on `(depth=50, time=168)` — oceanographic-style time × depth cast.
-
-| Backend | Read slice (s) | Write (s) | Storage (MiB) |
-|---|---:|---:|---:|
-| **atlas-bulk** | **0.08** | 0.77 | 55.5 |
-| **atlas (default)** | **0.32** | 0.91 | 55.5 |
-| atlas + `--use-dask` | 2.03 | 2.98 | 55.6 |
-| netcdf | 4.27 | 2.98 | 62.3 |
-| zarr | 4.07 | 11.43 | 61.6 |
-
-This is the workload atlas was structurally designed for. The shared `atlas.msgpack.zst` + one `.af` file per variable means a 1000-dataset open is essentially free, and the read path collapses to "decompress 1000 small blocks from 2 sequential files." Both zarr's 1000-store mfdataset and netcdf's 1000-file mfdataset pay metadata overhead 1000× over.
-
-Note `--use-dask` is *slower* than default atlas here: when per-dataset I/O is tiny, dask scheduler overhead dominates. The rule of thumb flips by workload — dask helps when per-dataset decompression is the bottleneck (gridded), hurts when per-dataset overhead is the bottleneck (profile).
-
-#### `--case sensors --datasets 1000` (tiny per-dataset shapes — atlas's design wins)
-
-| Backend | Read slice (s) | Write (s) | Storage (KiB) |
-|---|---:|---:|---:|
-| atlas | ~0.02 | ~0.1 | ~80 |
-| zarr | ~0.6 | ~2.0 | ~370 |
-| netcdf | ~0.25 | ~0.16 | ~730 |
-
-For tiny-shape datasets the comparison is dominated by per-dataset overhead, which is exactly atlas's structural advantage (one store, one metadata file, one physical file per array name).
-
-### What the numbers say
-
-- **Reads on gridded** (decompression-dominated, with realistic chunking + slice push-down): `atlas-bulk` reads in **2.12s vs zarr's 6.00s — 2.8× faster**. `atlas + --use-dask` (using the new `view.read_arrays(...)` fast path) hits **3.21s — 1.9× faster than zarr**. The win comes from atlas's structural advantage (one open of one file per variable, in-memory metadata) combined with APIs that bypass `open_as_xarray_dataset`'s xr.Dataset + per-chunk dask graph overhead. zarr and netcdf both push the slice down through `open_mfdataset(...).isel(...)` via dask graph optimization — they're not penalised by the chunking; atlas just wins by amortising metadata and skipping per-dataset Python overhead.
-- **Reads on profile** (overhead-dominated): atlas wins by an order of magnitude. `atlas-bulk` is **~50× faster than zarr** (0.08s vs 4.07s) because the per-dataset I/O is small enough that everything is overhead — and atlas's structural design is built for exactly that case. Default serial `atlas` is still ~12× faster than zarr.
-- **Default `atlas.open_as_xarray_dataset` iteration is currently SLOW on chunked storage** (10.23s vs zarr's 6.00s). It goes through `open_as_xarray_dataset(name)` which returns dask-backed arrays per chunk (8 chunks/var × 3 vars × 1000 datasets = 24,000 dask delayed tasks just to build the graph). Dask graph overhead exceeds the parallelism win. **The fix is to use `view.read_arrays(vars, start, shape)` for per-dataset slice reads** — that's what `atlas + --use-dask` does internally and why it hits 3.21s. For cross-dataset reads of the *same* slice from many datasets, prefer `Atlas.open_as_many_xarray_dataset` / `read_array_across_stacked` (the `atlas-bulk` row).
-- **Workload sensitivity**: `--use-dask` helps when per-dataset decompression is the bottleneck and *hurts* when per-dataset overhead is the bottleneck (profile: default `atlas` 0.32s → dask 2.03s). Picking the right API for the workload matters more than picking dask vs serial.
-- **Writes on gridded**: zarr is fastest (~31s vs atlas's ~50s) — each `to_zarr(...)` just dumps bytes into a per-dataset subtree, while atlas does more bookkeeping per call (schema registration, per-dataset attrs into the shared `atlas.msgpack.zst`, block addressing in the shared array file). Atlas still beats netcdf decisively.
-- **Writes on profile**: atlas wins ~12× (0.91s vs zarr's 11.43s, netcdf's 2.98s). At small per-dataset sizes the metadata write dominates, and atlas's amortised single-flush model wins.
-- **Storage**: atlas and zarr are essentially tied (both zstd); netcdf wins on the gridded case because zlib happens to compress this particular workload tighter, but loses on profile/sensors because the per-file overhead dominates.
-
-### Caveats
-
-- **Single laptop, single run** — variance can be 10–20%. The benchmark deliberately doesn't drop OS caches between runs (it measures warm-cache repeat-query performance, which is what real analytic workloads see).
-- **Local filesystem only** — atlas's biggest potential read win is over a high-latency object store where the metadata-shape difference dominates; that's a different benchmark.
-- **`netCDF4` vs `h5netcdf`** — using the C-library binding (the more common production choice).
-- Run it yourself: `pip install -e "pyatlas[bench]"` then `python pyatlas/benchmarks/bench_collection.py --case gridded --datasets 1000`. See [`pyatlas/benchmarks/README.md`](pyatlas/benchmarks/README.md) for all flags.
+`WriterConfig { codec }` is `Zstd`, `Lz4`, or `Uncompressed`. `Zstd` is the
+default. `block_target_size` defaults to 8 MiB. Each block describes itself, so
+`Atlas::open` takes no codec argument.
 
 ---
 
 ## Thread safety
 
-`Atlas` and `DatasetView` are `Send + Sync` and work with the default multi-thread Tokio runtime.
+A read needs no lock. The data is immutable, so `Atlas` and `DatasetView` are
+`Send + Sync`, and two reads never contend. A `OnceCell` opens each segment
+handle once. One block cache serves a whole collection.
 
-Each physical array file is guarded by a `tokio::sync::RwLock`:
+A write shares one `tokio::sync::Mutex` over the output stream and the footer.
+A dataset takes that lock for its append alone.
 
-| Operation | Lock held |
-| --- | --- |
-| `read_array`, `array_stats` | Shared read lock — multiple callers on the same file proceed in parallel |
-| `write_array`, `define_array`, `delete_array`, `Atlas::flush`, `Atlas::compact` | Exclusive write lock — serialised against all other access |
+---
 
-The store-level array-file cache map uses a `parking_lot::RwLock` that is never held across an `await` point. The shared `StoreMeta` uses a separate `parking_lot::Mutex` and is only mutated through short, lock-release-await-free critical sections (so `list_datasets`, `dataset_exists`, etc. remain synchronous).
+## Testing
+
+```bash
+cargo test -p atlas-rust
+```
+
+This covers the format framing, the footer and mask codecs, the segment-store
+adapter, and the whole lifecycle. Two committed fixtures pin compatibility.
+`tests/fixtures/golden_v1/` is a v1 container, read back with every value
+asserted. The Python xarray layer writes `tests/fixtures/from_python/`, and
+Rust checks it. That keeps the two in agreement, because Python reads no array.
 
 ---
 

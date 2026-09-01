@@ -1,67 +1,64 @@
-# Atlas — Architecture Documentation
+# Atlas architecture
 
-Atlas (**A**ggregated **T**ensor **L**arge **A**rray **S**tore) is a
-directory-based store for **thousands to millions of named datasets**, each a
-collection of N-dimensional arrays with attributes, backed by object storage
-(local filesystem, S3, …).
+Atlas keeps thousands of named datasets in **one immutable file**. This
+directory explains how, from the top down.
 
-This folder explains how the pieces fit together. Read the docs in order for a
-full picture, or jump to a topic.
+Read these in order:
 
-| # | Doc | What it covers |
-|---|-----|----------------|
-| 1 | [architecture.md](architecture.md) | The crates, the layers, and how a call flows top to bottom |
-| 2 | [storage-layout.md](storage-layout.md) | What's on disk: `atlas.json`, `<array>/data.af`, `_global` |
-| 3 | [data-model.md](data-model.md) | Datasets, arrays, array-name sharing, ordinals, attributes, dtypes |
-| 4 | [metadata.md](metadata.md) | `atlas.json` / `StoreMeta`: schema interning, the type index, tombstones |
-| 5 | [write-path.md](write-path.md) | create → write → flush → compact, buffering, and the durability boundary |
-| 6 | [pruning-index.md](pruning-index.md) | The flat statistics table, **built on demand** from the array files |
-| 7 | [python-xarray.md](python-xarray.md) | The `atlas-python` bindings and the xarray integration |
+| # | Document | What it covers |
+|---|---|---|
+| 1 | [architecture.md](architecture.md) | The layers, and who owns what |
+| 2 | [data-model.md](data-model.md) | Collections, datasets, arrays, attributes |
+| 3 | [format.md](format.md) | The on-disk format, byte for byte |
+| 4 | [write-path.md](write-path.md) | How a collection is built |
+| 5 | [read-path.md](read-path.md) | How one is read, and what it costs |
+| 6 | [python.md](python.md) | The Python package. Five operations and a CLI |
 
-## The 10,000-foot view
+## The one idea
 
-```
-        ┌───────────────────────────────────────────────────────────────┐
-        │  Consumers:  Rust API   •   Python (xarray)   •   CLI/notebooks │
-        └───────────────────────────────┬───────────────────────────────┘
-                                        │
-        ┌───────────────────────────────▼───────────────────────────────┐
-        │  atlas-rust  — the store                                        │
-        │                                                                 │
-        │   Atlas         one store: create/open, flush, compact,         │
-        │                 pruning_index (query stats across datasets)     │
-        │   DatasetView   one dataset: define/write/read arrays + attrs   │
-        │   StoreMeta     the schema + ordinals (atlas.json)              │
-        │   Pruning       a flat stats table, assembled on demand         │
-        └───────────────────────────────┬───────────────────────────────┘
-                                        │  typed columnar arrays + stats
-        ┌───────────────────────────────▼───────────────────────────────┐
-        │  array-format — one physical file per array name                │
-        │  chunked · compressed · delta layers · per-dataset statistics   │
-        └───────────────────────────────┬───────────────────────────────┘
-                                        │
-        ┌───────────────────────────────▼───────────────────────────────┐
-        │  object_store —  local FS  •  S3  •  GCS  •  Azure  •  memory    │
-        └───────────────────────────────────────────────────────────────┘
+A collection is one write-once file. Every dataset occupies one contiguous byte
+range inside it. A footer at the end records where each one lives, with its
+schema and its attributes.
+
+```text
+my_collection/
+├── data.atlas      ATLS │ segment │ segment │ … │ footer │ trailer
+└── deleted.mask    optional: ordinals of deleted datasets
 ```
 
-## The one idea that makes Atlas different
+Two results follow from that, and they are most of the value of atlas:
 
-**Datasets that share an array name are co-located in one physical file, keyed
-by dataset name.** A thousand sensors that each record `temperature` don't make
-a thousand files — they make **one** `temperature/data.af`, with a thousand
-entries inside. This is what lets Atlas scan a variable *across* datasets
-cheaply, and it's the backbone of the [pruning index](pruning-index.md).
+**Metadata is one read.** An open of a collection fetches the footer and
+nothing else. To list the datasets, to inspect a schema, and to read an
+attribute are then free. Ten datasets and a million datasets cost the same.
 
-```
-   1,000 datasets ── each declares "temperature" and "salinity" ──►
+**Data arrives chunk by chunk.** A segment is a complete `array-format` file
+that describes itself. A read of a region of an array fetches only the chunks
+that region overlaps.
 
-   store/
-   ├── temperature/data.af   ← 1,000 entries (one per dataset)
-   └── salinity/data.af      ← 1,000 entries (one per dataset)
+## What immutability buys
 
-   NOT: store/ds0/…, store/ds1/…, …  (1,000 directories)
-```
+A collection cannot change after a write. There is no append, no in-place
+update, and no compaction. To change a dataset, rewrite the whole collection.
 
-See [data-model.md](data-model.md) for why, and [pruning-index.md](pruning-index.md)
-for what it buys you.
+That is a real constraint, and it is the point. What it removes:
+
+- no delta layers to resolve on read
+- no tombstones interleaved with data
+- no ordinal that shifts under a concurrent reader
+- no durability boundary to reason about. The file has a trailer, or it does
+  not exist
+
+The one exception is deletion, which writes a small mask beside the container
+and never touches it. See [format.md](format.md#deletion-mask).
+
+## Where the code lives
+
+The **file format is Rust only**. `src/format/` defines the framing, the
+footer, and the deletion mask. Nothing outside the `atlas-rust` crate produces
+or parses a byte of a container.
+
+The Python package is a binding layer over that, and five operations. Build a
+collection from NetCDF files, remove datasets, list them, describe one, and
+summarize the whole. Both a library and the `atlas` command offer them. See
+[python.md](python.md).

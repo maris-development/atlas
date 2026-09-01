@@ -15,9 +15,8 @@ use pyo3::PyResult;
 ///   - `list[<inner>]`
 ///   - `fixed_size_list[<inner>,<n>]`
 pub fn parse_dtype(s: &str) -> PyResult<DType> {
-    parse_dtype_inner(s.trim()).ok_or_else(|| {
-        PyValueError::new_err(format!("unknown dtype string: {s:?}"))
-    })
+    parse_dtype_inner(s.trim())
+        .ok_or_else(|| PyValueError::new_err(format!("unknown dtype string: {s:?}")))
 }
 
 fn parse_dtype_inner(s: &str) -> Option<DType> {
@@ -25,13 +24,18 @@ fn parse_dtype_inner(s: &str) -> Option<DType> {
 
     if let Some(inner) = strip_prefix_suffix(&lower, "list[", "]") {
         let child = parse_dtype_inner(inner)?;
-        return Some(DType::List { child: Box::new(child) });
+        return Some(DType::List {
+            child: Box::new(child),
+        });
     }
     if let Some(inner) = strip_prefix_suffix(&lower, "fixed_size_list[", "]") {
         let (child_str, size_str) = inner.rsplit_once(',')?;
         let child = parse_dtype_inner(child_str.trim())?;
         let size: u32 = size_str.trim().parse().ok()?;
-        return Some(DType::FixedSizeList { child: Box::new(child), size });
+        return Some(DType::FixedSizeList {
+            child: Box::new(child),
+            size,
+        });
     }
 
     Some(match lower.as_str() {
@@ -57,7 +61,7 @@ fn strip_prefix_suffix<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a
     s.strip_prefix(prefix)?.strip_suffix(suffix)
 }
 
-/// Render a `DType` as a stable string (matches the parser input vocabulary).
+/// Renders a `DType` as a stable string. It matches the parser vocabulary.
 pub fn dtype_to_string(dtype: &DType) -> String {
     match dtype {
         DType::Bool => "bool".into(),
@@ -81,8 +85,9 @@ pub fn dtype_to_string(dtype: &DType) -> String {
     }
 }
 
-/// Expands `$cb!(Variant, RustType, "numpy_dtype_name")` for every numeric variant.
-/// Used in read/write paths to generate a match expression over `atlas::DType`.
+/// Expands `$cb!(Variant, RustType, "numpy_dtype_name")` for every numeric
+/// variant. The read and write paths use it to build a match over
+/// `atlas::DType`.
 #[macro_export]
 macro_rules! for_each_numeric_dtype {
     ($cb:ident) => {

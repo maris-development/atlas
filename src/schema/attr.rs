@@ -1,21 +1,15 @@
-//! [`Attr`], atlas's public attribute value, and its mapping to storage.
+//! [`Attr`], atlas's public attribute value.
 
-use array_format::{AttributeValue, DType};
+use array_format::DType;
 
 /// A typed attribute value.
 ///
-/// Attribute **values** live in the per-array `.af` files (as
-/// [`array_format::AttributeValue`]); this enum is atlas's public mirror of
-/// that type plus a dedicated nanosecond-precision timestamp variant. Values
-/// are never serialized into `atlas.json` — only their *keys* are (as part of
-/// the schema namespace).
+/// An attribute annotates a dataset or one of its arrays. Values live in the
+/// container footer. One range read therefore lists the datasets and gives
+/// their attributes.
 ///
-/// [`Attr`] mirrors every [`AttributeValue`] case and adds
-/// [`TimestampNanoseconds`](Attr::TimestampNanoseconds). Because
-/// `AttributeValue` has no timestamp case, timestamps round-trip through the
-/// `.af` file as an RFC 3339 [`String`](AttributeValue::String); on read, a
-/// string that parses as RFC 3339 is restored to a timestamp (matching the
-/// historical `atlas.json` behaviour), and any other string stays a string.
+/// A timestamp has its own variant and its own wire tag. A string that looks
+/// like a date stays a string.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Attr {
     /// Boolean.
@@ -44,8 +38,7 @@ pub enum Attr {
     String(String),
     /// Variable-length binary.
     Binary(Vec<u8>),
-    /// Nanosecond-precision UTC timestamp. Stored in the `.af` file as an
-    /// RFC 3339 string (`AttributeValue` has no timestamp case).
+    /// Nanosecond-precision UTC timestamp.
     TimestampNanoseconds(i64),
     /// List of booleans.
     BoolList(Vec<bool>),
@@ -76,13 +69,9 @@ pub enum Attr {
 }
 
 impl Attr {
-    /// The [`DType`] this value occupies.
-    ///
-    /// Scalars map to the matching scalar dtype (timestamps to
-    /// [`DType::TimestampNs`]); lists map to a [`DType::List`] over the element
-    /// dtype. Used to type attributes in the merged schema and to check type
-    /// alignment across datasets.
-    pub(crate) fn dtype(&self) -> DType {
+    /// The [`DType`] this value occupies. A scalar maps to the matching scalar
+    /// dtype. A list maps to a [`DType::List`] over the element dtype.
+    pub fn dtype(&self) -> DType {
         fn list(child: DType) -> DType {
             DType::List {
                 child: Box::new(child),
@@ -120,133 +109,19 @@ impl Attr {
     }
 }
 
-/// Format a nanosecond UTC timestamp as an RFC 3339 string, shortest faithful
-/// representation (drops trailing-zero subsecond digits).
-pub(crate) fn timestamp_ns_to_rfc3339(nanos: i64) -> String {
-    use chrono::{DateTime, SecondsFormat, Utc};
-    DateTime::<Utc>::from_timestamp_nanos(nanos).to_rfc3339_opts(SecondsFormat::AutoSi, true)
-}
-
-/// Parse an RFC 3339 string into nanoseconds since the Unix epoch, or `None`
-/// if it is not a valid RFC 3339 timestamp within the nanosecond range.
-pub(crate) fn rfc3339_to_timestamp_ns(s: &str) -> Option<i64> {
-    use chrono::{DateTime, Utc};
-    DateTime::parse_from_rfc3339(s)
-        .ok()?
-        .with_timezone(&Utc)
-        .timestamp_nanos_opt()
-}
-
-impl From<Attr> for AttributeValue {
-    fn from(a: Attr) -> Self {
-        match a {
-            Attr::Bool(v) => AttributeValue::Bool(v),
-            Attr::Int8(v) => AttributeValue::Int8(v),
-            Attr::Int16(v) => AttributeValue::Int16(v),
-            Attr::Int32(v) => AttributeValue::Int32(v),
-            Attr::Int64(v) => AttributeValue::Int64(v),
-            Attr::UInt8(v) => AttributeValue::UInt8(v),
-            Attr::UInt16(v) => AttributeValue::UInt16(v),
-            Attr::UInt32(v) => AttributeValue::UInt32(v),
-            Attr::UInt64(v) => AttributeValue::UInt64(v),
-            Attr::Float32(v) => AttributeValue::Float32(v),
-            Attr::Float64(v) => AttributeValue::Float64(v),
-            Attr::String(v) => AttributeValue::String(v),
-            Attr::Binary(v) => AttributeValue::Binary(v),
-            // No native timestamp case: encode as an RFC 3339 string.
-            Attr::TimestampNanoseconds(v) => AttributeValue::String(timestamp_ns_to_rfc3339(v)),
-            Attr::BoolList(v) => AttributeValue::BoolList(v),
-            Attr::Int8List(v) => AttributeValue::Int8List(v),
-            Attr::Int16List(v) => AttributeValue::Int16List(v),
-            Attr::Int32List(v) => AttributeValue::Int32List(v),
-            Attr::Int64List(v) => AttributeValue::Int64List(v),
-            Attr::UInt8List(v) => AttributeValue::UInt8List(v),
-            Attr::UInt16List(v) => AttributeValue::UInt16List(v),
-            Attr::UInt32List(v) => AttributeValue::UInt32List(v),
-            Attr::UInt64List(v) => AttributeValue::UInt64List(v),
-            Attr::Float32List(v) => AttributeValue::Float32List(v),
-            Attr::Float64List(v) => AttributeValue::Float64List(v),
-            Attr::StringList(v) => AttributeValue::StringList(v),
-            Attr::BinaryList(v) => AttributeValue::BinaryList(v),
-        }
-    }
-}
-
-impl From<AttributeValue> for Attr {
-    fn from(v: AttributeValue) -> Self {
-        match v {
-            AttributeValue::Bool(v) => Attr::Bool(v),
-            AttributeValue::Int8(v) => Attr::Int8(v),
-            AttributeValue::Int16(v) => Attr::Int16(v),
-            AttributeValue::Int32(v) => Attr::Int32(v),
-            AttributeValue::Int64(v) => Attr::Int64(v),
-            AttributeValue::UInt8(v) => Attr::UInt8(v),
-            AttributeValue::UInt16(v) => Attr::UInt16(v),
-            AttributeValue::UInt32(v) => Attr::UInt32(v),
-            AttributeValue::UInt64(v) => Attr::UInt64(v),
-            AttributeValue::Float32(v) => Attr::Float32(v),
-            AttributeValue::Float64(v) => Attr::Float64(v),
-            // A string that parses as RFC 3339 is restored to a timestamp,
-            // matching the historical untagged `atlas.json` behaviour.
-            AttributeValue::String(s) => match rfc3339_to_timestamp_ns(&s) {
-                Some(ns) => Attr::TimestampNanoseconds(ns),
-                None => Attr::String(s),
-            },
-            AttributeValue::Binary(v) => Attr::Binary(v),
-            AttributeValue::BoolList(v) => Attr::BoolList(v),
-            AttributeValue::Int8List(v) => Attr::Int8List(v),
-            AttributeValue::Int16List(v) => Attr::Int16List(v),
-            AttributeValue::Int32List(v) => Attr::Int32List(v),
-            AttributeValue::Int64List(v) => Attr::Int64List(v),
-            AttributeValue::UInt8List(v) => Attr::UInt8List(v),
-            AttributeValue::UInt16List(v) => Attr::UInt16List(v),
-            AttributeValue::UInt32List(v) => Attr::UInt32List(v),
-            AttributeValue::UInt64List(v) => Attr::UInt64List(v),
-            AttributeValue::Float32List(v) => Attr::Float32List(v),
-            AttributeValue::Float64List(v) => Attr::Float64List(v),
-            AttributeValue::StringList(v) => Attr::StringList(v),
-            AttributeValue::BinaryList(v) => Attr::BinaryList(v),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn attr_attributevalue_roundtrip() {
-        let cases = vec![
-            Attr::Bool(true),
-            Attr::Int8(-3),
-            Attr::Int64(-1_000_000),
-            Attr::UInt32(42),
-            Attr::Float32(2.5),
-            Attr::Float64(2.5),
-            Attr::String("hello".into()),
-            Attr::Binary(vec![0xde, 0xad]),
-            Attr::Int32List(vec![1, 2, 3]),
-            Attr::Float64List(vec![0.0, 1.5]),
-            Attr::StringList(vec!["a".into(), "b".into()]),
-        ];
-        for v in cases {
-            let av: AttributeValue = v.clone().into();
-            let back: Attr = av.into();
-            assert_eq!(v, back);
-        }
-    }
-
-    #[test]
-    fn timestamp_attr_roundtrips_through_rfc3339_string() {
-        let ts = Attr::TimestampNanoseconds(1_700_000_000_000_000_000);
-        let av: AttributeValue = ts.clone().into();
-        // Stored as an RFC 3339 string in the .af file.
-        assert_eq!(av, AttributeValue::String("2023-11-14T22:13:20Z".into()));
-        // A string that parses as RFC 3339 comes back as a timestamp...
-        let back: Attr = av.into();
-        assert_eq!(back, ts);
-        // ...while a non-timestamp string stays a string.
-        let plain: Attr = AttributeValue::String("not-a-date".into()).into();
-        assert_eq!(plain, Attr::String("not-a-date".into()));
+    fn scalars_and_lists_report_their_dtype() {
+        assert_eq!(Attr::Int32(1).dtype(), DType::Int32);
+        assert_eq!(Attr::TimestampNanoseconds(0).dtype(), DType::TimestampNs);
+        assert_eq!(
+            Attr::StringList(vec![]).dtype(),
+            DType::List {
+                child: Box::new(DType::String)
+            }
+        );
     }
 }

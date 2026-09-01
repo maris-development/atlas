@@ -1,0 +1,235 @@
+# The `atlas` command
+
+`pip install atlas-python` puts `atlas` on your PATH. Five subcommands, one per
+operation.
+
+```text
+atlas create <netcdf-dir> <collection>   build a collection
+atlas rm     <collection> <name>...      remove datasets
+atlas ls     <collection>                list datasets
+atlas show   <collection> <name>         one dataset, ncdump style
+atlas info   <collection>                the whole collection
+```
+
+A `<collection>` is a local path or a URL: `s3://bucket/prefix`, `gs://...`,
+`az://...`, or `https://...`. A remote source needs
+`pip install "atlas-python[cloud]"`. See
+[Cloud storage](guides/cloud-storage.md).
+
+Every subcommand takes `--json`, and the remote flags `--region`,
+`--endpoint`, and `--anonymous`.
+
+## create
+
+```bash
+atlas create /data/nc /data/collection
+```
+
+Each NetCDF file becomes one dataset, named after its stem. `2024-01.nc`
+becomes `2024-01`. The files land in sorted order, which makes the ordinals of
+a collection reproducible.
+
+Nothing at the destination is readable until every file lands, with the footer.
+A failure part-way leaves no collection, and not a partial one.
+
+| Flag | Effect |
+|---|---|
+| `-r`, `--recursive` | Descend into subdirectories |
+| `--codec {zstd,lz4,none}` | Block compression. Default `zstd` |
+| `--chunk-size SIZE` | Block size to aim for. Default `128MiB` |
+| `--open-chunks MODE` | How files are read: `auto`, `native`, `none`, or a JSON dict |
+| `--chunks JSON` | Override the stored chunk shape, `'{"temperature": [64, 64]}'` |
+| `--skip-errors` | Skip files that fail instead of abandoning the collection |
+| `-q`, `--quiet` | Do not list a file as it lands |
+
+Progress goes to stderr, so a pipe still reads stdout.
+
+### Large files
+
+Each file reads in dask blocks. A file far larger than memory therefore
+streams, and does not load whole. `--chunk-size` sets the block size. It is
+about the memory ceiling per variable:
+
+```bash
+# A machine with little RAM
+atlas create /data/nc /data/collection --chunk-size 32MiB
+```
+
+Those blocks also become the stored chunk shape. A reader later fetches at that
+size. `--open-chunks` picks another strategy:
+
+| Mode | Reads | Stored chunk shape |
+|---|---|---|
+| `auto` *(default)* | blocks sized to `--chunk-size` | those blocks |
+| `native` | the file's own chunk encoding | that encoding |
+| `none` | each variable whole | one full-shape chunk |
+| JSON dict | as given, per dimension | as given |
+
+```bash
+# Match the NetCDF file's own chunking exactly
+atlas create /data/nc /data/collection --open-chunks native
+
+# Per-dimension, explicitly
+atlas create /data/nc /data/collection --open-chunks '{"time": 100, "lat": -1}'
+```
+
+`--chunks` overrides the *stored* shape, and does not change how the file
+reads. Each misaligned block then costs a read-modify-write. Use
+`--open-chunks` when it can say what you want.
+
+```bash
+# One collection from a tree of monthly directories, tolerating bad files
+atlas create /data/nc /data/collection --recursive --skip-errors
+
+# A big grid, chunked for selective reads, straight to a bucket
+atlas create /data/nc s3://bucket/2024 --chunk-size 64MiB --region eu-west-1
+```
+
+## rm
+
+```bash
+atlas rm /data/collection 2024-02 2024-03
+```
+
+This removes several datasets in one call. A name is a dataset name, or the
+NetCDF path the dataset came from. The list that built a collection can
+therefore tear part of it down:
+
+```bash
+atlas rm /data/collection /data/nc/2024-02.nc
+```
+
+This writes the deletion mask beside the container. **The container does not
+change.** It reclaims no space, and moves no ordinal. Rebuild the collection to
+reclaim the bytes.
+
+One mask write covers every name in the call, so a long list costs what one
+name costs. A list too long for a command line belongs in `atlas.remove` from
+Python.
+
+`--missing-ok` reports a name that is absent or already removed, instead of an
+error.
+
+## ls
+
+```bash
+$ atlas ls /data/collection
+2024-01
+2024-02
+2024-03
+```
+
+One name per line, in write order. A removed dataset does not appear. This
+costs one range read of the container tail, whatever the size of the
+collection.
+
+```bash
+atlas ls s3://bucket/2024 | wc -l          # how many datasets
+atlas ls /data/collection --json | jq .    # as a JSON array
+```
+
+## show
+
+```bash
+$ atlas show /data/collection 2024-01
+dataset 2024-01 {
+dimensions:
+	lat = 4 ;
+	lon = 6 ;
+variables:
+	float64 lat(lat) ;  // coordinate
+		lat:_FillValue = nan ;
+		// stats: count=4  min=0.0  max=3.0
+	float32 temperature(lat, lon) ;
+		temperature:_FillValue = nan ;
+		temperature:units = "celsius" ;
+		// stats: count=24  min=1.0  max=24.0
+	string station(lat) ;
+		station:_FillValue = "" ;
+		// stats: count=4  min="a"  max="d"
+
+// global attributes:
+		:month = 1 ;
+		:source = "example" ;
+
+// ordinal 0, segment bytes 8..1691
+}
+```
+
+The shape follows `ncdump -h` on purpose, with two additions.
+
+**Statistics** under each variable. `count` is the total element count.
+`nulls` counts the elements equal to the fill value, and appears only above
+zero. `min` and `max` are the two bounds. The write computed these, and the
+footer holds them. To print them therefore needs no more I/O than `ls`.
+
+**Segment bytes** at the end. That is the byte range this dataset occupies in
+`data.atlas`. Those bytes are a complete `array-format` file. `dd` them out,
+and any `array-format` reader opens the result.
+
+`--json` prints the whole structure. Script against that form.
+
+## info
+
+```bash
+$ atlas info /data/collection
+collection /data/collection
+  format version    1
+  created           2026-08-31T08:32:57Z
+  codec             zstd
+  container size    5.4 KiB
+  datasets          2
+  removed           1 (of 3 written; space not reclaimed)
+  interned schemas  1
+  distinct arrays   4
+      lat          count=8  min=0.0  max=3.0
+      lon          count=12  min=0.0  max=5.0
+      station      count=8  min="a"  max="d"
+      temperature  count=48  min=1.0  max=26.0
+```
+
+`removed` appears only when the mask hides something, and says plainly that
+those bytes are still in the file.
+
+`interned schemas` is how many distinct schemas the datasets share between
+them. A fleet of a thousand identically-shaped datasets shows `1`.
+
+Each array line gives one set of statistics for the whole collection. The
+counts add up over every live dataset that holds the array. The minimum is the
+smallest of the minimums. The maximum is the largest of the maximums. A
+removed dataset counts for nothing. Use `atlas show` for one dataset.
+
+## Exit codes
+
+`0` on success, `1` on any error, with a one-line message on stderr:
+
+```bash
+$ atlas ls /tmp/not-a-collection
+atlas: not an atlas collection: no 'data.atlas' under this prefix
+$ echo $?
+1
+```
+
+`atlas create` also exits `1` when `--skip-errors` skipped something, so a
+pipeline notices, while still writing the collection.
+
+## Scripting
+
+`--json` on any read command, and the output is stable:
+
+```bash
+# Every dataset whose temperature maximum exceeds 30
+for name in $(atlas ls "$C" --json | jq -r '.[]'); do
+  atlas show "$C" "$name" --json \
+    | jq -r --arg n "$name" \
+        '.arrays[] | select(.name=="temperature" and .stats.max > 30) | $n'
+done
+
+# Total elements across the collection, in one call
+atlas info "$C" --json | jq '[.array_stats[].row_count] | add'
+
+# The temperature range over every live dataset
+atlas info "$C" --json | jq '.array_stats.temperature | {min, max}'
+```
+
+A string statistic comes back as text in JSON, and as `bytes` from the library.

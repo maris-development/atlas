@@ -1,87 +1,120 @@
-# Atlas
+# atlas
 
-Python bindings to **[`atlas-rust`](https://github.com/maris-development/atlas)** — the
-Rust core that powers ATLAS (Aggregated Tensor Large Array Store). Think of it as a *"zip"
-for N-dimensional data*: store thousands of NetCDF / Zarr-style datasets in one
-high-performance collection, then read any of them back as NumPy or
-[xarray](https://docs.xarray.dev).
+Thousands of NetCDF datasets in one immutable file. It sits on local disk or on
+object storage.
 
-```python
-import numpy as np
-import atlas
-
-with atlas.Atlas.create("/tmp/my_store", codec="zstd") as store:
-    ds = store.create_dataset("jan_2024")
-    ds.define_array(
-        "temperature",
-        dtype="float32",
-        dims=["lat", "lon"],
-        shape=[8, 16],
-        chunk_shape=[4, 8],
-    )
-    ds.write_array("temperature", start=[0, 0],
-                   data=np.full((8, 16), 20.0, dtype=np.float32))
-    ds.set_attribute("month", 1)
-# `with` exit == store.close() == single flush to disk
+```bash
+pip install atlas-python
+atlas create /data/nc /data/collection
 ```
 
-## What's here
+```text
+$ atlas ls /data/collection
+2024-01
+2024-02
+2024-03
+```
 
-- **Multi-dataset stores** — one `Atlas` directory holds many named
-  datasets, each with their own arrays and attributes.
-- **Shared physical arrays** — N datasets that all declare `temperature`
-  share one `temperature/data.af` file, so the 1000th dataset is just an
-  append.
-- **Compression** — zstd / lz4 / uncompressed array codecs and json /
-  msgpack metadata, optionally compressed.
-- **xarray + dask integration** — `atlas.add_xarray_dataset(ds, name)` to
-  ingest, `atlas.open_as_xarray_dataset(name)` to read back. Dask-backed variables
-  stream chunk-by-chunk on write and come back lazily on read.
-- **Bulk cross-dataset APIs** — `open_as_many_xarray_dataset` and
-  `read_array_across_stacked` collapse N per-dataset reads into one PyO3
-  call, sharing a single file handle.
-- **Cross-dataset pruning** — a columnar min/max/count index
-  (`store.pruning_index(...)` / `column_summaries()`) prunes "which of my
-  10 000 datasets could match this predicate?" to a handful of candidates
-  with a single vectorised scan, without opening any array file. See
-  [Stats and scans](guides/stats.md).
-- **Sync API, GIL-released** — a multi-threaded tokio runtime backs every
-  blocking call; the GIL is released so other Python threads can run.
-- **Local fs or cloud storage** — pass a path string for local, or an
-  [obstore](https://github.com/developmentseed/obstore) handle for S3 /
-  GCS / Azure / HTTP via `pip install "atlas-python[cloud]"`. The full
-  read / write / flush / compact / bulk-read API works identically against
-  either. See [Cloud storage](guides/cloud-storage.md).
+## The shape of it
 
-## How does this compare to Zarr / netCDF?
+A collection is **one write-once file**. Every dataset occupies one contiguous
+byte range. A footer at the end records where each one lives, with its schema,
+its attributes, and its statistics.
 
-netCDF and Zarr both put one logical "dataset" in one file (or one chunk
-directory); a fleet of N similar datasets becomes N stores. Atlas inverts
-that layout — **one** store, **N** datasets, with arrays of the same name
-sharing a physical file across all of them. This is the design choice that
-makes atlas dramatically faster on "many small datasets, same schema"
-workloads and on cross-dataset slice reads.
+```text
+my_collection/
+├── data.atlas      ATLS │ segment │ segment │ … │ footer │ trailer
+└── deleted.mask    optional
+```
 
-See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the head-to-head, and
-[Benchmarks](benchmarks.md) for the numbers.
+That buys one thing above all. **Metadata is one read.** An open fetches the
+footer and nothing else. To list the datasets, to inspect a schema, and to read
+the statistics are then free. Three datasets and a million cost the same, on a
+local disk and across an ocean.
 
-## Next steps
+It costs one thing. A collection **cannot change after a write**. There is no
+append, and no in-place update. To change a dataset, rebuild the collection. A
+remove is the one exception. It writes a small mask file, and leaves the
+container alone.
 
-- [**Installation**](installation.md) — install the wheel, or build from source.
-- [**Quickstart**](quickstart.md) — first store in five minutes.
-- [**Guides**](guides/datasets-and-arrays.md) — the mental model, dtypes,
-  attributes, xarray, dask, bulk reads, stats.
-- [**API reference**](reference/atlas.md) — auto-generated from the
-  source-level docstrings.
+## Five operations
+
+| Library | Command | Does |
+|---|---|---|
+| `atlas.create` | `atlas create` | Build a collection from a directory of NetCDF files |
+| `atlas.remove` | `atlas rm` | Remove datasets, in one call |
+| `atlas.list_datasets` | `atlas ls` | What the collection holds |
+| `atlas.describe` | `atlas show` | One dataset in detail, `ncdump` style |
+| `atlas.info` | `atlas info` | The collection as a whole |
+
+Every one takes a local path or a URL: `s3://`, `gs://`, `az://`, or
+`https://`. The same call therefore works against a bucket.
+
+```python
+import atlas
+
+atlas.create("/data/nc", "s3://bucket/2024", region="eu-west-1")
+atlas.list_datasets("s3://bucket/2024", region="eu-west-1")
+```
+
+## What `show` gives you
+
+```text
+$ atlas show /data/collection 2024-01
+dataset 2024-01 {
+dimensions:
+	lat = 4 ;
+	lon = 6 ;
+variables:
+	float32 temperature(lat, lon) ;
+		temperature:units = "celsius" ;
+		// stats: count=24  min=1.0  max=24.0
+	string station(lat) ;
+		// stats: count=4  min="a"  max="d"
+
+// global attributes:
+		:month = 1 ;
+}
+```
+
+Types, shapes, chunking, fill values, attributes, and the statistics of the
+write. Those statistics are the minimum, the maximum, and how many elements are
+missing. It all comes from the footer, so it needs no more I/O than `ls`.
+
+## Python writes. Rust reads data
+
+The Rust API reads array *values*. Python does not. Python gives the structure.
+Which datasets exist, what arrays they hold, and everything on record about
+them.
+
+That split is deliberate. Python builds collections from NetCDF, and serves a
+catalogue of what they hold. Array bytes through the GIL were never the fast
+path. See [Reading data](guides/reading-data.md).
+
+## Compared to Zarr and netCDF
+
+netCDF and Zarr put one dataset in one file or one chunk directory. N similar
+datasets therefore become N stores. That is N sets of metadata to open, and N
+objects to list. Atlas puts all N in one file, behind one footer. Many small
+datasets of one schema are therefore cheap to catalogue.
+
+Atlas suits you poorly in three cases. You must change data. You have one large
+array instead of many small datasets. Or you need the values back in Python.
+See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the full account.
+
+## Next
+
+- [**Installation**](installation.md)
+- [**Quickstart**](quickstart.md). A collection in five minutes
+- [**The `atlas` command**](cli.md). Every subcommand and flag
+- [**Guides**](guides/creating.md). Creating, inspecting, removing, cloud storage
+- [**API reference**](reference/api.md)
 
 ## Status
 
-- Local filesystem **and** any [`object_store`](https://docs.rs/object_store)
-  backend (S3 / GCS / Azure / HTTP / local) via the optional
-  [obstore](https://github.com/developmentseed/obstore) dependency.
-  `pip install "atlas-python[cloud]"` enables it; see
-  [Cloud storage (S3, GCS, Azure)](guides/cloud-storage.md).
-- Lazy dask reads use the threaded scheduler only; `.compute()` before
-  crossing into distributed/multiprocessing schedulers.
-- `bool`, `binary`, `list[...]`, `fixed_size_list[...,N]` are reserved for
-  a later release as array element types.
+- The local filesystem, and any [`object_store`](https://docs.rs/object_store)
+  backend: S3, GCS, Azure, or HTTP. Those need the optional obstore package.
+- NetCDF is the one ingest route from Python.
+- Rust alone reads array data.
+- `bool`, `binary`, and the list types work as an attribute value. No one of
+  them works yet as an array element type.

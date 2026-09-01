@@ -1,96 +1,113 @@
 # Supported dtypes
 
-## Array dtypes
+What a NetCDF variable becomes when `atlas create` ingests it.
 
-Pass these as the `dtype=` argument to
-[`DatasetView.define_array`](../reference/dataset-view.md). The numpy type
-on the right is what `write_array` / `read_array` expect and return.
+## The mapping
 
-| atlas dtype | numpy dtype | Range / notes |
+| numpy | atlas | notes |
 |---|---|---|
-| `"int8"`   | `np.int8`   | −128 … 127 |
-| `"int16"`  | `np.int16`  | −32 768 … 32 767 |
-| `"int32"`  | `np.int32`  | ±2 147 483 647 |
-| `"int64"`  | `np.int64`  | ±9.2e18 |
-| `"uint8"`  | `np.uint8`  | 0 … 255 |
-| `"uint16"` | `np.uint16` | 0 … 65 535 |
-| `"uint32"` | `np.uint32` | 0 … 4.3e9 |
-| `"uint64"` | `np.uint64` | 0 … 1.8e19 |
-| `"float32"` | `np.float32` | IEEE-754 single |
-| `"float64"` | `np.float64` | IEEE-754 double |
-| `"timestamp_nanoseconds"` (aliases: `"timestamp_ns"`, `"datetime64[ns]"`) | `np.datetime64[ns]` | int64 ns since the Unix epoch; round-trips bit-identically |
-| `"string"` | `object` (Python `str`) | Variable-length UTF-8. `\|S<n>` / `\|U<n>` inputs are accepted and stored vlen. |
+| `int8` … `int64` | `int8` … `int64` | straight through |
+| `uint8` … `uint64` | `uint8` … `uint64` | straight through |
+| `float32`, `float64` | `float32`, `float64` | IEEE-754 |
+| `datetime64[ns]` | `timestamp_nanoseconds` | int64 ns from the epoch, bit for bit |
+| `timedelta64[*]` | `int64` | converted to ns, with a unit marker |
+| `object` / `S<n>` / `U<n>` | `string` | variable-length UTF-8 |
+| anything else | none | `NotImplementedError` |
 
-## Rules `write_array` enforces
+`atlas show` prints the atlas name, so a `datetime64[ns]` variable appears as
+`timestamp_nanoseconds`.
 
-- **Exact dtype match.** No silent widening. `int32` data into an `int64`
-  array raises `TypeError`. Promote explicitly with `data.astype(np.int64)`.
-- **C-contiguous buffer.** Pass `np.ascontiguousarray(data)` if the array
-  came from a slice or a transpose.
-- **`start + data.shape ≤ array.shape`** per axis. Out-of-bounds writes
-  raise.
-- **Strings.** `object` arrays of Python `str` (or `bytes`) are accepted.
-  Fixed-size `\|S5` / `\|U10` arrays are converted to vlen UTF-8 on write
-  and come back as Python `str`. Surrogate-escaped strings (common from
-  netCDF backends) are sanitised on the way in.
-- **`datetime64`.** Only the `[ns]` resolution is supported. Other
-  resolutions raise — convert with `data.astype("datetime64[ns]")` first.
+### datetime and timedelta
+
+Atlas supports the `[ns]` resolution of `datetime64` alone. It rejects every
+other resolution. Convert with `.astype("datetime64[ns]")` before you write the
+NetCDF file.
+
+Atlas has no duration type. A `timedelta64` therefore stores as int64
+nanoseconds, with a `_pyatlas_timedelta` marker attribute that records the
+unit. That marker is enough to rebuild the duration. It appears as a plain
+attribute.
+
+### Strings
+
+An `object` array of Python `str` or `bytes` becomes a variable-length UTF-8
+string. So does a fixed-size `|S5` or `|U10` array. A surrogate-escaped string
+is common from a netCDF backend that decoded bytes with
+`errors="surrogateescape"`. Atlas cleans one on the way in.
+
+Atlas cannot store a **null** string. Each missing cell, `None` or `NaN`, takes
+the fill value instead. A `UserWarning` names the count.
 
 ## Fill values
 
-`fill_value=` on `define_array` must match the array dtype:
+A fill value is what a read returns for a cell nobody wrote. Such a cell costs
+no byte on disk. `null_count` in the [statistics](inspecting.md#statistics)
+counts them.
+
+xarray defaults to `mask_and_scale=True`. A read of a NetCDF file then leaves
+`NaN` and `NaT` where data is missing, and moves `_FillValue` into
+`var.encoding`. Atlas records those cells as never written, and gives each
+array a default sentinel:
+
+| dtype | default fill |
+|---|---|
+| `float32`, `float64` | `NaN` |
+| `timestamp_nanoseconds` | `NaT` (`i64::MIN`) |
+| `string` | `""` |
+| integers | none |
+
+The `_FillValue` attribute of a variable beats the default. It stores as the
+fill of the array, and not as an attribute.
+
+Check what landed:
 
 ```python
-ds.define_array("temp", dtype="float32", ..., fill_value=float("nan"))
-ds.define_array("count", dtype="int32", ..., fill_value=-1)
-ds.define_array("label", dtype="string", ..., fill_value="UNKNOWN")
+arrays = {a["name"]: a for a in atlas.describe(collection, "2024-01")["arrays"]}
+arrays["temperature"]["fill_value"]
 ```
 
-- Integer / `timestamp_*` arrays: Python `int`, range-checked at the call
-  site. Out-of-range raises `OverflowError`; wrong type raises `TypeError`.
-- Float arrays: Python `float` (or `int`, which is coerced). `float("nan")`
-  is allowed.
-- String arrays: Python `str`.
+## 0-D scalars
 
-Reading an **unwritten** cell returns the fill value. Any **written** cell
-equal to the fill value is counted as a null in
-[`array_stats`](stats.md) — this is how the null count works for
-`NaN`-filled float arrays.
+Every dtype works at `shape=[]`. A NetCDF product uses one for a value such as
+a `TRAJECTORY` identifier. Those are single values, and they belong to the
+array data, not to the attributes. They come through unchanged:
 
-When ingesting via [`add_xarray_dataset`](xarray.md#fill-values-and-missing-data)
-you don't pass these by hand — float arrays default to a `NaN` fill, datetimes
-to `NaT`, and strings to `""`, so cells masked by `mask_and_scale=True` are
-recorded as null automatically.
-
-## 0-D scalar arrays
-
-Every dtype above also works at `shape=[]` (and `chunk_shape=[]`,
-implicitly). The numpy round-trip is a 0-D ndarray:
-
-```python
-ds.define_array("scale", dtype="float64", dims=[], shape=[])
-ds.write_array("scale", start=[], data=np.array(3.14, dtype=np.float64))
-
-scalar = ds.read_array("scale")     # -> np.ndarray, shape=(), dtype=float64
+```text
+	string TRAJECTORY() ;
+		// stats: count=1  min="6801adf"  max="6801adf"
 ```
 
-0-D arrays are useful for things like NetCDF `TRAJECTORY` identifiers or
-single-value metadata that's logically *array data*, not an attribute.
-
-## Reserved for a later release
+## Not yet available as array types
 
 | Type | Status |
 |---|---|
-| `bool` arrays | **Attribute-only** this release (limitation of the underlying `array-format` crate). |
-| `binary` (variable-length bytes) | Reserved; not exposed yet. |
-| `list[...]` (variable-length list of T) | Reserved; not exposed yet. |
-| `fixed_size_list[..., N]` | Reserved; not exposed yet. |
+| `bool` | The `array-format` crate below supports no `bool` element type |
+| `binary` | Not exposed yet |
+| `list[...]`, `fixed_size_list[..., N]` | Not exposed yet |
 
-If you need a packed bool array today, use `uint8` and document the
-convention.
+A NetCDF file with a boolean variable fails the ingest. Store it as `uint8`,
+and write the convention down.
 
-## Compatibility with numpy operations
+All four work as an **attribute** value, which is where they usually appear.
 
-The numpy arrays that come back from `read_array` are owned buffers, not
-views into the atlas-managed memory. You can mutate / reshape / `astype`
-them freely; the next `read_array` call returns a fresh buffer.
+## Attribute types
+
+An attribute takes its type apart from an array, and the range is wider. Any
+scalar works: `bool`, the integer widths, a float, a string, bytes, and a
+nanosecond timestamp. A list of one of those works too.
+
+Some xarray attributes are no scalar. A nested dict, a ragged list, and a numpy
+array each encode as JSON on the way in. `describe` decodes them again:
+
+```python
+atlas.describe(collection, "2024-01")["attributes"]
+# {'month': 1, 'bounds': [1.0, 2.0], 'nested': {'a': 1}}
+```
+
+A value JSON cannot serialize fails the ingest.
+
+## Reading values
+
+Rust reads array data. The table above names the type to ask for. `"float32"`
+is `f32`. `"timestamp_nanoseconds"` is `TimestampNs`. `"string"` is `String`.
+See [Reading data](reading-data.md).

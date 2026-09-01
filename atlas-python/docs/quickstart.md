@@ -1,64 +1,154 @@
 # Quickstart
 
-This page builds the smallest useful atlas store: one dataset with one
-2-D array and a couple of attributes, then closes the store and reopens it
-to confirm everything persisted.
+A directory of NetCDF files in, one collection out, then a look at what landed.
 
-## Create, write, flush
+## Build
+
+```bash
+atlas create /data/nc /data/collection
+```
+
+```text
+Writing /data/collection
+  2024-01
+  2024-02
+  2024-03
+3 dataset(s) written to /data/collection
+```
+
+Each file becomes one dataset, named after its stem. The result is one file:
+
+```bash
+$ ls /data/collection
+data.atlas
+```
+
+Nothing there was readable until the last file landed. A failure part-way
+leaves no collection, and not a partial one.
+
+From Python:
 
 ```python
-import numpy as np
 import atlas
 
-with atlas.Atlas.create("/tmp/my_store", codec="zstd") as store:   # (1)
-    ds = store.create_dataset("jan_2024")                            # (2)
-    ds.define_array(
-        "temperature",
-        dtype="float32",
-        dims=["lat", "lon"],
-        shape=[8, 16],
-        chunk_shape=[4, 8],
-        fill_value=float("nan"),                                     # (3)
-    )
-    ds.write_array(
-        "temperature",
-        start=[0, 0],
-        data=np.full((8, 16), 20.0, dtype=np.float32),
-    )
-    ds.set_attribute("month", 1)
-    ds.set_attribute("station", "KNMI")
-# (4) `with` exit calls store.close() == flush().
+atlas.create("/data/nc", "/data/collection")
 ```
 
-1. **`Atlas.create(path, codec=...)`** — codec is one of `"zstd"`,
-   `"lz4"`, `"none"`. See [Codecs and metadata](guides/codecs-and-meta.md).
-2. **`create_dataset(name)`** returns a [`DatasetView`](reference/dataset-view.md);
-   `define_array` declares a typed N-D array within it.
-3. **`fill_value`** is the scalar returned for unwritten cells. Any *written*
-   cell equal to the fill value is counted as a null in [`array_stats`](guides/stats.md).
-4. **No I/O until `flush`** — `define_array` and `write_array` only mutate
-   in-memory state. The `with` exit (or an explicit `store.flush()` /
-   `store.close()`) is the **single durability boundary**.
-   See [Durability and flushing](guides/durability.md).
+## Look
 
-## Reopen and read back
+```bash
+$ atlas ls /data/collection
+2024-01
+2024-02
+2024-03
+```
+
+```bash
+$ atlas info /data/collection
+collection /data/collection
+  format version    1
+  created           2026-08-31T08:32:57Z
+  codec             zstd
+  container size    5.4 KiB
+  datasets          3
+  interned schemas  1
+  distinct arrays   4
+      lat          count=12  min=0.0  max=3.0
+      lon          count=18  min=0.0  max=5.0
+      station      count=12  min="a"  max="d"
+      temperature  count=72  min=1.0  max=26.0
+```
+
+Both come from one range read of the container tail. Three datasets and a
+million cost the same.
+
+`interned schemas 1` means all three months declare the same arrays, so that
+schema is stored once.
+
+The statistics cover the whole collection. Each month holds 24 temperature
+elements, so the three months together hold 72. The minimum comes from January.
+The maximum comes from March. Removed datasets do not count.
+
+## Inspect one dataset
+
+```bash
+$ atlas show /data/collection 2024-01
+dataset 2024-01 {
+dimensions:
+	lat = 4 ;
+	lon = 6 ;
+variables:
+	float64 lat(lat) ;  // coordinate
+		lat:_FillValue = nan ;
+		// stats: count=4  min=0.0  max=3.0
+	float32 temperature(lat, lon) ;
+		temperature:_FillValue = nan ;
+		temperature:units = "celsius" ;
+		// stats: count=24  min=1.0  max=24.0
+	string station(lat) ;
+		station:_FillValue = "" ;
+		// stats: count=4  min="a"  max="d"
+
+// global attributes:
+		:month = 1 ;
+		:source = "example" ;
+
+// ordinal 0, segment bytes 8..1691
+}
+```
+
+The shape follows `ncdump -h`. It adds the statistics of each array write. The
+footer holds those too, so to print them costs nothing extra.
+
+From Python, the same thing as a structure:
 
 ```python
-atlas2 = atlas.Atlas.open("/tmp/my_store")                # auto-detects codec / meta format
-ds2 = atlas2.open_dataset("jan_2024")
-
-arr = ds2.read_array("temperature")                         # full read -> np.ndarray
-chunk = ds2.read_array("temperature", [0, 0], [4, 8])       # partial read
-
-stats = ds2.array_stats("temperature")                      # {row_count, null_count, min, max}
-attrs = ds2.attributes()                                    # {"month": 1, "station": "KNMI"}
+detail = atlas.describe("/data/collection", "2024-01")
+detail["dimensions"]                                    # {'lat': 4, 'lon': 6}
+detail["coordinates"]                                   # ['lat', 'lon']
+{a["name"]: a["stats"] for a in detail["arrays"]}
 ```
 
-## Next steps
+## Remove
 
-- [**Datasets and arrays**](guides/datasets-and-arrays.md) — the mental model
-  and the full `define_array` / `write_array` / `read_array` surface.
-- [**xarray integration**](guides/xarray.md) — round-trip whole `xr.Dataset`s
-  with one call.
-- [**Bulk reads**](guides/bulk-reads.md) — when you need the same slice from
-  many datasets at once.
+```bash
+$ atlas rm /data/collection 2024-02
+removed 1: 2024-02
+2 dataset(s) remain
+```
+
+That writes a small `deleted.mask` beside the container. The container does not
+change, so this reclaims nothing and moves no ordinal. Rebuild the collection
+to get the space back.
+
+## Against a bucket
+
+Every command takes a URL in place of a path:
+
+```bash
+atlas create /data/nc s3://my-bucket/collections/2024 --region eu-west-1
+atlas ls s3://my-bucket/collections/2024 --region eu-west-1
+```
+
+This needs `pip install "atlas-python[cloud]"`. See
+[Cloud storage](guides/cloud-storage.md).
+
+## Reading the data
+
+Not from Python. The Rust API reads array values:
+
+```rust
+let atlas = Atlas::open_path("/data/collection").await?;
+let ds = atlas.dataset("2024-01")?;
+let window = ds.read_array::<f32>("temperature", vec![0, 0], vec![2, 3]).await?;
+```
+
+See [Reading data](guides/reading-data.md) for the reason, and for what to do
+when you need values in Python.
+
+## Next
+
+- [**The `atlas` command**](cli.md). Every flag
+- [**Creating a collection**](guides/creating.md). Chunking, errors, memory
+- [**Inspecting a collection**](guides/inspecting.md). What the metadata holds
+- [**Removing datasets**](guides/removing.md). The mask, and what it costs

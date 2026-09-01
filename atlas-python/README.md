@@ -1,298 +1,140 @@
 # atlas-python
 
-Python bindings for **ATLAS** (Aggregated Tensor Large Array Store) — a directory-based store
-for many similarly-shaped N-dimensional arrays, backed by local files or any object store
-(S3 / GCS / Azure / HTTP). Built on a Rust core with a synchronous, NumPy-native API and
-first-class [xarray](https://docs.xarray.dev) integration.
+Thousands of NetCDF datasets in one immutable file. It sits on local disk or on
+object storage: S3, GCS, Azure, or HTTP. A Rust core, five operations, and one
+command.
 
 ```bash
 pip install atlas-python
 ```
 
-```python
-import atlas
+```bash
+atlas create /data/nc /data/collection
+atlas ls     /data/collection
+atlas show   /data/collection 2024-01
+atlas info   /data/collection
+atlas rm     /data/collection 2024-02 2024-03
 ```
 
 | Extra | Install | Adds |
-| --- | --- | --- |
-| cloud | `pip install "atlas-python[cloud]"` | S3 / GCS / Azure / HTTP backends via [obstore](https://github.com/developmentseed/obstore) |
+|---|---|---|
+| cloud | `pip install "atlas-python[cloud]"` | S3 / GCS / Azure / HTTP via [obstore](https://github.com/developmentseed/obstore) |
 
-`numpy`, `xarray`, and `dask` are installed automatically.
+`numpy`, `xarray`, and `dask` install automatically.
 
-## Quick start
+## Five operations
+
+The same five as a library:
 
 ```python
-import numpy as np
 import atlas
 
-# The `with` block flushes (== close) on exit. Nothing is persisted before that.
-with atlas.Atlas.create("/tmp/my_store", codec="zstd") as store:   # "zstd" | "lz4" | "none"
-    ds = store.create_dataset("jan_2024")
-    ds.define_array(
-        "temperature",
-        dtype="float32",
-        dims=["lat", "lon"],
-        shape=[8, 16],
-        chunk_shape=[4, 8],
-        fill_value=float("nan"),   # unwritten cells read back as NaN; NaN cells count as nulls in stats
-    )
-    ds.write_array("temperature", start=[0, 0], data=np.full((8, 16), 20.0, dtype=np.float32))
-    ds.set_attribute("month", 1)
-    ds.set_attribute("station", "KNMI")
-
-# Reopen and read
-store = atlas.Atlas.open("/tmp/my_store")
-ds = store.open_dataset("jan_2024")
-arr = ds.read_array("temperature")                    # full read -> np.ndarray
-chunk = ds.read_array("temperature", [0, 0], [4, 8])  # partial read
-stats = ds.array_stats("temperature")                 # {"row_count", "null_count", "min", "max"}
-month = ds.get_attribute("month")                     # 1
+atlas.create("/data/nc", "/data/collection")   # from a directory of NetCDF files
+atlas.list_datasets("/data/collection")        # ['2024-01', '2024-02', '2024-03']
+atlas.describe("/data/collection", "2024-01")  # types, shapes, attrs, statistics
+atlas.info("/data/collection")                 # counts, size, codec, statistics
+atlas.remove("/data/collection", ["2024-02"])  # updates the mask
 ```
 
-## Durability model
+Every one takes a local path, a URL, or an obstore handle:
 
-This is the one concept to internalise: **writes are buffered in memory and only hit disk on
-`flush()`.**
-
-The store's metadata is loaded once on `open`/`create`. Every subsequent mutation — creating
-datasets, defining arrays, `write_array`, `set_attribute` — updates in-memory state only.
-**Nothing reaches disk until `store.flush()` (equivalently `store.close()`, or the `with store:`
-block exiting).** Dropping an `Atlas` without flushing abandons every pending write.
-
-The payoff: N consecutive writes amortise to a single flush — one delta file per touched array
-name and one metadata rewrite, no matter how many datasets you touched.
+```bash
+atlas ls s3://my-bucket/collections/2024 --region eu-west-1
+```
 
 ```python
-store = atlas.Atlas.create("/tmp/my_store")
-# ... many create_dataset / write_array calls ...
-store.flush()   # the single durability boundary
+atlas.list_datasets("s3://my-bucket/collections/2024", region="eu-west-1")
 ```
 
-## xarray integration
+## Two things to internalise
 
-Importing `atlas` registers an accessor at `xr.Dataset.atlas`, so the integration is always
-available. The store must exist first; you then append xarray datasets to it.
+**One write builds a collection.** There is no append, no in-place update, and
+no `flush`. The file has a valid trailer, or it is no collection. To change a
+dataset, rebuild the collection. `remove` is the one exception. It writes a
+small mask file, and never touches the container. It therefore reclaims no
+space, and moves no ordinal.
 
-```python
-import numpy as np, xarray as xr, atlas
+**Python writes. Rust reads array data.** From Python you build a collection
+and read its *metadata*. That is the dataset names, the array types, the
+shapes, the chunk shapes, the fill values, the attributes, and the statistics
+of the write. There is no `read_array`. Array values come from the Rust API.
 
-ds = xr.Dataset(
-    data_vars={
-        "temperature": (["lat", "lon"], np.arange(8 * 16, dtype=np.float32).reshape(8, 16),
-                        {"units": "C", "long_name": "surface temperature"}),
-    },
-    coords={"lat": np.arange(8, dtype=np.float32), "lon": np.arange(16, dtype=np.float32)},
-    attrs={"month": 1, "station": "KNMI"},
-)
+That split makes the read side free. The footer an open already fetched answers
+every metadata call. A catalogue of a thousand datasets is therefore one
+request.
 
-with atlas.Atlas.create("/tmp/my_store") as store:
-    store.add_xarray_dataset(ds, "jan_2024")     # store-side method
-    ds.atlas.write(store, "jan_2025")        # xarray accessor (same effect)
+## What `show` gives you
 
-# Read back as an xr.Dataset
-store = atlas.Atlas.open("/tmp/my_store")
-ds_back = store.open_as_xarray_dataset("jan_2024")
-xr.testing.assert_identical(ds, ds_back)
+```text
+$ atlas show /data/collection 2024-01
+dataset 2024-01 {
+dimensions:
+	lat = 4 ;
+	lon = 6 ;
+variables:
+	float32 temperature(lat, lon) ;
+		temperature:_FillValue = nan ;
+		temperature:units = "celsius" ;
+		// stats: count=24  min=1.0  max=24.0
+	string station(lat) ;
+		// stats: count=4  min="a"  max="d"
+
+// global attributes:
+		:month = 1 ;
+
+// ordinal 0, segment bytes 8..1691
+}
 ```
 
-### Bulk ingestion
+The shape follows `ncdump -h`. It adds the statistics of the write: the
+minimum, the maximum, and how many elements are missing. `--json` on any read
+command gives the same content as a structure.
 
-`add_xarray_dataset` never flushes by itself — N consecutive calls accumulate in memory and a single
-`flush()` (or the `with` exit) persists everything.
+## Ingest
 
-```python
-import glob, os, atlas, xarray as xr
+`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf`. It sorts
+them, and writes one dataset per file, named after the stem. Each coordinate
+and data variable becomes an array. Each variable attribute becomes a per-array
+attribute. `_FillValue` becomes the fill of the array.
 
-with atlas.Atlas.create("/tmp/store") as store:
-    for nc_path in sorted(glob.glob("*.nc")):
-        name = os.path.splitext(os.path.basename(nc_path))[0]
-        store.add_xarray_dataset(xr.open_dataset(nc_path), name)
-# One delta file per array name across the whole batch (not one per file).
-```
+Each file opens with dask chunking. A file far larger than memory therefore
+streams block by block. `--chunk-size` sets the block budget, and defaults to
+128 MiB. It is about the memory ceiling per variable. Those blocks also become
+the stored chunk shape.
 
-### Streaming dask-backed writes
+Nothing at the destination is readable until every file lands. A failure
+part-way leaves no collection, and not a partial one. `on_error="skip"`, or
+`--skip-errors`, trades that for progress.
 
-If a variable's `.data` is a `dask.array.Array` (e.g. from `xr.open_dataset(path, chunks=...)`
-or `ds.chunk({...})`), `add_xarray_dataset` / `ds.atlas.write` stream **one dask block at a time**
-into the store rather than materialising the whole array. The dask chunk shape becomes the
-on-disk `chunk_shape`, so the layout maps 1:1. Peak memory ≈ one chunk per variable.
+## dtypes
 
-```python
-ds = xr.open_dataset("big.nc", chunks={"time": 100, "lat": -1, "lon": -1})
-with atlas.Atlas.create("/tmp/store") as store:
-    store.add_xarray_dataset(ds, "big")     # streams chunk-by-chunk
-```
+| numpy | atlas |
+|---|---|
+| int / uint widths, `float32`, `float64` | the same |
+| `datetime64[ns]` | `timestamp_nanoseconds` |
+| `timedelta64[*]` | `int64` nanoseconds, plus a unit marker |
+| `object` / `S` / `U` | `string` |
 
-Pass `chunks={var: [...]}` to `add_xarray_dataset` / `ds.atlas.write` to override the on-disk chunk
-shape independently of dask's chunking.
+`bool`, `binary`, and the list types work as an *attribute* value. No one of
+them works yet as an array element type.
 
-### Lazy dask-backed reads
+## Documentation
 
-`store.open_as_xarray_dataset(name)` returns each variable dask-backed whenever it was stored with non-trivial
-chunking (`chunk_shape != shape`); the dask `chunks` tuple mirrors the on-disk chunk grid and each
-on-disk chunk is one dask task. Full-shape arrays (and 0-D scalars) come back eager as numpy. Call
-`.compute()` to materialise, or slice / `map_blocks` to operate lazily.
+The full docs sit at **<https://maris-development.github.io/atlas/>**. They
+hold the [command reference], and guides for [creating], [inspecting],
+[removing], [dtypes], [reading data], and [cloud storage].
 
-```python
-ds_back = atlas.Atlas.open("/tmp/store").open_as_xarray_dataset("big")
-ds_back["temperature"].data              # -> dask.array.Array
-ds_back["temperature"][0:100].compute()  # reads exactly one chunk
-```
+The format itself is documented in
+[`docs/`](https://github.com/maris-development/atlas/tree/main/docs).
 
-Reads run under dask's **threaded** scheduler only — the `DatasetView` captured in the graph isn't
-picklable, so call `.compute()` before handing off to distributed/multiprocessing schedulers.
+[command reference]: https://maris-development.github.io/atlas/cli/
+[creating]: https://maris-development.github.io/atlas/guides/creating/
+[inspecting]: https://maris-development.github.io/atlas/guides/inspecting/
+[removing]: https://maris-development.github.io/atlas/guides/removing/
+[dtypes]: https://maris-development.github.io/atlas/guides/dtypes/
+[reading data]: https://maris-development.github.io/atlas/guides/reading-data/
+[cloud storage]: https://maris-development.github.io/atlas/guides/cloud-storage/
 
-### How xarray maps onto the store
+## License
 
-| Item | How it's stored |
-| --- | --- |
-| Each coord / data variable | A separate array, with `dims` mapped 1:1. |
-| Dataset attrs | Dataset-level (global) attributes, plain keys. |
-| Per-variable attrs | Real per-variable attributes on each variable's array. |
-| Per-variable `_FillValue` | Consumed by `define_array` as a typed fill value (source `Dataset.attrs` is not mutated). See [Missing data](#missing-data). |
-| Coord vs data_var distinction | JSON list in the internal `_pyatlas_coords` attr. |
-| Non-scalar attr values (list, ndarray) | JSON-encoded string with a `json:` prefix marker. |
-
-Each `add_xarray_dataset` / `ds.atlas.write` creates a *new* dataset — there is no append-into-existing
-mode.
-
-### Missing data
-
-When a dataset is opened with `mask_and_scale=True` (xarray's default), masked cells become `NaN`
-(floats) / `NaT` (datetimes) and `_FillValue` is moved into `var.encoding`. So those cells are
-recorded as **null** (counted in `null_count`, excluded from min/max stats), arrays default to a
-sentinel fill on write: `NaN` for floats, `NaT` for `datetime64[ns]`, and `""` for strings (integers
-have none). Missing string cells (`None`/`NaN`) are substituted with the string fill and a warning is
-emitted, since a string can't be stored as null directly.
-
-Override per write with `fill_value` — a bare scalar (numeric arrays) or a `{var: scalar}` dict
-(`None` disables the default for that var); an explicit CF `_FillValue` attribute still takes
-precedence over the default:
-
-```python
-store.add_xarray_dataset(ds, "jan_2024", fill_value={"temperature": -9999.0})
-```
-
-See the [xarray guide](https://github.com/maris-development/atlas/blob/main/atlas-python/docs/guides/xarray.md#fill-values-and-missing-data)
-for the full resolution order.
-
-## Supported dtypes
-
-| numpy dtype | atlas dtype |
-| --- | --- |
-| `int8/16/32/64`, `uint8/16/32/64`, `float32/64` | matching numeric |
-| `datetime64[ns]` | `timestamp_nanoseconds` (aliases: `timestamp_ns`, `datetime64[ns]`) |
-| `object` (`str`/`bytes`), `\|S<n>`, `\|U<n>` | `string` (variable-length; reads return Python `str`) |
-
-- 0-D scalar arrays (`shape=[]`) are supported for every dtype above.
-- `bool` is available as an *attribute* type but not as an array dtype.
-- `binary`, `list[...]`, `fixed_size_list[...,N]` are reserved for a later release.
-
-## Cross-dataset pruning
-
-`ds.array_stats(name)` answers "what's the range of `temperature` in *this* dataset?" one at a
-time. To ask "which of my 10 000 datasets could contain a value above 25?" as a single
-vectorised scan, use the **pruning index** — a flattened, columnar view of the per-dataset
-statistics, one row per dataset:
-
-```python
-import numpy as np
-
-store = atlas.Atlas.open("/tmp/my_store")
-
-# Footer only — every column's collection-wide min/max, no column data fetched.
-summ = store.column_summaries()
-if summ["temperature"]["max"] < 25.0:
-    ...  # nothing can match — skip the column entirely
-
-# Fetch just the columns you need; each is a dict of numpy arrays over the row space.
-idx = store.pruning_index(arrays=["temperature"])
-col = idx["columns"]["temperature"]
-
-ok   = col["present"] & col["stats_valid"] & idx["live"]   # exclude gaps + deleted rows
-hits = np.where(ok & (col["max"] > 25.0))[0]
-candidates = [idx["datasets"][i] for i in hits]            # row -> dataset name
-```
-
-The return value is self-describing: `idx["datasets"][i]` names row `i`, `idx["live"]` is the
-delete mask (always `&` it in), and datasets that don't declare a column are explicit gaps
-(`present` is `False`, with `row_count` 0). Only the columns you ask for are fetched from
-storage, so the cost is independent of how many other columns the collection has. `min`/`max`
-keep their source type (strings come back as `bytes`, timestamps as int64 nanoseconds). See the
-[stats & scans guide](https://github.com/maris-development/atlas/blob/main/atlas-python/docs/guides/stats.md)
-for the full API, including `global_attrs=` / `array_attrs=` columns.
-
-## Cloud / object storage
-
-With the `cloud` extra, `Atlas.open` / `Atlas.create` accept an
-[obstore](https://github.com/developmentseed/obstore)-constructed S3 / GCS / Azure / HTTP store
-handle instead of a local path. The path-based local-filesystem API works without it. See the
-[cloud storage guide](https://github.com/maris-development/atlas/blob/main/atlas-python/docs/guides/cloud-storage.md).
-
-## API reference
-
-### `atlas.Atlas`
-
-| Method | Description |
-| --- | --- |
-| `Atlas.create(path, codec="zstd")` | Create a new store at `path`. |
-| `Atlas.open(path)` | Open an existing store. |
-| `create_dataset(name) -> DatasetView` | New dataset (in-memory until flush). |
-| `open_dataset(name) -> DatasetView` | Existing dataset. |
-| `delete_dataset(name)` | Remove a dataset (persisted on next `flush`). |
-| `list_datasets() -> list[str]` | All dataset names. |
-| `list_arrays() -> list[str]` | Distinct array names across datasets. |
-| `dataset_exists(name) -> bool` | Existence check. |
-| `add_xarray_dataset(ds, name, chunks=None, fill_value=None)` | Append an `xarray.Dataset` (does **not** flush). `fill_value` overrides the per-array fill (scalar or `{var: scalar}`); see [Missing data](#missing-data). |
-| `open_as_xarray_dataset(name) -> xr.Dataset` | Read a dataset back (chunked vars come back dask-backed). |
-| `open_as_many_xarray_dataset(names, concat_dim="dataset") -> xr.Dataset` | Open many datasets stacked along `concat_dim` (eager numpy). |
-| `pruning_index(arrays=None, global_attrs=None, array_attrs=None) -> dict` | Flattened statistics for **only** the requested columns; see [Cross-dataset pruning](#cross-dataset-pruning). |
-| `column_summaries() -> dict` | Every column's collection-wide min/max, read from the index footer alone (no column data fetched). |
-| `dataset_row(name) -> int \| None` | The dataset's fixed row ordinal in the pruning index. |
-| `row_slots() -> int` | Total row slots (live + tombstoned) — the pruning index's height. |
-| `flush()` | The single durability boundary — persist everything. |
-| `close()` | Alias for `flush()`; also the `with`-block exit. |
-| `compact()` | Reclaim tombstoned space across cached array files, and renumber row ordinals. |
-| `__enter__` / `__exit__` | Context-manager support (`__exit__` calls `close()`). |
-
-### `atlas.DatasetView`
-
-| Method | Description |
-| --- | --- |
-| `name` (property) | Dataset name. |
-| `list_arrays() -> list[str]` | Array names in this dataset. |
-| `define_array(name, dtype, dims, shape, chunk_shape=None, fill_value=None)` | Declare a new array. `fill_value` is a Python scalar matching the dtype; unwritten cells read back as it, and *written* cells equal to it count as nulls in `array_stats`. Dtype is enforced (`TypeError` on mismatch, `OverflowError` for out-of-range ints). |
-| `write_array(name, start, data)` | Write a numpy ndarray (matching the stored dtype). |
-| `read_array(name, start=None, shape=None) -> np.ndarray \| None` | Read full or partial; `None` if the array isn't in this dataset. |
-| `delete_array(name)` | Tombstone the array within this dataset. |
-| `array_meta(name) -> dict \| None` | `{"dtype", "shape", "chunk_shape", "dimension_names"}`. |
-| `array_stats(name) -> dict \| None` | `{"row_count", "null_count", "min", "max"}` — populated after `flush()`. |
-| `set_attribute(key, value, dtype=None)` | Set a dataset-level (global) attribute. Type inferred from the Python value; pass `dtype` to override (e.g. `"int8"`, `"float32"`, `"timestamp_nanoseconds"`). Values are stored in the `_global` `.af` file. |
-| `get_attribute(key)` / `attributes()` | Single global attribute or dict of all. |
-| `set_array_attribute(array, key, value, dtype=None)` | Set a per-variable attribute on `array` (e.g. `units`); `KeyError` if the array isn't defined. |
-| `get_array_attribute(array, key)` / `array_attributes(array)` | Single per-variable attribute or dict of all, for `array`. |
-
-`DatasetView` does **not** expose its own `flush` / `compact` — both go through the parent `Atlas`.
-
-## Examples
-
-Runnable, self-contained scripts (each writes to a temp directory):
-
-- [01_basics.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/01_basics.py) — create a store, define arrays, set attributes, reopen, read back.
-- [02_xarray.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/02_xarray.py) — round-trip an `xr.Dataset` via both `store.add_xarray_dataset(...)` and the `ds.atlas.write(...)` accessor.
-- [03_dask_streaming.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/03_dask_streaming.py) — stream a dask-chunked `xr.Dataset` in one chunk at a time.
-- [09_missing_data.py](https://github.com/maris-development/atlas/blob/main/atlas-python/examples/09_missing_data.py) — masked/missing cells with default `NaN` / `NaT` / `""` fills, `null_count`, and `fill_value=` overrides.
-
-## Performance
-
-ATLAS is tuned for collections of many similarly-shaped datasets. On a "1000 datasets" benchmark
-against netCDF4 and Zarr v3, the bulk read paths (`Atlas.open_as_many_xarray_dataset` /
-`Atlas.read_array_across_stacked`) beat Zarr by ~2.8× on large chunked slice reads, and on small
-per-dataset workloads ATLAS leads on both reads and writes. See the
-[benchmarks](https://github.com/maris-development/atlas/tree/main/atlas-python/benchmarks) for the full
-methodology, numbers, and an API picker for the fastest read path per workload.
-
-## Links
-
-- Source & issues: <https://github.com/maris-development/atlas>
-- License: Apache-2.0
+Apache-2.0. See [LICENSE](https://github.com/maris-development/atlas/blob/main/LICENSE).

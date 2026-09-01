@@ -1,164 +1,47 @@
-/// Compression codec applied when writing new array blocks.
+//! Write-time configuration. Reading needs none. Every block records its own
+//! codec, and the container framing is fixed.
+
+/// Compression codec applied to array blocks as the collection is written.
 ///
-/// The codec is stored per-variable in `atlas.json` so that each array
-/// can be reopened with the correct codec regardless of the store-level default.
-/// Existing blocks are always decompressed using whatever codec they were
-/// originally written with, so the choice only affects the write path.
-///
-/// Also reused for metadata compression via
-/// [`StoreConfig::meta_compression`] — the same three options apply.
+/// The choice affects the write path only. Each block stores its own codec.
+/// A reader decodes what it finds, and needs no argument.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub enum Codec {
-    /// Zstd compression (default). Best compression ratio at moderate speed.
+    /// Zstd. The default. It gives the best ratio at moderate speed.
     #[default]
     Zstd,
-    /// LZ4 compression. Faster than Zstd, larger files.
+    /// LZ4. Faster than Zstd, larger output.
     Lz4,
-    /// No compression. Fastest write path, no size reduction.
+    /// No compression. The fastest write path. It makes the file no smaller.
     Uncompressed,
 }
 
-impl Codec {
-    /// Compress `bytes` with this codec. Used for whole-file metadata and
-    /// pruning-index blocks, not array chunks (those go through `array_format`).
-    pub(crate) fn compress(self, bytes: Vec<u8>) -> crate::Result<Vec<u8>> {
-        Ok(match self {
-            Codec::Uncompressed => bytes,
-            // zstd default level (3) — good ratio at low CPU. These payloads are
-            // small, so even level 19 would be sub-millisecond.
-            Codec::Zstd => zstd::stream::encode_all(bytes.as_slice(), 0)?,
-            // lz4_flex compression is infallible; the size prefix lets decode
-            // recover the output length without scanning.
-            Codec::Lz4 => lz4_flex::compress_prepend_size(&bytes),
-        })
-    }
+/// Block size `array-format` aims at when it packs chunks. Chunks below this
+/// size share a block. A larger chunk gets a block of its own.
+pub(crate) const DEFAULT_BLOCK_TARGET_SIZE: usize = 8 * 1024 * 1024;
 
-    /// Reverse [`compress`](Self::compress).
-    pub(crate) fn decompress(self, bytes: &[u8]) -> crate::Result<Vec<u8>> {
-        Ok(match self {
-            Codec::Uncompressed => bytes.to_vec(),
-            Codec::Zstd => zstd::stream::decode_all(bytes)?,
-            Codec::Lz4 => lz4_flex::decompress_size_prepended(bytes)?,
-        })
-    }
-}
+/// Decompressed-block cache shared by every segment a reader opens.
+pub(crate) const DEFAULT_CACHE_CAPACITY: u64 = 256 * 1024 * 1024;
 
-/// On-disk encoding for the store's metadata file.
-///
-/// The format choice lives in the filename (`atlas.json` vs `atlas.msgpack`,
-/// with optional `.zst` / `.lz4` suffix) rather than inside the file, so
-/// [`crate::Atlas::open`] can detect it without a caller-supplied hint.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum MetaFormat {
-    /// Pretty-printed JSON (`atlas.json`). Human-readable, default for
-    /// backwards compatibility with stores created before this option existed.
-    #[default]
-    Json,
-    /// MessagePack (`atlas.msgpack`). Compact binary encoding — typically
-    /// 30–50% smaller than JSON and faster to parse, but not human-readable.
-    MsgPack,
-}
+/// Raw I/O cache shared by every segment a reader opens.
+pub(crate) const DEFAULT_IO_CACHE_CAPACITY: u64 = 64 * 1024 * 1024;
 
-impl MetaFormat {
-    /// Filename used for this format / compression pair. All six combinations
-    /// resolve to a `&'static str` so the result can be passed straight to
-    /// [`object_store::path::Path::from`].
-    pub(crate) const fn filename(self, compression: Codec) -> &'static str {
-        match (self, compression) {
-            (MetaFormat::Json, Codec::Uncompressed) => "atlas.json",
-            (MetaFormat::Json, Codec::Zstd) => "atlas.json.zst",
-            (MetaFormat::Json, Codec::Lz4) => "atlas.json.lz4",
-            (MetaFormat::MsgPack, Codec::Uncompressed) => "atlas.msgpack",
-            (MetaFormat::MsgPack, Codec::Zstd) => "atlas.msgpack.zst",
-            (MetaFormat::MsgPack, Codec::Lz4) => "atlas.msgpack.lz4",
-        }
-    }
-}
-
-/// The six (format, compression) pairs in priority order — used by `open`
-/// to disambiguate when multiple metadata files happen to coexist.
-/// Uncompressed comes before compressed within each format, and JSON comes
-/// before MsgPack overall (preserving the existing "JSON wins if both
-/// exist" precedent from the format-detection logic).
-pub(crate) const META_VARIANTS: [(MetaFormat, Codec); 6] = [
-    (MetaFormat::Json, Codec::Uncompressed),
-    (MetaFormat::Json, Codec::Zstd),
-    (MetaFormat::Json, Codec::Lz4),
-    (MetaFormat::MsgPack, Codec::Uncompressed),
-    (MetaFormat::MsgPack, Codec::Zstd),
-    (MetaFormat::MsgPack, Codec::Lz4),
-];
-
-/// What to do when a dataset declares a type that cannot merge with the type
-/// the collection already records for that array name / attribute key.
-///
-/// Types merge when they widen — within numeric types, or between string and
-/// timestamp (see the merged schema in
-/// [`Atlas::merged_schema`](crate::Atlas::merged_schema)). Anything else (say
-/// an `int32` array in one dataset and a `string` array under the same name in
-/// another) is a mismatch. Either way the dataset is **still stored** with its
-/// own type, and the merged schema keeps the **first-seen** type; this policy
-/// only decides whether the mismatch is reported as a warning or an error.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum TypeMismatchPolicy {
-    /// Log a `tracing` warning and carry on. The default — an ingest of many
-    /// heterogeneous files shouldn't abort because one of them disagrees.
-    #[default]
-    Warn,
-    /// Reject the insert with [`Error::TypeMismatch`](crate::Error::TypeMismatch).
-    Error,
-}
-
-/// Configuration for opening or creating an [`Atlas`](crate::Atlas).
+/// Settings for building a collection.
 #[derive(Debug, Clone)]
-pub struct StoreConfig {
-    /// Compression codec used when writing array blocks. Defaults to [`Codec::Zstd`].
+pub struct WriterConfig {
+    /// Codec for array blocks. Defaults to [`Codec::Zstd`].
     pub codec: Codec,
-    /// How to report a type that can't merge with the collection's existing
-    /// type for an array/attribute. Defaults to [`TypeMismatchPolicy::Warn`].
-    ///
-    /// Unlike the other fields, this is a per-session policy rather than an
-    /// on-disk property: it is honoured by `create` and by the
-    /// `*_with_config` open variants, and is not persisted to `atlas.json`.
-    pub on_type_mismatch: TypeMismatchPolicy,
-    /// On-disk encoding for the metadata file. Defaults to [`MetaFormat::Json`].
-    /// Only consulted by `create`; `open` detects the format from the filename
-    /// present on disk.
-    pub meta_format: MetaFormat,
-    /// Compression applied to the encoded metadata bytes. Defaults to
-    /// [`Codec::Uncompressed`] so the on-disk filename matches the format
-    /// (`atlas.json` / `atlas.msgpack`). Only consulted by `create`; `open`
-    /// detects compression from the filename suffix on disk.
-    pub meta_compression: Codec,
-    /// Compression applied to each column block of the pruning index. Defaults
-    /// to [`Codec::Zstd`].
-    ///
-    /// Unlike `meta_compression`, this defaults to compressed: the index is
-    /// only ever machine-read, so the human-readable argument for leaving
-    /// `atlas.json` uncompressed doesn't apply. Blocks are compressed
-    /// individually, so ranged single-column reads keep working whatever this
-    /// is set to, and the index footer records the codec used — a reader
-    /// adapts without being told.
-    ///
-    /// Per-session like `on_type_mismatch`: it governs what a flush *writes*,
-    /// and is not persisted outside the index itself.
-    pub pruning_compression: Codec,
+    /// Target size of a compressed block, in bytes. Defaults to 8 MiB.
+    pub block_target_size: usize,
 }
 
-// Manual Default — `meta_compression` defaults to `Uncompressed`, not
-// `Codec::default()` (which is `Zstd`), so new stores keep the legacy
-// `atlas.json` / `atlas.msgpack` filenames unless the caller opts in.
-// `pruning_compression` does default to `Zstd`; see its docs.
-impl Default for StoreConfig {
+impl Default for WriterConfig {
     fn default() -> Self {
         Self {
             codec: Codec::default(),
-            on_type_mismatch: TypeMismatchPolicy::default(),
-            meta_format: MetaFormat::default(),
-            meta_compression: Codec::Uncompressed,
-            pruning_compression: Codec::Zstd,
+            block_target_size: DEFAULT_BLOCK_TARGET_SIZE,
         }
     }
 }

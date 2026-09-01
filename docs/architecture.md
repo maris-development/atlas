@@ -1,104 +1,100 @@
-# 1. Architecture
+# Architecture
 
-Atlas is three layers stacked on object storage. Each layer has one job.
+## The layers
 
-```
-   ┌──────────────────────────────────────────────────────────────────────┐
-   │  atlas-python  (PyO3 bindings + xarray integration)                    │
-   │  • Atlas / DatasetView wrappers        • ds.atlas.write(store)          │
-   │  • numpy ⇄ atlas dtype mapping         • add_xarray_dataset(ds, name)   │
-   │  Releases the GIL, moves array data zero-copy into the core.           │
-   └───────────────────────────────────┬──────────────────────────────────┘
-                                       │
-   ┌───────────────────────────────────▼──────────────────────────────────┐
-   │  atlas-rust  (the core — this crate)                                   │
-   │                                                                        │
-   │   store/     Atlas: create/open, flush, compact, delete, queries       │
-   │   dataset/   DatasetView: define/write/read arrays, get/set attrs      │
-   │   meta/      StoreMeta: the schema, ordinals, type index (atlas.json)  │
-   │   pruning/   the flat statistics table, assembled on demand            │
-   │   schema/    DType, Attr, ArraySchema — the type system                │
-   │   array.rs   AtlasArray: the lazy per-array-file handle + cache        │
-   │   config.rs  Codec, MetaFormat, StoreConfig, TypeMismatchPolicy        │
-   │   error.rs   Error / Result                                            │
-   └───────────────────────────────────┬──────────────────────────────────┘
-                                       │
-   ┌───────────────────────────────────▼──────────────────────────────────┐
-   │  array-format  (sibling crate — the columnar file format)              │
-   │   ArrayFile: one physical file holding many datasets' entries for one   │
-   │   array name. Chunked, per-chunk compressed, append-friendly via delta  │
-   │   layers, with a per-dataset StatsFile and per-entry attributes.        │
-   └───────────────────────────────────┬──────────────────────────────────┘
-                                       │
-   ┌───────────────────────────────────▼──────────────────────────────────┐
-   │  object_store  (local FS, S3, GCS, Azure, in-memory)                   │
-   └──────────────────────────────────────────────────────────────────────┘
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ atlas-python/python/atlas/                                  │
+│   five operations, the `atlas` CLI, the xarray mapping      │  Python
+├─────────────────────────────────────────────────────────────┤
+│ atlas-python/src/                                           │
+│   PyO3 bindings: numpy ⇄ ndarray, Python ⇄ Attr, errors     │  Rust (glue)
+├─────────────────────────────────────────────────────────────┤
+│ atlas-rust/src/                                             │
+│   format/  the container: framing, footer, mask, segments   │
+│   writer/  builds a collection, once                        │  Rust (core)
+│   reader/  opens one, reads lazily                          │
+├─────────────────────────────────────────────────────────────┤
+│ array-format (crates.io, pinned =0.12.0)                    │
+│   one segment: chunked arrays, blocks, codecs, fill values  │  Rust (dep)
+├─────────────────────────────────────────────────────────────┤
+│ object_store                                                │
+│   local filesystem, S3, GCS, Azure, in-memory               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ## Who owns what
 
-| Layer | Owns | Does **not** touch |
-|-------|------|--------------------|
-| `atlas-python` | ergonomics, numpy/xarray glue | storage, stats |
-| `atlas-rust` | the *collection* — which datasets exist, their schema, cross-dataset queries | how one array's bytes are laid out |
-| `array-format` | one physical array file — chunking, compression, stats, attributes | anything about *other* arrays or the collection |
-| `object_store` | bytes in and out of a backend | structure |
+| Concern | Owner |
+|---|---|
+| Container framing, footer, deletion mask | `atlas-rust`, `src/format/` |
+| Building a collection | `atlas-rust`, `src/writer/` |
+| Opening one, and lazy reads | `atlas-rust`, `src/reader/` |
+| Chunk layout, blocks, compression, fill values | `array-format` |
+| Byte-range I/O against any backend | `object_store` |
+| numpy ⇄ Rust arrays, Python exceptions | `atlas-python/src/` |
+| NetCDF ingest, the CLI, xarray mapping | `atlas-python/python/` |
 
-The boundary that matters: **atlas-rust knows about the collection; array-format
-knows about a single file.** Atlas never reaches into an array's byte layout;
-array-format never knows two arrays belong to the same dataset.
+The **file format is Rust only**. `atlas-python` holds no format knowledge. It
+builds no header, no footer, and no mask. Grep it for `ATLS`, and you get
+nothing. That is deliberate. One implementation of the bytes gives a bug one
+place to live.
 
 ## The central types
 
-```
-   Atlas ──────────────► one store (a directory / prefix)
-     │  create_dataset(name) -> DatasetView
-     │  open_dataset(name)   -> DatasetView
-     │  flush() / compact()
-     │  pruning_index(cols)  -> PruningIndex     (cross-dataset stats)
-     │  read_array_across(…) -> stacked arrays   (one var, many datasets)
-     │
-     ├── StoreMeta  (in memory, persisted as atlas.json)
-     │     datasets: name → schema  (insertion order = ordinal, tombstoned)
-     │     schema_pool, type index, codec, meta_epoch
-     │
-     ├── ArrayCache  (name → AtlasArray, lazy)
-     │     one handle per physical array file, opened on first use
-     │
-     └── ordinal_map cache   (name → ordinal, for the pruning pivot)
+```text
+AtlasWriter ──add_dataset()──▶ DatasetWriter ──finish()──┐
+     │                              │                    │
+     │                       stages to a local           │ appends the
+     │                       array-format file           │ segment, records
+     │                                                   │ the footer entry
+     └──finish()──▶ footer + trailer ◀───────────────────┘
 
-   DatasetView ────────► one dataset inside a store
-     │  define_array / write_array / read_array
-     │  set_attribute / get_attribute  (dataset-global)
-     │  set_array_attribute / …        (per-array)
-     └── all mutations buffer in memory; nothing hits disk until Atlas::flush()
+Atlas ──dataset()──▶ DatasetView ──read_array()──▶ ndarray
+  │                       │
+  │ footer, read once     │ opens the segment on first use,
+  │ at open               │ through SegmentStore
 ```
 
-## How a call flows
+- **`AtlasWriter`** owns the output stream, the interner, and the scratch area.
+- **`DatasetWriter`** stages one dataset. It touches the shared output only in
+  `finish()`, under one lock. Several can therefore stage at once.
+- **`Atlas`** holds the decoded footer and the deletion mask.
+- **`DatasetView`** answers metadata from the footer with no I/O. It opens its
+  segment on demand.
+- **`SegmentStore`** presents one byte range of the container to
+  `array-format` as one standalone object.
 
-**Write** (`view.write_array("temp", …)`):
+## Why segments are `array-format` files
 
-```
-   DatasetView.write_array
-     └─ ArrayCache.get_or_insert("temp")     → AtlasArray (lazy handle)
-         └─ AtlasArray.get().await           → opens/creates temp/data.af
-             └─ ArrayFile.write_array        → buffers into the pending delta
-                                               (spills 4 MiB blocks to a tempfile;
-                                                nothing durable yet)
-```
+The bytes of each dataset are a complete `array-format` file, held word for
+word. The other option is a private chunk table in the atlas footer. That means
+a second implementation of block allocation, per-block codecs, variable-length
+encoding, fill values, and partial-region assembly. To embed the file reuses
+all of it, and costs one adapter.
 
-**Durability boundary** (`atlas.flush()`): commits every touched `ArrayFile`'s
-pending delta to a sidecar layer, computes each array's `StatsFile`, and writes
-`atlas.json`. See [write-path.md](write-path.md).
+It also makes the format open to inspection. `DatasetView::segment_range()`
+gives the byte offsets. `dd` those out, and `array-format` opens the result
+with no atlas in the way. `tests/integration.rs` asserts that.
 
-**Cross-dataset query** (`atlas.pruning_index([temp])`): reads `temp/data.af`'s
-`StatsFile`, pivots the per-dataset entries into a flat length-N column by
-ordinal. **No separate index is stored** — see [pruning-index.md](pruning-index.md).
+The cost is one indirection. A read of a dataset opens its segment footer
+first, in two small range reads, and then fetches chunks. Each collection
+handle caches those reads. They happen once per dataset, not once per read.
 
-## Runtime & concurrency
+## Concurrency
 
-- Everything is `async` on Tokio. `Atlas` is `Send + Sync`.
-- Each physical array file is guarded by its own `tokio::sync::RwLock`, so
-  different arrays are independent — the basis for the parallel pruning reads.
-- Store metadata is a `parking_lot::Mutex` held only for short, non-`await`
-  critical sections.
+**A read** needs no lock. The data is immutable, so `Atlas` and `DatasetView`
+are `Send + Sync`, and two reads never contend. A `tokio::sync::OnceCell` opens
+each segment handle once. Every segment in a collection shares the block cache,
+which keys on `(segment path, block id)`. The virtual path carries the dataset
+ordinal, so the blocks of one dataset can never answer the read of another.
+
+**A write** shares one `tokio::sync::Mutex` over the output stream and the
+footer. A `DatasetWriter` takes that lock only in `finish()`, for its append.
+Staging is therefore parallel, and only the append serializes. Datasets land in
+finish order.
+
+The deletion mask is the one part of a finished collection that changes. A
+`parking_lot::RwLock` guards it in memory, and a write replaces the whole file
+on disk. Concurrent deletes are last-writer-wins. See
+[format.md](format.md#deletion-mask).
