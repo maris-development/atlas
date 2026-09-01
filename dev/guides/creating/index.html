@@ -605,6 +605,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#speed-on-many-small-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Speed on many small files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#the-writers-own-memory" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -990,6 +1001,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#speed-on-many-small-files" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Speed on many small files
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#the-writers-own-memory" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1159,8 +1181,10 @@ that stream to stderr. See <a href="../../installation/">Installation</a>.</p>
 <h2 id="chunking-and-memory">Chunking and memory</h2>
 <p>These are one decision. The blocks a file <em>reads</em> in are the chunks it
 <em>stores</em> in.</p>
-<p>Each file opens with dask chunking. <code>open_chunks="auto"</code> is the default. dask
-then sizes the blocks to <code>chunk_size</code>, which is 128 MiB. Three results follow:</p>
+<p><code>open_chunks="auto"</code> is the default, and it picks a strategy per file. A file
+well inside the block budget opens whole. The dask graph costs about 40 ms
+per file, and a small variable lands as one chunk either way. A larger
+file streams through dask, so memory stays bounded. Three results follow:</p>
 <ul>
 <li>A file far larger than memory streams block by block, and does not read
   whole.</li>
@@ -1173,7 +1197,8 @@ then sizes the blocks to <code>chunk_size</code>, which is 128 MiB. Three result
 <div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">chunk_size</span><span class="o">=</span><span class="s2">"64MiB"</span><span class="p">)</span>
 </span></code></pre></div>
 <p><code>chunk_size</code> is about the memory ceiling per variable. Lower it on a small
-machine. Raise it for larger stored chunks.</p>
+machine. Raise it for larger stored chunks. It also moves the threshold at
+which <code>"auto"</code> stops opening a file whole.</p>
 <h3 id="how-files-are-opened">How files are opened</h3>
 <table>
 <thead>
@@ -1186,7 +1211,7 @@ machine. Raise it for larger stored chunks.</p>
 <tbody>
 <tr>
 <td><code>"auto"</code> <em>(default)</em></td>
-<td>blocks sized to <code>chunk_size</code></td>
+<td>whole when small, else blocks sized to <code>chunk_size</code></td>
 <td>those blocks</td>
 </tr>
 <tr>
@@ -1229,12 +1254,46 @@ alone. A one-chunk array reads whole, or not at all.</p>
 </span></code></pre></div>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>atlas<span class="w"> </span>show<span class="w"> </span>dest<span class="w"> </span><span class="m">2024</span>-01.nc<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>_ChunkShape
 </span></code></pre></div>
+<h3 id="speed-on-many-small-files">Speed on many small files</h3>
+<p>A directory of small files spends most of its time per file, not per byte. On
+213 KiB profile files the default runs at about 30 files per second, or five
+minutes for ten thousand.</p>
+<p><strong><code>--workers N</code> stages N files at once.</strong> It is the largest single win:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--workers<span class="w"> </span><span class="m">4</span>
+</span></code></pre></div>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>workers=1 :  32 files/s   1.00x
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>workers=2 :  84 files/s   2.65x
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>workers=4 : 120 files/s   3.77x
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a>workers=8 : 118 files/s   3.72x   &lt;- plateau
+</span></code></pre></div>
+<p>The commit is the costly half of an ingest, about two thirds of it. It is pure
+Rust, holds no lock until its append, and releases the GIL, so it overlaps.
+The reads stay on the calling thread, and they are what flattens the curve
+near four.</p>
+<p>The reads have to stay there. netCDF4 sits on HDF5, which is not thread safe,
+and xarray locks an array read but not a variable open. Two threads inside
+<code>open_dataset</code> crash the process.</p>
+<p>Nothing else changes. <code>add_dataset</code> runs in file order, so every ordinal
+matches a sequential build. The summary sorts back into file order too. Only
+<code>progress</code> reports in completion order.</p>
+<p>Two more settings matter when that is still too slow:</p>
+<ul>
+<li><strong><code>--open-chunks native</code></strong> forces dask on every file. That costs about twice
+  as long on a small file. Use it only when the file's own chunking is what
+  you want stored.</li>
+<li><strong><code>--codec none</code></strong> trades size for speed. It saved about 20 percent on the
+  same files.</li>
+</ul>
+<p>Past the plateau, run several <code>atlas create</code> commands at once, one per part of
+the tree. Each has its own writer, so nothing serialises between them. That
+reached 3.7x on eight processes where threads reached 2.9x. The cost is one
+collection per part.</p>
 <h3 id="the-writers-own-memory">The writer's own memory</h3>
 <p>Staging runs on local disk. <code>array-format</code> spills each compressed chunk to a
 temporary file. The memory of the writer therefore does not grow with the
 number of datasets. A thousand-file ingest costs what a one-file ingest costs.</p>
 <h2 id="compression">Compression</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="s2">"lz4"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="s2">"lz4"</span><span class="p">)</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -1261,10 +1320,14 @@ number of datasets. A thousand-file ingest costs what a one-file ingest costs.</
 <p>Each block records its own codec, so nothing tells a reader which one the write
 used.</p>
 <h2 id="progress">Progress</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">progress</span><span class="o">=</span><span class="k">lambda</span> <span class="n">name</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">name</span><span class="p">))</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">progress</span><span class="o">=</span><span class="k">lambda</span> <span class="n">name</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">name</span><span class="p">))</span>
 </span></code></pre></div>
-<p>The CLI does this by default, to stderr, so a pipe still reads stdout. <code>-q</code>
-turns it off.</p>
+<p>The CLI does this by default, to stderr, so a pipe still reads stdout. Each
+line counts the files and says how many remain:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>  [ 12/10000] 000043_CFPOINT_3593_V0.nc  (9988 left)
+</span></code></pre></div>
+<p><code>-q</code> turns the per-file lines off. Pass <code>--log-file PATH</code> to keep the same
+counter in a file. The command prints the absolute path it opened.</p>
 <h2 id="what-can-go-wrong">What can go wrong</h2>
 <table>
 <thead>
