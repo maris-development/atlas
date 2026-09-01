@@ -12,7 +12,7 @@
         <link rel="prev" href="../installation/">
       
       
-        <link rel="next" href="../vs-zarr-netcdf/">
+        <link rel="next" href="../cli/">
       
       
         
@@ -381,10 +381,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#create-write-flush" class="md-nav__link">
+  <a href="#build" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Create, write, flush
+        Build
       
     </span>
   </a>
@@ -392,10 +392,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#reopen-and-read-back" class="md-nav__link">
+  <a href="#look" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Reopen and read back
+        Look
       
     </span>
   </a>
@@ -403,10 +403,54 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#next-steps" class="md-nav__link">
+  <a href="#inspect-one-dataset" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Next steps
+        Inspect one dataset
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remove" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remove
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#against-a-bucket" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Against a bucket
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-the-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the data
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next
       
     </span>
   </a>
@@ -417,6 +461,33 @@
   
 </nav>
       
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The atlas command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -470,10 +541,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
             
   
   
@@ -491,8 +562,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -509,14 +580,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../guides/datasets-and-arrays/" class="md-nav__link">
+      <a href="../guides/creating/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Datasets and arrays
+    Creating a collection
   
 
     
@@ -537,14 +608,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../guides/durability/" class="md-nav__link">
+      <a href="../guides/inspecting/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Durability and flushing
+    Inspecting a collection
   
 
     
@@ -565,42 +636,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../guides/codecs-and-meta/" class="md-nav__link">
+      <a href="../guides/removing/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Codecs and metadata
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/attributes/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Attributes
+    Removing datasets
   
 
     
@@ -649,126 +692,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../guides/xarray/" class="md-nav__link">
+      <a href="../guides/reading-data/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    xarray integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/dask/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Dask streaming and lazy reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/bulk-reads/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Bulk reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/stats/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Stats and scans
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/shared-arrays/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Shared physical arrays
+    Reading data
   
 
     
@@ -851,53 +782,8 @@
   
   
     <li class="md-nav__item">
-      <a href="../benchmarks/" class="md-nav__link">
+      <a href="../reference/api/" class="md-nav__link">
         
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Benchmarks
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
-            
   
   
   <span class="md-ellipsis">
@@ -911,107 +797,7 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    API reference
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/atlas/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Atlas
-  
-
-    
-  </span>
-  
-  
-
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/dataset-view/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DatasetView
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/xarray-accessor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    xarray accessor
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
     </li>
   
 
@@ -1043,10 +829,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#create-write-flush" class="md-nav__link">
+  <a href="#build" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Create, write, flush
+        Build
       
     </span>
   </a>
@@ -1054,10 +840,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#reopen-and-read-back" class="md-nav__link">
+  <a href="#look" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Reopen and read back
+        Look
       
     </span>
   </a>
@@ -1065,10 +851,54 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#next-steps" class="md-nav__link">
+  <a href="#inspect-one-dataset" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Next steps
+        Inspect one dataset
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#remove" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remove
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#against-a-bucket" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Against a bucket
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-the-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the data
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Next
       
     </span>
   </a>
@@ -1096,62 +926,116 @@
 
 
 <h1 id="quickstart">Quickstart</h1>
-<p>This page builds the smallest useful atlas store: one dataset with one
-2-D array and a couple of attributes, then closes the store and reopens it
-to confirm everything persisted.</p>
-<h2 id="create-write-flush">Create, write, flush</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="k">with</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">&quot;/tmp/my_store&quot;</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="s2">&quot;zstd&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">store</span><span class="p">:</span>   <span class="c1"># (1)</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    <span class="n">ds</span> <span class="o">=</span> <span class="n">store</span><span class="o">.</span><span class="n">create_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>                            <span class="c1"># (2)</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>        <span class="s2">&quot;temperature&quot;</span><span class="p">,</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>        <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>        <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">,</span> <span class="s2">&quot;lon&quot;</span><span class="p">],</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>        <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">16</span><span class="p">],</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>        <span class="n">chunk_shape</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">],</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>        <span class="n">fill_value</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">),</span>                                     <span class="c1"># (3)</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    <span class="p">)</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>        <span class="s2">&quot;temperature&quot;</span><span class="p">,</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>        <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>        <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="mi">8</span><span class="p">,</span> <span class="mi">16</span><span class="p">),</span> <span class="mf">20.0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    <span class="p">)</span>
-</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;month&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-0-20"><a id="__codelineno-0-20" name="__codelineno-0-20" href="#__codelineno-0-20"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;station&quot;</span><span class="p">,</span> <span class="s2">&quot;KNMI&quot;</span><span class="p">)</span>
-</span><span id="__span-0-21"><a id="__codelineno-0-21" name="__codelineno-0-21" href="#__codelineno-0-21"></a><span class="c1"># (4) `with` exit calls store.close() == flush().</span>
+<p>A directory of NetCDF files in, one collection out, then a look at what landed.</p>
+<h2 id="build">Build</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection
 </span></code></pre></div>
-<ol>
-<li><strong><code>Atlas.create(path, codec=...)</code></strong> — codec is one of <code>"zstd"</code>,
-   <code>"lz4"</code>, <code>"none"</code>. See <a href="../guides/codecs-and-meta/">Codecs and metadata</a>.</li>
-<li><strong><code>create_dataset(name)</code></strong> returns a <a href="../reference/dataset-view/"><code>DatasetView</code></a>;
-   <code>define_array</code> declares a typed N-D array within it.</li>
-<li><strong><code>fill_value</code></strong> is the scalar returned for unwritten cells. Any <em>written</em>
-   cell equal to the fill value is counted as a null in <a href="../guides/stats/"><code>array_stats</code></a>.</li>
-<li><strong>No I/O until <code>flush</code></strong> — <code>define_array</code> and <code>write_array</code> only mutate
-   in-memory state. The <code>with</code> exit (or an explicit <code>store.flush()</code> /
-   <code>store.close()</code>) is the <strong>single durability boundary</strong>.
-   See <a href="../guides/durability/">Durability and flushing</a>.</li>
-</ol>
-<h2 id="reopen-and-read-back">Reopen and read back</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">atlas2</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="s2">&quot;/tmp/my_store&quot;</span><span class="p">)</span>                <span class="c1"># auto-detects codec / meta format</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">ds2</span> <span class="o">=</span> <span class="n">atlas2</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">arr</span> <span class="o">=</span> <span class="n">ds2</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>                         <span class="c1"># full read -&gt; np.ndarray</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">chunk</span> <span class="o">=</span> <span class="n">ds2</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">,</span> <span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">])</span>       <span class="c1"># partial read</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">stats</span> <span class="o">=</span> <span class="n">ds2</span><span class="o">.</span><span class="n">array_stats</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>                      <span class="c1"># {row_count, null_count, min, max}</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">attrs</span> <span class="o">=</span> <span class="n">ds2</span><span class="o">.</span><span class="n">attributes</span><span class="p">()</span>                                    <span class="c1"># {&quot;month&quot;: 1, &quot;station&quot;: &quot;KNMI&quot;}</span>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Writing /data/collection
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  2024-01
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  2024-02
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  2024-03
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>3 dataset(s) written to /data/collection
 </span></code></pre></div>
-<h2 id="next-steps">Next steps</h2>
+<p>Each file becomes one dataset, named after its stem. The result is one file:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>$<span class="w"> </span>ls<span class="w"> </span>/data/collection
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>data.atlas
+</span></code></pre></div>
+<p>Nothing there was readable until the last file landed. A failure part-way
+leaves no collection, and not a partial one.</p>
+<p>From Python:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="s2">"/data/collection"</span><span class="p">)</span>
+</span></code></pre></div>
+<h2 id="look">Look</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>ls<span class="w"> </span>/data/collection
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="m">2024</span>-01
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="m">2024</span>-02
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="m">2024</span>-03
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>info<span class="w"> </span>/data/collection
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>collection<span class="w"> </span>/data/collection
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span>format<span class="w"> </span>version<span class="w">    </span><span class="m">1</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span>created<span class="w">           </span><span class="m">2026</span>-08-31T08:32:57Z
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="w">  </span>codec<span class="w">             </span>zstd
+</span><span id="__span-5-6"><a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="w">  </span>container<span class="w"> </span>size<span class="w">    </span><span class="m">5</span>.4<span class="w"> </span>KiB
+</span><span id="__span-5-7"><a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span>datasets<span class="w">          </span><span class="m">3</span>
+</span><span id="__span-5-8"><a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="w">  </span>interned<span class="w"> </span>schemas<span class="w">  </span><span class="m">1</span>
+</span><span id="__span-5-9"><a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>distinct<span class="w"> </span>arrays<span class="w">   </span><span class="m">4</span>
+</span><span id="__span-5-10"><a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">      </span>lat<span class="w">          </span><span class="nv">count</span><span class="o">=</span><span class="m">12</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">3</span>.0
+</span><span id="__span-5-11"><a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="w">      </span>lon<span class="w">          </span><span class="nv">count</span><span class="o">=</span><span class="m">18</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">5</span>.0
+</span><span id="__span-5-12"><a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a><span class="w">      </span>station<span class="w">      </span><span class="nv">count</span><span class="o">=</span><span class="m">12</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="s2">"a"</span><span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="s2">"d"</span>
+</span><span id="__span-5-13"><a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="w">      </span>temperature<span class="w">  </span><span class="nv">count</span><span class="o">=</span><span class="m">72</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">1</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">26</span>.0
+</span></code></pre></div>
+<p>Both come from one range read of the container tail. Three datasets and a
+million cost the same.</p>
+<p><code>interned schemas 1</code> means all three months declare the same arrays, so that
+schema is stored once.</p>
+<p>The statistics cover the whole collection. Each month holds 24 temperature
+elements, so the three months together hold 72. The minimum comes from January.
+The maximum comes from March. Removed datasets do not count.</p>
+<h2 id="inspect-one-dataset">Inspect one dataset</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>show<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-01
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>dataset<span class="w"> </span><span class="m">2024</span>-01<span class="w"> </span><span class="o">{</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>dimensions:
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">    </span><span class="nv">lat</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">    </span><span class="nv">lon</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>variables:
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">    </span>float64<span class="w"> </span>lat<span class="o">(</span>lat<span class="o">)</span><span class="w"> </span><span class="p">;</span><span class="w">  </span>//<span class="w"> </span>coordinate
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">        </span>lat:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span>nan<span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">4</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">3</span>.0
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">    </span>float32<span class="w"> </span>temperature<span class="o">(</span>lat,<span class="w"> </span>lon<span class="o">)</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">        </span>temperature:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span>nan<span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">        </span>temperature:units<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"celsius"</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">24</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">1</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">24</span>.0
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">    </span>string<span class="w"> </span>station<span class="o">(</span>lat<span class="o">)</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">        </span>station:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">""</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">4</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="s2">"a"</span><span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="s2">"d"</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a>
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>//<span class="w"> </span>global<span class="w"> </span>attributes:
+</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="w">        </span>:month<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a><span class="w">        </span>:source<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"example"</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a>
+</span><span id="__span-6-22"><a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a>//<span class="w"> </span>ordinal<span class="w"> </span><span class="m">0</span>,<span class="w"> </span>segment<span class="w"> </span>bytes<span class="w"> </span><span class="m">8</span>..1691
+</span><span id="__span-6-23"><a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a><span class="o">}</span>
+</span></code></pre></div>
+<p>The shape follows <code>ncdump -h</code>. It adds the statistics of each array write. The
+footer holds those too, so to print them costs nothing extra.</p>
+<p>From Python, the same thing as a structure:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">detail</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="s2">"/data/collection"</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"dimensions"</span><span class="p">]</span>                                    <span class="c1"># {'lat': 4, 'lon': 6}</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"coordinates"</span><span class="p">]</span>                                   <span class="c1"># ['lat', 'lon']</span>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]:</span> <span class="n">a</span><span class="p">[</span><span class="s2">"stats"</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">detail</span><span class="p">[</span><span class="s2">"arrays"</span><span class="p">]}</span>
+</span></code></pre></div>
+<h2 id="remove">Remove</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-02
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>removed<span class="w"> </span><span class="m">1</span>:<span class="w"> </span><span class="m">2024</span>-02
+</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="m">2</span><span class="w"> </span>dataset<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>remain
+</span></code></pre></div>
+<p>That writes a small <code>deleted.mask</code> beside the container. The container does not
+change, so this reclaims nothing and moves no ordinal. Rebuild the collection
+to get the space back.</p>
+<h2 id="against-a-bucket">Against a bucket</h2>
+<p>Every command takes a URL in place of a path:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>s3://my-bucket/collections/2024<span class="w"> </span>--region<span class="w"> </span>eu-west-1
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>atlas<span class="w"> </span>ls<span class="w"> </span>s3://my-bucket/collections/2024<span class="w"> </span>--region<span class="w"> </span>eu-west-1
+</span></code></pre></div>
+<p>This needs <code>pip install "atlas-python[cloud]"</code>. See
+<a href="../guides/cloud-storage/">Cloud storage</a>.</p>
+<h2 id="reading-the-data">Reading the data</h2>
+<p>Not from Python. The Rust API reads array values:</p>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kd">let</span><span class="w"> </span><span class="n">atlas</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Atlas</span><span class="p">::</span><span class="n">open_path</span><span class="p">(</span><span class="s">"/data/collection"</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="kd">let</span><span class="w"> </span><span class="n">ds</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">atlas</span><span class="p">.</span><span class="n">dataset</span><span class="p">(</span><span class="s">"2024-01"</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="kd">let</span><span class="w"> </span><span class="n">window</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ds</span><span class="p">.</span><span class="n">read_array</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">f32</span><span class="o">&gt;</span><span class="p">(</span><span class="s">"temperature"</span><span class="p">,</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">],</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">]).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</span></code></pre></div>
+<p>See <a href="../guides/reading-data/">Reading data</a> for the reason, and for what to do
+when you need values in Python.</p>
+<h2 id="next">Next</h2>
 <ul>
-<li><a href="../guides/datasets-and-arrays/"><strong>Datasets and arrays</strong></a> — the mental model
-  and the full <code>define_array</code> / <code>write_array</code> / <code>read_array</code> surface.</li>
-<li><a href="../guides/xarray/"><strong>xarray integration</strong></a> — round-trip whole <code>xr.Dataset</code>s
-  with one call.</li>
-<li><a href="../guides/bulk-reads/"><strong>Bulk reads</strong></a> — when you need the same slice from
-  many datasets at once.</li>
+<li><a href="../cli/"><strong>The <code>atlas</code> command</strong></a>. Every flag</li>
+<li><a href="../guides/creating/"><strong>Creating a collection</strong></a>. Chunking, errors, memory</li>
+<li><a href="../guides/inspecting/"><strong>Inspecting a collection</strong></a>. What the metadata holds</li>
+<li><a href="../guides/removing/"><strong>Removing datasets</strong></a>. The mask, and what it costs</li>
 </ul>
 
 

@@ -9,10 +9,10 @@
       
       
       
-        <link rel="prev" href="../../benchmarks/">
+        <link rel="prev" href="../dtypes/">
       
       
-        <link rel="next" href="../dataset-view/">
+        <link rel="next" href="../cloud-storage/">
       
       
         
@@ -23,7 +23,7 @@
     
     
       
-        <title>Atlas - Atlas</title>
+        <title>Reading data - Atlas</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#atlas" class="md-skip">
+        <a href="#reading-data" class="md-skip">
           Skip to content
         </a>
       
@@ -116,7 +116,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Atlas
+              Reading data
             
           </span>
         </div>
@@ -348,6 +348,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The atlas command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../vs-zarr-netcdf/" class="md-nav__link">
         
   
@@ -372,8 +399,10 @@
       
   
   
+    
   
   
+  
     
     
     
@@ -384,16 +413,14 @@
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
-        
-          
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
             
   
   
@@ -411,8 +438,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -429,14 +456,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/datasets-and-arrays/" class="md-nav__link">
+      <a href="../creating/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Datasets and arrays
+    Creating a collection
   
 
     
@@ -457,14 +484,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/durability/" class="md-nav__link">
+      <a href="../inspecting/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Durability and flushing
+    Inspecting a collection
   
 
     
@@ -485,14 +512,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/codecs-and-meta/" class="md-nav__link">
+      <a href="../removing/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Codecs and metadata
+    Removing datasets
   
 
     
@@ -513,35 +540,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/attributes/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Attributes
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/dtypes/" class="md-nav__link">
+      <a href="../dtypes/" class="md-nav__link">
         
   
   
@@ -566,17 +565,44 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../guides/xarray/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reading data
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
   <span class="md-ellipsis">
     
   
-    xarray integration
+    Reading data
   
 
     
@@ -585,6 +611,70 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-metadata-gives-you" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What metadata gives you
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-values-in-rust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading values, in Rust
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#if-you-need-values-in-python-anyway" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        If you need values in Python anyway
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -597,119 +687,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guides/dask/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Dask streaming and lazy reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/bulk-reads/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Bulk reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/stats/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Stats and scans
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/shared-arrays/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Shared physical arrays
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guides/cloud-storage/" class="md-nav__link">
+      <a href="../cloud-storage/" class="md-nav__link">
         
   
   
@@ -771,53 +749,8 @@
   
   
     <li class="md-nav__item">
-      <a href="../../benchmarks/" class="md-nav__link">
+      <a href="../../reference/api/" class="md-nav__link">
         
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Benchmarks
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-    
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
-            
   
   
   <span class="md-ellipsis">
@@ -831,226 +764,7 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    API reference
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-    
-  
-  
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Atlas
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Atlas
-  
-
-    
-  </span>
-  
-  
-
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#atlas.Atlas" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Atlas
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Atlas">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.create" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        create
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.open" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        open
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.add_xarray_dataset" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        add_xarray_dataset
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.open_as_xarray_dataset" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        open_as_xarray_dataset
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.open_as_many_xarray_dataset" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        open_as_many_xarray_dataset
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../dataset-view/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DatasetView
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../xarray-accessor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    xarray accessor
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
     </li>
   
 
@@ -1082,74 +796,46 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#atlas.Atlas" class="md-nav__link">
+  <a href="#why" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Atlas
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Atlas">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.create" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        create
+        Why
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.open" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#what-metadata-gives-you" class="md-nav__link">
     <span class="md-ellipsis">
       
-        open
+        What metadata gives you
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.add_xarray_dataset" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#reading-values-in-rust" class="md-nav__link">
     <span class="md-ellipsis">
       
-        add_xarray_dataset
+        Reading values, in Rust
       
     </span>
   </a>
   
 </li>
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.open_as_xarray_dataset" class="md-nav__link">
+      
+        <li class="md-nav__item">
+  <a href="#if-you-need-values-in-python-anyway" class="md-nav__link">
     <span class="md-ellipsis">
       
-        open_as_xarray_dataset
+        If you need values in Python anyway
       
     </span>
   </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#atlas.Atlas.open_as_many_xarray_dataset" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        open_as_many_xarray_dataset
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -1173,172 +859,86 @@
   
 
 
-<h1 id="atlas"><code>Atlas</code></h1>
-<p>The store handle. Holds an in-memory <code>StoreMeta</code> and the per-array file
-caches. All mutations are buffered until <a href="#atlas.Atlas.flush"><code>flush()</code></a>;
-see <a href="../../guides/durability/">Durability and flushing</a> for the full
-contract.</p>
-
-
-<div class="doc doc-object doc-class">
-
-
-
-<h2 id="atlas.Atlas" class="doc doc-heading">
-            <span class="doc doc-object-name doc-class-name">atlas.Atlas</span>
-
-
-</h2>
-
-
-    <div class="doc doc-contents first">
-
-
-
-        <p>A directory-based store for many named datasets of N-dimensional arrays.</p>
-<p>Construct with :meth:<code>create</code> / :meth:<code>open</code>; see <code>atlas</code> package docs for
-the full API. Instances wrap the Rust core and forward primitive calls to
-it, so <code>isinstance(store, Atlas)</code> holds and every method behaves as the stub
-documents.</p>
-
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-children">
-
-
-
-
-
-
-
-
-
-
-<div class="doc doc-object doc-function">
-
-
-<h3 id="atlas.Atlas.create" class="doc doc-heading">
-            <span class="doc doc-object-name doc-function-name">create</span>
-
-
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
-  </span>
-
-</h3>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">create</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">AtlasSource</span><span class="p">,</span> <span class="n">codec</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;zstd&#39;</span><span class="p">,</span> <span class="n">meta_format</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;json&#39;</span><span class="p">,</span> <span class="n">meta_compression</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;none&#39;</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;warn&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atlas</span>
+<h1 id="reading-data">Reading data</h1>
+<p>Python reads the <strong>metadata</strong> of a collection. It reads no array value.</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="n">collection</span><span class="p">)</span>            <span class="c1"># ✓</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"jan"</span><span class="p">)</span>          <span class="c1"># ✓  types, shapes, attrs, stats</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">collection</span><span class="p">)</span>                     <span class="c1"># ✓  counts, size, collection stats</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">atlas</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"jan"</span><span class="p">,</span> <span class="s2">"t"</span><span class="p">)</span>   <span class="c1"># ✗ does not exist</span>
 </span></code></pre></div>
-
-    <div class="doc doc-contents ">
-
-        <p>Create a new store. See the type stub for argument details.</p>
-
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-function">
-
-
-<h3 id="atlas.Atlas.open" class="doc doc-heading">
-            <span class="doc doc-object-name doc-function-name">open</span>
-
-
-  <span class="doc doc-labels">
-      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
-  </span>
-
-</h3>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">open</span><span class="p">(</span><span class="n">source</span><span class="p">:</span> <span class="n">AtlasSource</span><span class="p">,</span> <span class="n">on_type_mismatch</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;warn&#39;</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Atlas</span>
+<h2 id="why">Why</h2>
+<p>The design gives each language one job. Python builds collections from xarray,
+and serves a catalogue of what they hold. It is good at both, and neither needs
+an array byte. To read array data means to decompress chunks and to assemble
+regions. That is the job of Rust, and it never belonged across the GIL.</p>
+<p>The result is that the read side of the Python API is <em>free</em>. The footer that
+<code>open</code> already fetched answers every call above. A service that lists a
+thousand datasets and their schemas therefore issues one request.</p>
+<h2 id="what-metadata-gives-you">What metadata gives you</h2>
+<p>It is enough to build a catalogue, to check an ingest, or to choose the
+datasets worth a fetch:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">detail</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"dimensions"</span><span class="p">]</span>     <span class="c1"># {'lat': 4, 'lon': 6}</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"coordinates"</span><span class="p">]</span>    <span class="c1"># ['lat', 'lon']</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"attributes"</span><span class="p">]</span>     <span class="c1"># decoded, markers hidden</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"ordinal"</span><span class="p">]</span>        <span class="c1"># stable position in the collection</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"segment_range"</span><span class="p">]</span>  <span class="c1"># [start, end] byte offsets in data.atlas</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="k">for</span> <span class="n">array</span> <span class="ow">in</span> <span class="n">detail</span><span class="p">[</span><span class="s2">"arrays"</span><span class="p">]:</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">array</span><span class="p">[</span><span class="s2">"dtype"</span><span class="p">],</span> <span class="n">array</span><span class="p">[</span><span class="s2">"shape"</span><span class="p">],</span> <span class="n">array</span><span class="p">[</span><span class="s2">"chunk_shape"</span><span class="p">]</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">array</span><span class="p">[</span><span class="s2">"fill_value"</span><span class="p">],</span> <span class="n">array</span><span class="p">[</span><span class="s2">"attributes"</span><span class="p">],</span> <span class="n">array</span><span class="p">[</span><span class="s2">"is_coordinate"</span><span class="p">]</span>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>    <span class="n">array</span><span class="p">[</span><span class="s2">"stats"</span><span class="p">]</span>       <span class="c1"># {'min', 'max', 'null_count', 'row_count'}</span>
 </span></code></pre></div>
-
-    <div class="doc doc-contents ">
-
-        <p>Open an existing store.</p>
-
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-function">
-
-
-<h3 id="atlas.Atlas.add_xarray_dataset" class="doc doc-heading">
-            <span class="doc doc-object-name doc-function-name">add_xarray_dataset</span>
-
-
-</h3>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">add_xarray_dataset</span><span class="p">(</span><span class="n">ds</span><span class="p">:</span> <span class="n">Dataset</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">chunks</span><span class="p">:</span> <span class="n">Optional</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]]]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="n">fill_value</span><span class="p">:</span> <span class="n">Union</span><span class="p">[</span><span class="n">Any</span><span class="p">,</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">],</span> <span class="kc">None</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<p>The statistics deserve a mention. Each array records a minimum, a maximum, and
+how many elements are missing. That is often the real question. <em>Does this
+dataset hold anything above 30?</em> The answer costs no data byte.</p>
+<p><code>info</code> answers the same question for the collection:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">stats</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">collection</span><span class="p">)[</span><span class="s2">"array_stats"</span><span class="p">]</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">stats</span><span class="p">[</span><span class="s2">"temperature"</span><span class="p">]</span>   <span class="c1"># {'min': 1.0, 'max': 26.0, 'null_count': 0, 'row_count': 72}</span>
 </span></code></pre></div>
-
-    <div class="doc doc-contents ">
-
-        <p>Append an atlas dataset populated from an <code>xarray.Dataset</code>.</p>
-<p>The per-variable write loop runs against the <strong>core</strong> <code>DatasetView</code>,
-so this convenience adds no per-chunk overhead.</p>
-
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-function">
-
-
-<h3 id="atlas.Atlas.open_as_xarray_dataset" class="doc doc-heading">
-            <span class="doc doc-object-name doc-function-name">open_as_xarray_dataset</span>
-
-
-</h3>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">open_as_xarray_dataset</span><span class="p">(</span><span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">xr</span><span class="o">.</span><span class="n">Dataset</span>
+<p>The counts add up over every live dataset that holds the array. The minimum is
+the smallest of the minimums. The maximum is the largest of the maximums.
+One call covers a thousand datasets. It costs one range read.</p>
+<p>To filter across a whole collection costs nothing beyond the footer reads:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">hot</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    <span class="n">name</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="n">collection</span><span class="p">)</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="k">for</span> <span class="n">array</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="n">name</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="k">if</span> <span class="n">array</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"temperature"</span> <span class="ow">and</span> <span class="n">array</span><span class="p">[</span><span class="s2">"stats"</span><span class="p">][</span><span class="s2">"max"</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">30</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="p">]</span>
 </span></code></pre></div>
-
-    <div class="doc doc-contents ">
-
-        <p>Open <code>name</code> and return it as an <code>xarray.Dataset</code> (eager read).</p>
-
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-function">
-
-
-<h3 id="atlas.Atlas.open_as_many_xarray_dataset" class="doc doc-heading">
-            <span class="doc doc-object-name doc-function-name">open_as_many_xarray_dataset</span>
-
-
-</h3>
-<div class="language-python doc-signature highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nf">open_as_many_xarray_dataset</span><span class="p">(</span><span class="n">names</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">str</span><span class="p">],</span> <span class="n">concat_dim</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s1">&#39;dataset&#39;</span><span class="p">,</span> <span class="n">parallel</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">xr</span><span class="o">.</span><span class="n">Dataset</span>
+<h2 id="reading-values-in-rust">Reading values, in Rust</h2>
+<div class="language-rust highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="k">use</span><span class="w"> </span><span class="n">atlas</span><span class="p">::</span><span class="n">Atlas</span><span class="p">;</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="kd">let</span><span class="w"> </span><span class="n">atlas</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Atlas</span><span class="p">::</span><span class="n">open_path</span><span class="p">(</span><span class="s">"/data/weather"</span><span class="p">).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="kd">let</span><span class="w"> </span><span class="n">ds</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">atlas</span><span class="p">.</span><span class="n">dataset</span><span class="p">(</span><span class="s">"jan_2024"</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1">// The whole array.</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="kd">let</span><span class="w"> </span><span class="n">all</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ds</span><span class="p">.</span><span class="n">read_array</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">f32</span><span class="o">&gt;</span><span class="p">(</span><span class="s">"temperature"</span><span class="p">,</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[],</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[]).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1">// A window: only the chunks it overlaps are fetched.</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="kd">let</span><span class="w"> </span><span class="n">window</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ds</span><span class="p">.</span><span class="n">read_array</span><span class="p">::</span><span class="o">&lt;</span><span class="kt">f32</span><span class="o">&gt;</span><span class="p">(</span><span class="s">"temperature"</span><span class="p">,</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">3</span><span class="p">],</span><span class="w"> </span><span class="fm">vec!</span><span class="p">[</span><span class="mi">2</span><span class="p">,</span><span class="w"> </span><span class="mi">2</span><span class="p">]).</span><span class="k">await</span><span class="o">?</span><span class="p">;</span>
 </span></code></pre></div>
-
-    <div class="doc doc-contents ">
-
-        <p>Open many datasets stacked along <code>concat_dim</code> as one <code>xr.Dataset</code>.</p>
-
-
-    </div>
-
-</div>
-
-
-
-  </div>
-
-    </div>
-
-</div>
+<p>The first read on a dataset opens its segment. Every later read reuses it. See
+<code>docs/read-path.md</code> in the repository for the cost of each call.</p>
+<h2 id="if-you-need-values-in-python-anyway">If you need values in Python anyway</h2>
+<p>Three options, from the least work to the most.</p>
+<p><strong>Keep the source data.</strong> A collection comes from NetCDF files, and those files
+are the obvious place to read a value. <code>xr.open_dataset</code> on the original is
+simpler than anything else here.</p>
+<p><strong>Extract a segment.</strong> <code>segment_range</code> gives the byte offsets of a complete
+<code>array-format</code> file that stands alone. Cut it out, and any <code>array-format</code>
+reader opens it:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)[</span><span class="s2">"segment_range"</span><span class="p">]</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">blob</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">collection</span><span class="si">}</span><span class="s2">/data.atlas"</span><span class="p">,</span> <span class="s2">"rb"</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()[</span><span class="n">start</span><span class="p">:</span><span class="n">end</span><span class="p">]</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nb">open</span><span class="p">(</span><span class="s2">"2024-01.af"</span><span class="p">,</span> <span class="s2">"wb"</span><span class="p">)</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span>
+</span></code></pre></div>
+<p><strong>Write a small Rust service.</strong> The values often travel over a network anyway.
+To read them in Rust and serve the result is then simpler than a path through
+Python.</p>
 
 
 

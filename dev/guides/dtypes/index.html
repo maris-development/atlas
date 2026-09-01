@@ -9,10 +9,10 @@
       
       
       
-        <link rel="prev" href="../attributes/">
+        <link rel="prev" href="../removing/">
       
       
-        <link rel="next" href="../xarray/">
+        <link rel="next" href="../reading-data/">
       
       
         
@@ -348,6 +348,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The atlas command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../vs-zarr-netcdf/" class="md-nav__link">
         
   
@@ -390,10 +417,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
             
   
   
@@ -411,8 +438,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -429,14 +456,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../datasets-and-arrays/" class="md-nav__link">
+      <a href="../creating/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Datasets and arrays
+    Creating a collection
   
 
     
@@ -457,14 +484,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../durability/" class="md-nav__link">
+      <a href="../inspecting/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Durability and flushing
+    Inspecting a collection
   
 
     
@@ -485,42 +512,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../codecs-and-meta/" class="md-nav__link">
+      <a href="../removing/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Codecs and metadata
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../attributes/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Attributes
+    Removing datasets
   
 
     
@@ -601,24 +600,41 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#array-dtypes" class="md-nav__link">
+  <a href="#the-mapping" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Array dtypes
+        The mapping
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The mapping">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#datetime-and-timedelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        datetime and timedelta
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#rules-write_array-enforces" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#strings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rules write_array enforces
+        Strings
       
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -634,10 +650,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#0-d-scalar-arrays" class="md-nav__link">
+  <a href="#0-d-scalars" class="md-nav__link">
     <span class="md-ellipsis">
       
-        0-D scalar arrays
+        0-D scalars
       
     </span>
   </a>
@@ -645,10 +661,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#reserved-for-a-later-release" class="md-nav__link">
+  <a href="#not-yet-available-as-array-types" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Reserved for a later release
+        Not yet available as array types
       
     </span>
   </a>
@@ -656,10 +672,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#compatibility-with-numpy-operations" class="md-nav__link">
+  <a href="#attribute-types" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Compatibility with numpy operations
+        Attribute types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading values
       
     </span>
   </a>
@@ -682,126 +709,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../xarray/" class="md-nav__link">
+      <a href="../reading-data/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    xarray integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../dask/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Dask streaming and lazy reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../bulk-reads/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Bulk reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../stats/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Stats and scans
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../shared-arrays/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Shared physical arrays
+    Reading data
   
 
     
@@ -884,53 +799,8 @@
   
   
     <li class="md-nav__item">
-      <a href="../../benchmarks/" class="md-nav__link">
+      <a href="../../reference/api/" class="md-nav__link">
         
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Benchmarks
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
-            
   
   
   <span class="md-ellipsis">
@@ -944,107 +814,7 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    API reference
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/atlas/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Atlas
-  
-
-    
-  </span>
-  
-  
-
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/dataset-view/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DatasetView
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/xarray-accessor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    xarray accessor
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
     </li>
   
 
@@ -1076,24 +846,41 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#array-dtypes" class="md-nav__link">
+  <a href="#the-mapping" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Array dtypes
+        The mapping
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The mapping">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#datetime-and-timedelta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        datetime and timedelta
       
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
-  <a href="#rules-write_array-enforces" class="md-nav__link">
+        
+          <li class="md-nav__item">
+  <a href="#strings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Rules write_array enforces
+        Strings
       
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -1109,10 +896,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#0-d-scalar-arrays" class="md-nav__link">
+  <a href="#0-d-scalars" class="md-nav__link">
     <span class="md-ellipsis">
       
-        0-D scalar arrays
+        0-D scalars
       
     </span>
   </a>
@@ -1120,10 +907,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#reserved-for-a-later-release" class="md-nav__link">
+  <a href="#not-yet-available-as-array-types" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Reserved for a later release
+        Not yet available as array types
       
     </span>
   </a>
@@ -1131,10 +918,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#compatibility-with-numpy-operations" class="md-nav__link">
+  <a href="#attribute-types" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Compatibility with numpy operations
+        Attribute types
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-values" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading values
       
     </span>
   </a>
@@ -1162,128 +960,119 @@
 
 
 <h1 id="supported-dtypes">Supported dtypes</h1>
-<h2 id="array-dtypes">Array dtypes</h2>
-<p>Pass these as the <code>dtype=</code> argument to
-<a href="../../reference/dataset-view/"><code>DatasetView.define_array</code></a>. The numpy type
-on the right is what <code>write_array</code> / <code>read_array</code> expect and return.</p>
+<p>What a NetCDF variable becomes when <code>atlas create</code> ingests it.</p>
+<h2 id="the-mapping">The mapping</h2>
 <table>
 <thead>
 <tr>
-<th>atlas dtype</th>
-<th>numpy dtype</th>
-<th>Range / notes</th>
+<th>numpy</th>
+<th>atlas</th>
+<th>notes</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>"int8"</code></td>
-<td><code>np.int8</code></td>
-<td>−128 … 127</td>
+<td><code>int8</code> … <code>int64</code></td>
+<td><code>int8</code> … <code>int64</code></td>
+<td>straight through</td>
 </tr>
 <tr>
-<td><code>"int16"</code></td>
-<td><code>np.int16</code></td>
-<td>−32 768 … 32 767</td>
+<td><code>uint8</code> … <code>uint64</code></td>
+<td><code>uint8</code> … <code>uint64</code></td>
+<td>straight through</td>
 </tr>
 <tr>
-<td><code>"int32"</code></td>
-<td><code>np.int32</code></td>
-<td>±2 147 483 647</td>
+<td><code>float32</code>, <code>float64</code></td>
+<td><code>float32</code>, <code>float64</code></td>
+<td>IEEE-754</td>
 </tr>
 <tr>
-<td><code>"int64"</code></td>
-<td><code>np.int64</code></td>
-<td>±9.2e18</td>
+<td><code>datetime64[ns]</code></td>
+<td><code>timestamp_nanoseconds</code></td>
+<td>int64 ns from the epoch, bit for bit</td>
 </tr>
 <tr>
-<td><code>"uint8"</code></td>
-<td><code>np.uint8</code></td>
-<td>0 … 255</td>
+<td><code>timedelta64[*]</code></td>
+<td><code>int64</code></td>
+<td>converted to ns, with a unit marker</td>
 </tr>
 <tr>
-<td><code>"uint16"</code></td>
-<td><code>np.uint16</code></td>
-<td>0 … 65 535</td>
+<td><code>object</code> / <code>S&lt;n&gt;</code> / <code>U&lt;n&gt;</code></td>
+<td><code>string</code></td>
+<td>variable-length UTF-8</td>
 </tr>
 <tr>
-<td><code>"uint32"</code></td>
-<td><code>np.uint32</code></td>
-<td>0 … 4.3e9</td>
-</tr>
-<tr>
-<td><code>"uint64"</code></td>
-<td><code>np.uint64</code></td>
-<td>0 … 1.8e19</td>
-</tr>
-<tr>
-<td><code>"float32"</code></td>
-<td><code>np.float32</code></td>
-<td>IEEE-754 single</td>
-</tr>
-<tr>
-<td><code>"float64"</code></td>
-<td><code>np.float64</code></td>
-<td>IEEE-754 double</td>
-</tr>
-<tr>
-<td><code>"timestamp_nanoseconds"</code> (aliases: <code>"timestamp_ns"</code>, <code>"datetime64[ns]"</code>)</td>
-<td><code>np.datetime64[ns]</code></td>
-<td>int64 ns since the Unix epoch; round-trips bit-identically</td>
-</tr>
-<tr>
-<td><code>"string"</code></td>
-<td><code>object</code> (Python <code>str</code>)</td>
-<td>Variable-length UTF-8. <code>\|S&lt;n&gt;</code> / <code>\|U&lt;n&gt;</code> inputs are accepted and stored vlen.</td>
+<td>anything else</td>
+<td>none</td>
+<td><code>NotImplementedError</code></td>
 </tr>
 </tbody>
 </table>
-<h2 id="rules-write_array-enforces">Rules <code>write_array</code> enforces</h2>
-<ul>
-<li><strong>Exact dtype match.</strong> No silent widening. <code>int32</code> data into an <code>int64</code>
-  array raises <code>TypeError</code>. Promote explicitly with <code>data.astype(np.int64)</code>.</li>
-<li><strong>C-contiguous buffer.</strong> Pass <code>np.ascontiguousarray(data)</code> if the array
-  came from a slice or a transpose.</li>
-<li><strong><code>start + data.shape ≤ array.shape</code></strong> per axis. Out-of-bounds writes
-  raise.</li>
-<li><strong>Strings.</strong> <code>object</code> arrays of Python <code>str</code> (or <code>bytes</code>) are accepted.
-  Fixed-size <code>\|S5</code> / <code>\|U10</code> arrays are converted to vlen UTF-8 on write
-  and come back as Python <code>str</code>. Surrogate-escaped strings (common from
-  netCDF backends) are sanitised on the way in.</li>
-<li><strong><code>datetime64</code>.</strong> Only the <code>[ns]</code> resolution is supported. Other
-  resolutions raise — convert with <code>data.astype("datetime64[ns]")</code> first.</li>
-</ul>
+<p><code>atlas show</code> prints the atlas name, so a <code>datetime64[ns]</code> variable appears as
+<code>timestamp_nanoseconds</code>.</p>
+<h3 id="datetime-and-timedelta">datetime and timedelta</h3>
+<p>Atlas supports the <code>[ns]</code> resolution of <code>datetime64</code> alone. It rejects every
+other resolution. Convert with <code>.astype("datetime64[ns]")</code> before you write the
+NetCDF file.</p>
+<p>Atlas has no duration type. A <code>timedelta64</code> therefore stores as int64
+nanoseconds, with a <code>_pyatlas_timedelta</code> marker attribute that records the
+unit. That marker is enough to rebuild the duration. It appears as a plain
+attribute.</p>
+<h3 id="strings">Strings</h3>
+<p>An <code>object</code> array of Python <code>str</code> or <code>bytes</code> becomes a variable-length UTF-8
+string. So does a fixed-size <code>|S5</code> or <code>|U10</code> array. A surrogate-escaped string
+is common from a netCDF backend that decoded bytes with
+<code>errors="surrogateescape"</code>. Atlas cleans one on the way in.</p>
+<p>Atlas cannot store a <strong>null</strong> string. Each missing cell, <code>None</code> or <code>NaN</code>, takes
+the fill value instead. A <code>UserWarning</code> names the count.</p>
 <h2 id="fill-values">Fill values</h2>
-<p><code>fill_value=</code> on <code>define_array</code> must match the array dtype:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span><span class="s2">&quot;temp&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="nb">float</span><span class="p">(</span><span class="s2">&quot;nan&quot;</span><span class="p">))</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span><span class="s2">&quot;count&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;int32&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span><span class="s2">&quot;label&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;string&quot;</span><span class="p">,</span> <span class="o">...</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="s2">&quot;UNKNOWN&quot;</span><span class="p">)</span>
+<p>A fill value is what a read returns for a cell nobody wrote. Such a cell costs
+no byte on disk. <code>null_count</code> in the <a href="../inspecting/#statistics">statistics</a>
+counts them.</p>
+<p>xarray defaults to <code>mask_and_scale=True</code>. A read of a NetCDF file then leaves
+<code>NaN</code> and <code>NaT</code> where data is missing, and moves <code>_FillValue</code> into
+<code>var.encoding</code>. Atlas records those cells as never written, and gives each
+array a default sentinel:</p>
+<table>
+<thead>
+<tr>
+<th>dtype</th>
+<th>default fill</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>float32</code>, <code>float64</code></td>
+<td><code>NaN</code></td>
+</tr>
+<tr>
+<td><code>timestamp_nanoseconds</code></td>
+<td><code>NaT</code> (<code>i64::MIN</code>)</td>
+</tr>
+<tr>
+<td><code>string</code></td>
+<td><code>""</code></td>
+</tr>
+<tr>
+<td>integers</td>
+<td>none</td>
+</tr>
+</tbody>
+</table>
+<p>The <code>_FillValue</code> attribute of a variable beats the default. It stores as the
+fill of the array, and not as an attribute.</p>
+<p>Check what landed:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">arrays</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]:</span> <span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]}</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">arrays</span><span class="p">[</span><span class="s2">"temperature"</span><span class="p">][</span><span class="s2">"fill_value"</span><span class="p">]</span>
 </span></code></pre></div>
-<ul>
-<li>Integer / <code>timestamp_*</code> arrays: Python <code>int</code>, range-checked at the call
-  site. Out-of-range raises <code>OverflowError</code>; wrong type raises <code>TypeError</code>.</li>
-<li>Float arrays: Python <code>float</code> (or <code>int</code>, which is coerced). <code>float("nan")</code>
-  is allowed.</li>
-<li>String arrays: Python <code>str</code>.</li>
-</ul>
-<p>Reading an <strong>unwritten</strong> cell returns the fill value. Any <strong>written</strong> cell
-equal to the fill value is counted as a null in
-<a href="../stats/"><code>array_stats</code></a> — this is how the null count works for
-<code>NaN</code>-filled float arrays.</p>
-<p>When ingesting via <a href="../xarray/#fill-values-and-missing-data"><code>add_xarray_dataset</code></a>
-you don't pass these by hand — float arrays default to a <code>NaN</code> fill, datetimes
-to <code>NaT</code>, and strings to <code>""</code>, so cells masked by <code>mask_and_scale=True</code> are
-recorded as null automatically.</p>
-<h2 id="0-d-scalar-arrays">0-D scalar arrays</h2>
-<p>Every dtype above also works at <code>shape=[]</code> (and <code>chunk_shape=[]</code>,
-implicitly). The numpy round-trip is a 0-D ndarray:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span><span class="s2">&quot;scale&quot;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float64&quot;</span><span class="p">,</span> <span class="n">dims</span><span class="o">=</span><span class="p">[],</span> <span class="n">shape</span><span class="o">=</span><span class="p">[])</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="n">ds</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span><span class="s2">&quot;scale&quot;</span><span class="p">,</span> <span class="n">start</span><span class="o">=</span><span class="p">[],</span> <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mf">3.14</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float64</span><span class="p">))</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="n">scalar</span> <span class="o">=</span> <span class="n">ds</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;scale&quot;</span><span class="p">)</span>     <span class="c1"># -&gt; np.ndarray, shape=(), dtype=float64</span>
+<h2 id="0-d-scalars">0-D scalars</h2>
+<p>Every dtype works at <code>shape=[]</code>. A NetCDF product uses one for a value such as
+a <code>TRAJECTORY</code> identifier. Those are single values, and they belong to the
+array data, not to the attributes. They come through unchanged:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>    string TRAJECTORY() ;
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>        // stats: count=1  min="6801adf"  max="6801adf"
 </span></code></pre></div>
-<p>0-D arrays are useful for things like NetCDF <code>TRAJECTORY</code> identifiers or
-single-value metadata that's logically <em>array data</em>, not an attribute.</p>
-<h2 id="reserved-for-a-later-release">Reserved for a later release</h2>
+<h2 id="not-yet-available-as-array-types">Not yet available as array types</h2>
 <table>
 <thead>
 <tr>
@@ -1293,29 +1082,36 @@ single-value metadata that's logically <em>array data</em>, not an attribute.</p
 </thead>
 <tbody>
 <tr>
-<td><code>bool</code> arrays</td>
-<td><strong>Attribute-only</strong> this release (limitation of the underlying <code>array-format</code> crate).</td>
+<td><code>bool</code></td>
+<td>The <code>array-format</code> crate below supports no <code>bool</code> element type</td>
 </tr>
 <tr>
-<td><code>binary</code> (variable-length bytes)</td>
-<td>Reserved; not exposed yet.</td>
+<td><code>binary</code></td>
+<td>Not exposed yet</td>
 </tr>
 <tr>
-<td><code>list[...]</code> (variable-length list of T)</td>
-<td>Reserved; not exposed yet.</td>
-</tr>
-<tr>
-<td><code>fixed_size_list[..., N]</code></td>
-<td>Reserved; not exposed yet.</td>
+<td><code>list[...]</code>, <code>fixed_size_list[..., N]</code></td>
+<td>Not exposed yet</td>
 </tr>
 </tbody>
 </table>
-<p>If you need a packed bool array today, use <code>uint8</code> and document the
-convention.</p>
-<h2 id="compatibility-with-numpy-operations">Compatibility with numpy operations</h2>
-<p>The numpy arrays that come back from <code>read_array</code> are owned buffers, not
-views into the atlas-managed memory. You can mutate / reshape / <code>astype</code>
-them freely; the next <code>read_array</code> call returns a fresh buffer.</p>
+<p>A NetCDF file with a boolean variable fails the ingest. Store it as <code>uint8</code>,
+and write the convention down.</p>
+<p>All four work as an <strong>attribute</strong> value, which is where they usually appear.</p>
+<h2 id="attribute-types">Attribute types</h2>
+<p>An attribute takes its type apart from an array, and the range is wider. Any
+scalar works: <code>bool</code>, the integer widths, a float, a string, bytes, and a
+nanosecond timestamp. A list of one of those works too.</p>
+<p>Some xarray attributes are no scalar. A nested dict, a ragged list, and a numpy
+array each encode as JSON on the way in. <code>describe</code> decodes them again:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)[</span><span class="s2">"attributes"</span><span class="p">]</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># {'month': 1, 'bounds': [1.0, 2.0], 'nested': {'a': 1}}</span>
+</span></code></pre></div>
+<p>A value JSON cannot serialize fails the ingest.</p>
+<h2 id="reading-values">Reading values</h2>
+<p>Rust reads array data. The table above names the type to ask for. <code>"float32"</code>
+is <code>f32</code>. <code>"timestamp_nanoseconds"</code> is <code>TimestampNs</code>. <code>"string"</code> is <code>String</code>.
+See <a href="../reading-data/">Reading data</a>.</p>
 
 
 

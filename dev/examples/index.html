@@ -12,7 +12,7 @@
         <link rel="prev" href="../guides/cloud-storage/">
       
       
-        <link rel="next" href="../benchmarks/">
+        <link rel="next" href="../reference/api/">
       
       
         
@@ -348,6 +348,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The atlas command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../vs-zarr-netcdf/" class="md-nav__link">
         
   
@@ -390,10 +417,10 @@
         
           
         
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
             
   
   
@@ -411,8 +438,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -429,14 +456,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../guides/datasets-and-arrays/" class="md-nav__link">
+      <a href="../guides/creating/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Datasets and arrays
+    Creating a collection
   
 
     
@@ -457,14 +484,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../guides/durability/" class="md-nav__link">
+      <a href="../guides/inspecting/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Durability and flushing
+    Inspecting a collection
   
 
     
@@ -485,42 +512,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../guides/codecs-and-meta/" class="md-nav__link">
+      <a href="../guides/removing/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Codecs and metadata
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/attributes/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Attributes
+    Removing datasets
   
 
     
@@ -569,126 +568,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../guides/xarray/" class="md-nav__link">
+      <a href="../guides/reading-data/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    xarray integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/dask/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Dask streaming and lazy reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/bulk-reads/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Bulk reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/stats/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Stats and scans
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../guides/shared-arrays/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Shared physical arrays
+    Reading data
   
 
     
@@ -804,10 +691,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#running" class="md-nav__link">
+  <a href="#the-same-thing-on-the-command-line" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Running
+        The same thing on the command line
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rust-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rust examples
       
     </span>
   </a>
@@ -840,53 +738,8 @@
   
   
     <li class="md-nav__item">
-      <a href="../benchmarks/" class="md-nav__link">
+      <a href="../reference/api/" class="md-nav__link">
         
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Benchmarks
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
-            
   
   
   <span class="md-ellipsis">
@@ -900,107 +753,7 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    API reference
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/atlas/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Atlas
-  
-
-    
-  </span>
-  
-  
-
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/dataset-view/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DatasetView
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../reference/xarray-accessor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    xarray accessor
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
     </li>
   
 
@@ -1032,10 +785,21 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#running" class="md-nav__link">
+  <a href="#the-same-thing-on-the-command-line" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Running
+        The same thing on the command line
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#rust-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rust examples
       
     </span>
   </a>
@@ -1074,10 +838,9 @@
 
 
 <h1 id="examples">Examples</h1>
-<p>Runnable scripts live in
+<p>The runnable scripts sit in
 <a href="https://github.com/maris-development/atlas/tree/main/atlas-python/examples"><code>atlas-python/examples/</code></a>.
-Each one is self-contained, writes to a temp directory, and runs in under
-a minute.</p>
+Each one stands alone, writes to a temporary directory, and runs in seconds.</p>
 <table>
 <thead>
 <tr>
@@ -1087,56 +850,38 @@ a minute.</p>
 </thead>
 <tbody>
 <tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/01_basics.py"><code>01_basics.py</code></a></td>
-<td>Create a store, define arrays, set attributes, reopen, read back. The minimal end-to-end loop.</td>
+<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/01_library.py"><code>01_library.py</code></a></td>
+<td>All five operations as a library. It builds a collection from NetCDF files, lists it, summarizes it, and inspects one dataset with its statistics. It then removes datasets, and shows the container stay put.</td>
 </tr>
 <tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/02_xarray.py"><code>02_xarray.py</code></a></td>
-<td>Round-trip an <code>xr.Dataset</code> through atlas using both <code>atlas.add_xarray_dataset(...)</code> and the <code>ds.atlas.write(...)</code> accessor.</td>
-</tr>
-<tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/03_dask_streaming.py"><code>03_dask_streaming.py</code></a></td>
-<td>Stream a dask-chunked <code>xr.Dataset</code> into atlas one chunk at a time, preserving the chunk shape on disk; read back lazily.</td>
-</tr>
-<tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/04_meta_formats.py"><code>04_meta_formats.py</code></a></td>
-<td>Compare the six metadata format × compression combinations (<code>atlas.json</code>, <code>atlas.msgpack.zst</code>, …) on a 30-dataset store. Confirms auto-detection on reopen.</td>
-</tr>
-<tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/05_codecs.py"><code>05_codecs.py</code></a></td>
-<td>Compare <code>zstd</code> / <code>lz4</code> / <code>none</code> array codecs on a smooth <code>float32</code> field. Demonstrates per-array codec recording.</td>
-</tr>
-<tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/06_stats_scan.py"><code>06_stats_scan.py</code></a></td>
-<td>Find the dataset with the highest peak reading across a fleet of 32 sensors by scanning <code>array_stats</code> only — no raw data read.</td>
-</tr>
-<tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/07_shared_arrays.py"><code>07_shared_arrays.py</code></a></td>
-<td>50 datasets sharing 2 physical array files. Prints the on-disk directory listing to confirm the layout.</td>
-</tr>
-<tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/08_object_store.py"><code>08_object_store.py</code></a></td>
-<td>Pass an <a href="https://github.com/developmentseed/obstore">obstore</a> handle into <code>Atlas.create</code> / <code>Atlas.open</code> and run the full create / read / xarray / stats loop against it. Demos with <code>obstore.store.LocalStore</code> (no credentials); S3 / GCS / Azure variants are commented in at the top. Requires <code>pip install "atlas-python[cloud]"</code>.</td>
-</tr>
-<tr>
-<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/09_missing_data.py"><code>09_missing_data.py</code></a></td>
-<td>Ingest an <code>xr.Dataset</code> with masked (missing) cells across float / datetime / string / integer vars. Shows the default <code>NaN</code> / <code>NaT</code> / <code>""</code> fills, the resulting <code>null_count</code>, and overriding per variable with <code>fill_value=</code>.</td>
+<td><a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/02_object_store.py"><code>02_object_store.py</code></a></td>
+<td>The same five, against an obstore handle. It uses <code>LocalStore</code>, so it needs no credential. The S3, GCS, and Azure lines sit in a comment at the top. It needs <code>pip install "atlas-python[cloud]"</code>.</td>
 </tr>
 </tbody>
 </table>
-<h2 id="running">Running</h2>
-<p>From a clone of the repository:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>atlas-python/examples/01_basics.py
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>python<span class="w"> </span>atlas-python/examples/01_library.py
 </span></code></pre></div>
-<p>Every script can be run standalone; there's no shared state between them.
-Each writes into a <code>tempfile.TemporaryDirectory()</code> that cleans up on exit.</p>
+<h2 id="the-same-thing-on-the-command-line">The same thing on the command line</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>atlas<span class="w"> </span>ls<span class="w">     </span>/data/collection
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>atlas<span class="w"> </span>info<span class="w">   </span>/data/collection
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>atlas<span class="w"> </span>show<span class="w">   </span>/data/collection<span class="w"> </span><span class="m">2024</span>-01
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>atlas<span class="w"> </span>rm<span class="w">     </span>/data/collection<span class="w"> </span><span class="m">2024</span>-02<span class="w"> </span><span class="m">2024</span>-03
+</span></code></pre></div>
+<p>See <a href="../cli/">The <code>atlas</code> command</a>.</p>
+<h2 id="rust-examples">Rust examples</h2>
+<p>Rust reads array data, so the read-side examples sit in
+<a href="https://github.com/maris-development/atlas/tree/main/examples"><code>examples/</code></a>
+at the repository root:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>cargo<span class="w"> </span>run<span class="w"> </span>--example<span class="w"> </span>lifecycle<span class="w">       </span><span class="c1"># build, read, delete, reopen</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>cargo<span class="w"> </span>run<span class="w"> </span>--example<span class="w"> </span>sensor_fleet<span class="w">    </span><span class="c1"># many small datasets in one file</span>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>cargo<span class="w"> </span>run<span class="w"> </span>--example<span class="w"> </span>weather_store<span class="w">   </span><span class="c1"># an object store, read lazily</span>
+</span></code></pre></div>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><a href="../quickstart/">Quickstart</a> — the same idea as <code>01_basics.py</code>, walked
-  through line-by-line.</li>
-<li><a href="../guides/datasets-and-arrays/">Datasets and arrays</a> — the mental model
-  behind every script.</li>
-<li><a href="../benchmarks/">Benchmarks</a> — the cross-backend harness, also runnable.</li>
+<li><a href="../quickstart/">Quickstart</a>. The same ground, line by line.</li>
+<li><a href="../guides/creating/">Creating a collection</a>. Chunking, errors, and memory.</li>
+<li><a href="../guides/reading-data/">Reading data</a>. Why the read examples are in Rust.</li>
 </ul>
 
 

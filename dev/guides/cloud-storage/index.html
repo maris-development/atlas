@@ -9,7 +9,7 @@
       
       
       
-        <link rel="prev" href="../shared-arrays/">
+        <link rel="prev" href="../reading-data/">
       
       
         <link rel="next" href="../../examples/">
@@ -348,6 +348,33 @@
   
   
     <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The atlas command
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../vs-zarr-netcdf/" class="md-nav__link">
         
   
@@ -390,10 +417,10 @@
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
             
   
   
@@ -411,8 +438,8 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
-          <label class="md-nav__title" for="__nav_5">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
             <span class="md-nav__icon md-icon"></span>
             
   
@@ -429,14 +456,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../datasets-and-arrays/" class="md-nav__link">
+      <a href="../creating/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Datasets and arrays
+    Creating a collection
   
 
     
@@ -457,14 +484,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../durability/" class="md-nav__link">
+      <a href="../inspecting/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Durability and flushing
+    Inspecting a collection
   
 
     
@@ -485,42 +512,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../codecs-and-meta/" class="md-nav__link">
+      <a href="../removing/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Codecs and metadata
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../attributes/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Attributes
+    Removing datasets
   
 
     
@@ -569,126 +568,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../xarray/" class="md-nav__link">
+      <a href="../reading-data/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    xarray integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../dask/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Dask streaming and lazy reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../bulk-reads/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Bulk reads
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../stats/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Stats and scans
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../shared-arrays/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Shared physical arrays
+    Reading data
   
 
     
@@ -780,10 +667,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quickstart-s3" class="md-nav__link">
+  <a href="#quickstart-on-s3" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quickstart — S3
+        Quickstart on S3
       
     </span>
   </a>
@@ -802,10 +689,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#readwrite-parity" class="md-nav__link">
+  <a href="#what-it-costs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Read/write parity
+        What it costs
       
     </span>
   </a>
@@ -813,10 +700,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#limitations-specific-to-cloud-backends" class="md-nav__link">
+  <a href="#writing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Limitations specific to cloud backends
+        Writing
       
     </span>
   </a>
@@ -824,10 +711,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-zarr-netcdf-still-win-on-the-cloud" class="md-nav__link">
+  <a href="#removing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where Zarr / netCDF still win on the cloud
+        Removing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-and-read-only-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP and read-only backends
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#version-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Version note
       
     </span>
   </a>
@@ -884,53 +793,8 @@
   
   
     <li class="md-nav__item">
-      <a href="../../benchmarks/" class="md-nav__link">
+      <a href="../../reference/api/" class="md-nav__link">
         
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Benchmarks
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-    
-      
-      
-  
-  
-  
-  
-    
-    
-    
-    
-      
-        
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
-      
-        
-        
-          
-        
-        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
-        
-          
-          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
-            
   
   
   <span class="md-ellipsis">
@@ -944,107 +808,7 @@
   
   
 
-            <span class="md-nav__icon md-icon"></span>
-          </label>
-        
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
-          <label class="md-nav__title" for="__nav_8">
-            <span class="md-nav__icon md-icon"></span>
-            
-  
-    API reference
-  
-
-          </label>
-          <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/atlas/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Atlas
-  
-
-    
-  </span>
-  
-  
-
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/dataset-view/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    DatasetView
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/xarray-accessor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    xarray accessor
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-          </ul>
-        </nav>
-      
     </li>
   
 
@@ -1087,10 +851,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quickstart-s3" class="md-nav__link">
+  <a href="#quickstart-on-s3" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quickstart — S3
+        Quickstart on S3
       
     </span>
   </a>
@@ -1109,10 +873,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#readwrite-parity" class="md-nav__link">
+  <a href="#what-it-costs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Read/write parity
+        What it costs
       
     </span>
   </a>
@@ -1120,10 +884,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#limitations-specific-to-cloud-backends" class="md-nav__link">
+  <a href="#writing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Limitations specific to cloud backends
+        Writing
       
     </span>
   </a>
@@ -1131,10 +895,32 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-zarr-netcdf-still-win-on-the-cloud" class="md-nav__link">
+  <a href="#removing" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where Zarr / netCDF still win on the cloud
+        Removing
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#http-and-read-only-backends" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HTTP and read-only backends
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#version-note" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Version note
       
     </span>
   </a>
@@ -1162,176 +948,110 @@
 
 
 <h1 id="cloud-storage-s3-gcs-azure">Cloud storage (S3, GCS, Azure)</h1>
-<p><a href="../../reference/atlas/"><code>Atlas.create</code></a> and
-<a href="../../reference/atlas/"><code>Atlas.open</code></a> both accept an
-<a href="https://github.com/developmentseed/obstore">obstore</a> store handle in
-place of a filesystem path. obstore is a thin Python binding around the
-Rust <a href="https://docs.rs/object_store"><code>object_store</code></a> crate, so any
-backend obstore supports — S3, GCS, Azure Blob, HTTP, local fs — works
-with atlas, transparently. atlas itself never sees the credentials.</p>
+<p>Every operation takes a URL, or an
+<a href="https://github.com/developmentseed/obstore">obstore</a> store handle, in place of
+a filesystem path. obstore is a thin Python binding around the Rust
+<a href="https://docs.rs/object_store"><code>object_store</code></a> crate. Every backend it supports
+therefore works with atlas: S3, GCS, Azure Blob, HTTP, and local. Atlas never
+sees a credential.</p>
+<p>The single-file format suits object storage well. A write is one multipart
+upload. An open is one range read of the tail, whatever the number of datasets.</p>
 <h2 id="install">Install</h2>
-<p><code>obstore</code> is an optional dependency:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;atlas-python[cloud]&quot;</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"atlas-python[cloud]"</span>
 </span></code></pre></div>
-<p>Equivalent to <code>pip install atlas-python obstore</code>. Without it, atlas continues
-to work against local filesystem paths exactly as before.</p>
-<h2 id="quickstart-s3">Quickstart — S3</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">obstore</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">obs</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># Construct the obstore handle. Credentials are loaded from the standard</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># AWS env vars / ~/.aws/credentials by default; pass them explicitly to</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># override.</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">store</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">S3Store</span><span class="p">(</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>    <span class="s2">&quot;my-bucket&quot;</span><span class="p">,</span>
-</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>    <span class="n">prefix</span><span class="o">=</span><span class="s2">&quot;stores/jan_2024&quot;</span><span class="p">,</span>
-</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>    <span class="n">region</span><span class="o">=</span><span class="s2">&quot;us-east-1&quot;</span><span class="p">,</span>
-</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="p">)</span>
-</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>
-</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1"># Pass the handle into Atlas.create / Atlas.open exactly where you would</span>
-</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="c1"># have passed a path. Everything below this line — define_array,</span>
-</span><span id="__span-1-16"><a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="c1"># write_array, set_attribute, flush, add_xarray_dataset, open_as_xarray_dataset, all of</span>
-</span><span id="__span-1-17"><a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="c1"># the bulk reads — works identically against S3.</span>
-</span><span id="__span-1-18"><a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a><span class="k">with</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="s2">&quot;zstd&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">atlas</span><span class="p">:</span>
-</span><span id="__span-1-19"><a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>    <span class="n">ds</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">create_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span>
-</span><span id="__span-1-20"><a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">define_array</span><span class="p">(</span>
-</span><span id="__span-1-21"><a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>        <span class="s2">&quot;temperature&quot;</span><span class="p">,</span>
-</span><span id="__span-1-22"><a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>        <span class="n">dtype</span><span class="o">=</span><span class="s2">&quot;float32&quot;</span><span class="p">,</span>
-</span><span id="__span-1-23"><a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>        <span class="n">dims</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;lat&quot;</span><span class="p">,</span> <span class="s2">&quot;lon&quot;</span><span class="p">],</span>
-</span><span id="__span-1-24"><a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>        <span class="n">shape</span><span class="o">=</span><span class="p">[</span><span class="mi">8</span><span class="p">,</span> <span class="mi">16</span><span class="p">],</span>
-</span><span id="__span-1-25"><a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>        <span class="n">chunk_shape</span><span class="o">=</span><span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">8</span><span class="p">],</span>
-</span><span id="__span-1-26"><a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>    <span class="p">)</span>
-</span><span id="__span-1-27"><a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">write_array</span><span class="p">(</span>
-</span><span id="__span-1-28"><a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>        <span class="s2">&quot;temperature&quot;</span><span class="p">,</span>
-</span><span id="__span-1-29"><a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>        <span class="n">start</span><span class="o">=</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">],</span>
-</span><span id="__span-1-30"><a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>        <span class="n">data</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">full</span><span class="p">((</span><span class="mi">8</span><span class="p">,</span> <span class="mi">16</span><span class="p">),</span> <span class="mf">20.0</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">),</span>
-</span><span id="__span-1-31"><a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>    <span class="p">)</span>
-</span><span id="__span-1-32"><a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>    <span class="n">ds</span><span class="o">.</span><span class="n">set_attribute</span><span class="p">(</span><span class="s2">&quot;month&quot;</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
-</span><span id="__span-1-33"><a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>
-</span><span id="__span-1-34"><a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a><span class="c1"># Reopen — codec / meta format / meta compression are auto-detected just</span>
-</span><span id="__span-1-35"><a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a><span class="c1"># like on local fs.</span>
-</span><span id="__span-1-36"><a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a><span class="n">atlas2</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">store</span><span class="p">)</span>
-</span><span id="__span-1-37"><a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a><span class="n">arr</span> <span class="o">=</span> <span class="n">atlas2</span><span class="o">.</span><span class="n">open_dataset</span><span class="p">(</span><span class="s2">&quot;jan_2024&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">read_array</span><span class="p">(</span><span class="s2">&quot;temperature&quot;</span><span class="p">)</span>
+<p>That equals <code>pip install atlas-python obstore</code>. Without it, atlas still works
+against a local filesystem path.</p>
+<h2 id="quickstart-on-s3">Quickstart on S3</h2>
+<p>A URL is the simplest form. The credentials come from the usual environment
+variables, or from <code>~/.aws/credentials</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>s3://my-bucket/collections/2024<span class="w"> </span>--region<span class="w"> </span>eu-west-1
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>atlas<span class="w"> </span>ls<span class="w">   </span>s3://my-bucket/collections/2024<span class="w"> </span>--region<span class="w"> </span>eu-west-1
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>atlas<span class="w"> </span>info<span class="w"> </span>s3://my-bucket/collections/2024<span class="w"> </span>--region<span class="w"> </span>eu-west-1
+</span></code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="s2">"s3://my-bucket/collections/2024"</span><span class="p">,</span> <span class="n">region</span><span class="o">=</span><span class="s2">"eu-west-1"</span><span class="p">)</span>
+</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="s2">"s3://my-bucket/collections/2024"</span><span class="p">,</span> <span class="n">region</span><span class="o">=</span><span class="s2">"eu-west-1"</span><span class="p">)</span>
+</span></code></pre></div>
+<p>Build the handle yourself for anything a URL cannot say, such as a custom
+credential provider or a retry policy. Then pass it in:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">obstore</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">obs</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">store</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">S3Store</span><span class="p">(</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    <span class="s2">"my-bucket"</span><span class="p">,</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    <span class="n">prefix</span><span class="o">=</span><span class="s2">"collections/2024"</span><span class="p">,</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    <span class="n">region</span><span class="o">=</span><span class="s2">"eu-west-1"</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="p">)</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">store</span><span class="p">)</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="n">store</span><span class="p">)</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="n">atlas</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">store</span><span class="p">,</span> <span class="p">[</span><span class="s2">"2024-02"</span><span class="p">])</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="n">atlas</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">store</span><span class="p">)</span>
+</span></code></pre></div>
+<p>The objects land under the store's prefix:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>s3://my-bucket/collections/2024/data.atlas
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>s3://my-bucket/collections/2024/deleted.mask     (only after a delete)
 </span></code></pre></div>
 <h2 id="other-backends">Other backends</h2>
-<p>The same pattern works for every obstore backend:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">obstore</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">obs</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Google Cloud Storage</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="n">gcs</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">GCSStore</span><span class="p">(</span><span class="s2">&quot;my-bucket&quot;</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">&quot;stores/jan_2024&quot;</span><span class="p">)</span>
-</span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">gcs</span><span class="p">)</span>
-</span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
-</span><span id="__span-2-8"><a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># Azure Blob Storage</span>
-</span><span id="__span-2-9"><a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="n">azure</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">AzureStore</span><span class="p">(</span><span class="n">container_name</span><span class="o">=</span><span class="s2">&quot;my-container&quot;</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">&quot;stores/jan_2024&quot;</span><span class="p">)</span>
-</span><span id="__span-2-10"><a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">azure</span><span class="p">)</span>
-</span><span id="__span-2-11"><a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>
-</span><span id="__span-2-12"><a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># Generic HTTP (read-only)</span>
-</span><span id="__span-2-13"><a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="n">http</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">HttpStore</span><span class="o">.</span><span class="n">from_url</span><span class="p">(</span><span class="s2">&quot;https://example.com/atlas-store/&quot;</span><span class="p">)</span>
-</span><span id="__span-2-14"><a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">http</span><span class="p">)</span>
-</span><span id="__span-2-15"><a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
-</span><span id="__span-2-16"><a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="c1"># Plain local filesystem via obstore (equivalent to passing a path string)</span>
-</span><span id="__span-2-17"><a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="n">local</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">LocalStore</span><span class="p">(</span><span class="s2">&quot;/tmp/my_store&quot;</span><span class="p">)</span>
-</span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="n">atlas</span><span class="o">.</span><span class="n">Atlas</span><span class="o">.</span><span class="n">open</span><span class="p">(</span><span class="n">local</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">store</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">GCSStore</span><span class="p">(</span><span class="s2">"my-bucket"</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">"collections/2024"</span><span class="p">)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">store</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">AzureStore</span><span class="p">(</span><span class="s2">"my-container"</span><span class="p">,</span> <span class="n">prefix</span><span class="o">=</span><span class="s2">"collections/2024"</span><span class="p">)</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">store</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">HTTPStore</span><span class="p">(</span><span class="s2">"https://example.org/data"</span><span class="p">)</span>   <span class="c1"># read-only</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="n">store</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">LocalStore</span><span class="p">(</span><span class="s2">"/data"</span><span class="p">)</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="n">store</span> <span class="o">=</span> <span class="n">obs</span><span class="o">.</span><span class="n">store</span><span class="o">.</span><span class="n">MemoryStore</span><span class="p">()</span>
 </span></code></pre></div>
-<p>See <a href="https://developmentseed.org/obstore/latest/">obstore's
-documentation</a> for the full
-list of backends and their credential / region / endpoint options.</p>
-<p>A complete runnable script — create / write / <code>add_xarray_dataset</code> /
-<code>open_as_xarray_dataset</code> / <code>array_stats</code>, then reopen and verify — lives at
-<a href="https://github.com/maris-development/atlas/blob/main/atlas-python/examples/08_object_store.py"><code>atlas-python/examples/08_object_store.py</code></a>.
-It uses <code>LocalStore</code> by default so it runs without credentials; swap in
-the S3 / GCS / Azure block at the top to point at a real backend.</p>
-<h2 id="readwrite-parity">Read/write parity</h2>
-<p>Everything atlas exposes works identically against any obstore backend:</p>
+<p>Nothing else in your code changes.</p>
+<h2 id="what-it-costs">What it costs</h2>
 <table>
 <thead>
 <tr>
 <th>Operation</th>
-<th>Local fs</th>
-<th>Cloud (S3 / GCS / Azure)</th>
+<th>Requests</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>create_dataset</code> / <code>open_dataset</code> / <code>delete_dataset</code></td>
-<td>✓</td>
-<td>✓</td>
+<td><code>list_datasets</code>, <code>describe</code>, <code>info</code></td>
+<td>1 head + 1 range read of the tail, plus 1 for the mask if present</td>
 </tr>
 <tr>
-<td><code>define_array</code> / <code>write_array</code> / <code>read_array</code> / <code>delete_array</code></td>
-<td>✓</td>
-<td>✓</td>
+<td><code>remove</code></td>
+<td>The above, plus 1 GET and 1 PUT of the small mask</td>
 </tr>
 <tr>
-<td><code>set_attribute</code> / <code>get_attribute</code> / <code>attributes</code></td>
-<td>✓</td>
-<td>✓</td>
+<td><code>create</code></td>
+<td>1 multipart upload</td>
 </tr>
 <tr>
-<td><code>flush</code> (the single durability boundary)</td>
-<td>fsync + rename</td>
-<td>atomic PutObject</td>
-</tr>
-<tr>
-<td><code>compact</code></td>
-<td>rewrite array files</td>
-<td>rewrite array files</td>
-</tr>
-<tr>
-<td><code>read_array_across_stacked</code> / <code>open_as_many_xarray_dataset</code></td>
-<td>tokio fan-out</td>
-<td>tokio fan-out, capped at <code>num_cpus</code></td>
-</tr>
-<tr>
-<td>Dask streaming <code>add_xarray_dataset</code></td>
-<td>✓</td>
-<td>✓</td>
-</tr>
-<tr>
-<td>Dask-backed lazy reads (<code>open_as_xarray_dataset</code>)</td>
-<td>threaded scheduler only</td>
-<td>threaded scheduler only</td>
+<td>Reading one array region (Rust)</td>
+<td>2 to open the segment, then 1 per chunk touched</td>
 </tr>
 </tbody>
 </table>
-<p>The <a href="../durability/">single-flush durability model</a> carries over cleanly:
-on S3, <code>PutObject</code> is atomic for the full object, so the in-memory
-buffering of <code>flush()</code> maps onto one <code>PutObject</code> per touched array file
-plus one for the metadata. Flush latency will be noticeably higher than
-on local fs — call <code>flush()</code> at coarse grain (per-batch, not
-per-dataset).</p>
-<h2 id="limitations-specific-to-cloud-backends">Limitations specific to cloud backends</h2>
-<ul>
-<li><strong>Bulk-read concurrency.</strong> <code>read_array_across_stacked</code> and
-  <code>open_as_many_xarray_dataset</code> dispatch on the shared tokio runtime via a <code>JoinSet</code>
-  capped at <code>num_cpus</code>. On S3 the bottleneck is usually HTTP
-  concurrency, not CPU — let us know if you'd find a configurable cap
-  useful.</li>
-<li><strong><code>MemoryStore</code> can't be reconstructed across the FFI boundary.</strong>
-  <code>obstore.store.MemoryStore</code> keeps its data in process memory and can't
-  be cloned through <code>pyo3-object_store</code>'s external-store path. Use
-  <code>obstore.store.LocalStore</code> (against a <code>tempfile.TemporaryDirectory</code>)
-  if you want an ephemeral in-tests backend.</li>
-<li><strong>A warning on first store reconstruction.</strong> You will see one
-  <code>RuntimeWarning: Successfully reconstructed a store defined in another
-  Python module. Connection pooling will not be shared across store
-  instances.</code> per store. This is expected — atlas re-creates obstore's
-  ObjectStore on its side of the FFI boundary using the constructor
-  arguments. Connection pools are independent but functionality is
-  identical.</li>
-<li><strong>Single writer.</strong> atlas assumes a single process is writing to any
-  given store at a time. The cloud backends inherit that constraint —
-  concurrent writers from multiple processes are not coordinated.</li>
-</ul>
-<h2 id="where-zarr-netcdf-still-win-on-the-cloud">Where Zarr / netCDF still win on the cloud</h2>
-<p>See <a href="../../vs-zarr-netcdf/">vs Zarr / netCDF</a> — Zarr is still the natural
-choice for write-heavy workloads with many independent processes (chunk
-files are independent and parallel-writable), and netCDF has the
-longest tooling lineage. atlas is a focused fit for "N small datasets,
-same schema" workloads where the bulk-read APIs pay back the per-store
-constraint.</p>
+<p>An open scales with nothing. Ten datasets and a million cost one request each,
+because the footer is one object range.</p>
+<h2 id="writing">Writing</h2>
+<p>The output streams through a buffered writer. That writer becomes a multipart
+upload once the data passes its buffer. The footer sits at the end, which makes
+this one forward pass. Nothing needs a rewrite.</p>
+<p>Nothing at the target is readable until the writer finishes. A process that
+dies during a write leaves no trailer, and the path then opens as no
+collection. The lifecycle rule of the bucket clears an incomplete multipart
+upload, as usual.</p>
+<h2 id="removing">Removing</h2>
+<p><code>remove</code> reads the mask again before it writes. Two processes that remove
+different datasets therefore both survive. Two removes that interleave between
+the read and the write still lose one. An object store has no compare-and-swap
+here. Serialize the removes against one collection if that matters.</p>
+<h2 id="http-and-read-only-backends">HTTP and read-only backends</h2>
+<p>A read-only store serves <code>ls</code>, <code>show</code>, and <code>info</code>. <code>create</code> and <code>rm</code> need a
+PUT, so they fail.</p>
+<h2 id="version-note">Version note</h2>
+<p>An obstore handle reaches atlas in one of two ways. It passes straight through
+when both sides build against the same <code>pyo3-object_store</code>. Otherwise atlas
+rebuilds it from its configuration. A rebuild raises a <code>RuntimeWarning</code> about
+connection pooling. It works for any store with a URL or a path to rebuild
+from. A <code>MemoryStore</code> has nothing to rebuild, so it needs two matching builds.</p>
 
 
 
