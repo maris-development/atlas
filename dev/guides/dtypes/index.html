@@ -1062,7 +1062,7 @@ array a default sentinel:</p>
 <p>The <code>_FillValue</code> attribute of a variable beats the default. It stores as the
 fill of the array, and not as an attribute.</p>
 <p>Check what landed:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">arrays</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]:</span> <span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">arrays</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]:</span> <span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]}</span>
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">arrays</span><span class="p">[</span><span class="s2">"temperature"</span><span class="p">][</span><span class="s2">"fill_value"</span><span class="p">]</span>
 </span></code></pre></div>
 <h2 id="0-d-scalars">0-D scalars</h2>
@@ -1096,7 +1096,10 @@ array data, not to the attributes. They come through unchanged:</p>
 </tbody>
 </table>
 <p>A NetCDF file with a boolean variable fails the ingest. Store it as <code>uint8</code>,
-and write the convention down.</p>
+and write the convention down. To keep the rest of that file, pass
+<code>--skip-unsupported</code>, or <code>on_unsupported="skip"</code>. That leaves out the one array
+and lands everything else. See
+<a href="../creating/#one-bad-array-not-one-bad-file">Creating a collection</a>.</p>
 <p>All four work as an <strong>attribute</strong> value, which is where they usually appear.</p>
 <h2 id="attribute-types">Attribute types</h2>
 <p>An attribute takes its type apart from an array, and the range is wider. Any
@@ -1104,7 +1107,7 @@ scalar works: <code>bool</code>, the integer widths, a float, a string, bytes, a
 nanosecond timestamp. A list of one of those works too.</p>
 <p>Some xarray attributes are no scalar. A nested dict, a ragged list, and a numpy
 array each encode as JSON on the way in. <code>describe</code> decodes them again:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)[</span><span class="s2">"attributes"</span><span class="p">]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"attributes"</span><span class="p">]</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># {'month': 1, 'bounds': [1.0, 2.0], 'nested': {'a': 1}}</span>
 </span></code></pre></div>
 <p>A value JSON cannot serialize fails the ingest.</p>

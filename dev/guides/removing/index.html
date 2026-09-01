@@ -882,9 +882,9 @@
 
 
 <h1 id="removing-datasets">Removing datasets</h1>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="s2">"/data/collection"</span><span class="p">,</span> <span class="p">[</span><span class="s2">"2024-02"</span><span class="p">,</span> <span class="s2">"2024-03"</span><span class="p">])</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="s2">"/data/collection"</span><span class="p">,</span> <span class="p">[</span><span class="s2">"2024-02.nc"</span><span class="p">,</span> <span class="s2">"2024-03.nc"</span><span class="p">])</span>
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-02<span class="w"> </span><span class="m">2024</span>-03
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-02.nc<span class="w"> </span><span class="m">2024</span>-03.nc
 </span></code></pre></div>
 <p>One call, whatever the number of datasets. A name is a dataset name, or the
 NetCDF path the dataset came from. The list that built a collection can
@@ -922,7 +922,7 @@ collection. <code>remove</code> then reads the mask and writes it once. A loop o
 <p>A repeated name counts once. The order of the list does not matter, because the
 mask holds a sorted set of ordinals.</p>
 <p>The same holds on the command line, up to the argument limit of your shell:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-01<span class="w"> </span><span class="m">2024</span>-02<span class="w"> </span><span class="m">2024</span>-03
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-01.nc<span class="w"> </span><span class="m">2024</span>-02.nc<span class="w"> </span><span class="m">2024</span>-03.nc
 </span></code></pre></div>
 <p>For a list too long for one command line, call <code>atlas.remove</code> from Python.</p>
 <h2 id="removing-something-absent">Removing something absent</h2>
@@ -931,8 +931,8 @@ mask holds a sorted set of ordinals.</p>
 </span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># AtlasError: not in the collection (or already removed): nope</span>
 </span></code></pre></div>
 <p><code>missing_ok</code> reports it instead:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="p">[</span><span class="s2">"2024-01"</span><span class="p">,</span> <span class="s2">"nope"</span><span class="p">],</span> <span class="n">missing_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">result</span><span class="p">[</span><span class="s2">"removed"</span><span class="p">]</span>   <span class="c1"># ['2024-01']</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="p">[</span><span class="s2">"2024-01.nc"</span><span class="p">,</span> <span class="s2">"nope"</span><span class="p">],</span> <span class="n">missing_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="n">result</span><span class="p">[</span><span class="s2">"removed"</span><span class="p">]</span>   <span class="c1"># ['2024-01.nc']</span>
 </span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="n">result</span><span class="p">[</span><span class="s2">"missing"</span><span class="p">]</span>   <span class="c1"># ['nope']</span>
 </span></code></pre></div>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span>nope<span class="w"> </span>--missing-ok

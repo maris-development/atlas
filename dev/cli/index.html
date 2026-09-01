@@ -408,6 +408,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#create" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -418,6 +429,17 @@
   
     <nav class="md-nav" aria-label="create">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unsupported-dtypes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unsupported dtypes
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#large-files" class="md-nav__link">
@@ -846,6 +868,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#logging" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Logging
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#create" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -856,6 +889,17 @@
   
     <nav class="md-nav" aria-label="create">
       <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#unsupported-dtypes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unsupported dtypes
+      
+    </span>
+  </a>
+  
+</li>
         
           <li class="md-nav__item">
   <a href="#large-files" class="md-nav__link">
@@ -972,14 +1016,27 @@ operation.</p>
 <code>az://...</code>, or <code>https://...</code>. A remote source needs
 <code>pip install "atlas-python[cloud]"</code>. See
 <a href="../guides/cloud-storage/">Cloud storage</a>.</p>
-<p>Every subcommand takes <code>--json</code>, and the remote flags <code>--region</code>,
-<code>--endpoint</code>, and <code>--anonymous</code>.</p>
-<h2 id="create">create</h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection
+<p>Every subcommand takes <code>--json</code> and <code>--log-file PATH</code>, plus the remote flags
+<code>--region</code>, <code>--endpoint</code>, and <code>--anonymous</code>.</p>
+<h2 id="logging">Logging</h2>
+<p><code>--log-file PATH</code> appends every error and warning to a file, with the reason:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-unsupported<span class="w"> </span>--log-file<span class="w"> </span>ingest.log
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>$<span class="w"> </span>cat<span class="w"> </span>ingest.log
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.cli:<span class="w"> </span>atlas<span class="w"> </span><span class="m">0</span>.16.1:<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>...
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.ops:<span class="w"> </span>ingesting<span class="w"> </span><span class="m">2</span><span class="w"> </span>file<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>into<span class="w"> </span>/data/collection
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>WARNING<span class="w"> </span>atlas.ops:<span class="w"> </span>/data/nc/buoy.nc:<span class="w"> </span>skipped<span class="w"> </span>array<span class="w"> </span><span class="s1">'flag'</span><span class="w"> </span>of<span class="w"> </span>dtype<span class="w"> </span>bool:<span class="w"> </span>numpy<span class="w"> </span>dtype<span class="w"> </span>dtype<span class="o">(</span><span class="s1">'bool'</span><span class="o">)</span><span class="w"> </span>is<span class="w"> </span>not<span class="w"> </span>supported<span class="w"> </span>by<span class="w"> </span>atlas<span class="w"> </span><span class="o">(</span>supported:<span class="w"> </span>...<span class="o">)</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.ops:<span class="w"> </span>wrote<span class="w"> </span><span class="m">1</span><span class="w"> </span>dataset<span class="o">(</span>s<span class="o">)</span><span class="p">;</span><span class="w"> </span>skipped<span class="w"> </span><span class="m">0</span><span class="w"> </span>file<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>and<span class="w"> </span><span class="m">1</span><span class="w"> </span>array<span class="o">(</span>s<span class="o">)</span>
 </span></code></pre></div>
-<p>Each NetCDF file becomes one dataset, named after its stem. <code>2024-01.nc</code>
-becomes <code>2024-01</code>. The files land in sorted order, which makes the ordinals of
-a collection reproducible.</p>
+<p>The file opens in append mode. Each line names the file it came from, so a
+large ingest stays readable.</p>
+<p>This is separate from <code>ATLAS_LOG</code>, which turns on the Rust <code>tracing</code> stream to
+stderr.</p>
+<h2 id="create">create</h2>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection
+</span></code></pre></div>
+<p>Each NetCDF file becomes one dataset, named after the file. <code>2024-01.nc</code>
+becomes <code>2024-01.nc</code>, suffix and all. The files land in sorted order, which
+makes the ordinals of a collection reproducible.</p>
 <p>Nothing at the destination is readable until every file lands, with the footer.
 A failure part-way leaves no collection, and not a partial one.</p>
 <table>
@@ -1015,18 +1072,36 @@ A failure part-way leaves no collection, and not a partial one.</p>
 <td>Skip files that fail instead of abandoning the collection</td>
 </tr>
 <tr>
+<td><code>--skip-unsupported</code></td>
+<td>Leave out an array of an unsupported dtype, and keep the rest of the dataset</td>
+</tr>
+<tr>
 <td><code>-q</code>, <code>--quiet</code></td>
 <td>Do not list a file as it lands</td>
 </tr>
 </tbody>
 </table>
 <p>Progress goes to stderr, so a pipe still reads stdout.</p>
+<h3 id="unsupported-dtypes">Unsupported dtypes</h3>
+<p>Atlas cannot store every numpy dtype. <code>bool</code> is the common case. By default one
+such variable fails the whole file:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>atlas:<span class="w"> </span>/data/nc/buoy.nc:<span class="w"> </span>numpy<span class="w"> </span>dtype<span class="w"> </span>dtype<span class="o">(</span><span class="s1">'bool'</span><span class="o">)</span><span class="w"> </span>is<span class="w"> </span>not<span class="w"> </span>supported<span class="w"> </span>by<span class="w"> </span>atlas<span class="w"> </span>...
+</span></code></pre></div>
+<p><code>--skip-unsupported</code> narrows that to the one array:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-unsupported
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>skipped<span class="w"> </span>array<span class="w"> </span>buoy/flag<span class="w"> </span><span class="o">(</span>bool<span class="o">)</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="m">1</span><span class="w"> </span>dataset<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>written<span class="w"> </span>to<span class="w"> </span>/data/collection
+</span></code></pre></div>
+<p>Every other array of that dataset lands, with its attributes. <code>--json</code> reports
+the skipped arrays under <code>skipped_arrays</code>, with the dataset, the dtype, and the
+reason. See <a href="../guides/dtypes/">Supported dtypes</a>.</p>
 <h3 id="large-files">Large files</h3>
 <p>Each file reads in dask blocks. A file far larger than memory therefore
 streams, and does not load whole. <code>--chunk-size</code> sets the block size. It is
 about the memory ceiling per variable:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># A machine with little RAM</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--chunk-size<span class="w"> </span>32MiB
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># A machine with little RAM</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--chunk-size<span class="w"> </span>32MiB
 </span></code></pre></div>
 <p>Those blocks also become the stored chunk shape. A reader later fetches at that
 size. <code>--open-chunks</code> picks another strategy:</p>
@@ -1061,28 +1136,28 @@ size. <code>--open-chunks</code> picks another strategy:</p>
 </tr>
 </tbody>
 </table>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Match the NetCDF file's own chunking exactly</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--open-chunks<span class="w"> </span>native
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Per-dimension, explicitly</span>
-</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--open-chunks<span class="w"> </span><span class="s1">'{"time": 100, "lat": -1}'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Match the NetCDF file's own chunking exactly</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--open-chunks<span class="w"> </span>native
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># Per-dimension, explicitly</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--open-chunks<span class="w"> </span><span class="s1">'{"time": 100, "lat": -1}'</span>
 </span></code></pre></div>
 <p><code>--chunks</code> overrides the <em>stored</em> shape, and does not change how the file
 reads. Each misaligned block then costs a read-modify-write. Use
 <code>--open-chunks</code> when it can say what you want.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># One collection from a tree of monthly directories, tolerating bad files</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--recursive<span class="w"> </span>--skip-errors
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># A big grid, chunked for selective reads, straight to a bucket</span>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>s3://bucket/2024<span class="w"> </span>--chunk-size<span class="w"> </span>64MiB<span class="w"> </span>--region<span class="w"> </span>eu-west-1
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># One collection from a tree of monthly directories, tolerating bad files</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--recursive<span class="w"> </span>--skip-errors
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># A big grid, chunked for selective reads, straight to a bucket</span>
+</span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>s3://bucket/2024<span class="w"> </span>--chunk-size<span class="w"> </span>64MiB<span class="w"> </span>--region<span class="w"> </span>eu-west-1
 </span></code></pre></div>
 <h2 id="rm">rm</h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-02<span class="w"> </span><span class="m">2024</span>-03
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-02.nc<span class="w"> </span><span class="m">2024</span>-03.nc
 </span></code></pre></div>
 <p>This removes several datasets in one call. A name is a dataset name, or the
 NetCDF path the dataset came from. The list that built a collection can
 therefore tear part of it down:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span>/data/nc/2024-02.nc
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>atlas<span class="w"> </span>rm<span class="w"> </span>/data/collection<span class="w"> </span>/data/nc/2024-02.nc
 </span></code></pre></div>
 <p>This writes the deletion mask beside the container. <strong>The container does not
 change.</strong> It reclaims no space, and moves no ordinal. Rebuild the collection to
@@ -1093,41 +1168,41 @@ Python.</p>
 <p><code>--missing-ok</code> reports a name that is absent or already removed, instead of an
 error.</p>
 <h2 id="ls">ls</h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>ls<span class="w"> </span>/data/collection
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="m">2024</span>-01
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="m">2024</span>-02
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="m">2024</span>-03
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>ls<span class="w"> </span>/data/collection
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="m">2024</span>-01.nc
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="m">2024</span>-02.nc
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="m">2024</span>-03.nc
 </span></code></pre></div>
 <p>One name per line, in write order. A removed dataset does not appear. This
 costs one range read of the container tail, whatever the size of the
 collection.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>atlas<span class="w"> </span>ls<span class="w"> </span>s3://bucket/2024<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l<span class="w">          </span><span class="c1"># how many datasets</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>atlas<span class="w"> </span>ls<span class="w"> </span>/data/collection<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.<span class="w">    </span><span class="c1"># as a JSON array</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>atlas<span class="w"> </span>ls<span class="w"> </span>s3://bucket/2024<span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l<span class="w">          </span><span class="c1"># how many datasets</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>atlas<span class="w"> </span>ls<span class="w"> </span>/data/collection<span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>.<span class="w">    </span><span class="c1"># as a JSON array</span>
 </span></code></pre></div>
 <h2 id="show">show</h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>show<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-01
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>dataset<span class="w"> </span><span class="m">2024</span>-01<span class="w"> </span><span class="o">{</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>dimensions:
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="w">    </span><span class="nv">lat</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="w">    </span><span class="nv">lon</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-6"><a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>variables:
-</span><span id="__span-9-7"><a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">    </span>float64<span class="w"> </span>lat<span class="o">(</span>lat<span class="o">)</span><span class="w"> </span><span class="p">;</span><span class="w">  </span>//<span class="w"> </span>coordinate
-</span><span id="__span-9-8"><a id="__codelineno-9-8" name="__codelineno-9-8" href="#__codelineno-9-8"></a><span class="w">        </span>lat:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span>nan<span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-9"><a id="__codelineno-9-9" name="__codelineno-9-9" href="#__codelineno-9-9"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">4</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">3</span>.0
-</span><span id="__span-9-10"><a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="w">    </span>float32<span class="w"> </span>temperature<span class="o">(</span>lat,<span class="w"> </span>lon<span class="o">)</span><span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-11"><a id="__codelineno-9-11" name="__codelineno-9-11" href="#__codelineno-9-11"></a><span class="w">        </span>temperature:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span>nan<span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-12"><a id="__codelineno-9-12" name="__codelineno-9-12" href="#__codelineno-9-12"></a><span class="w">        </span>temperature:units<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"celsius"</span><span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-13"><a id="__codelineno-9-13" name="__codelineno-9-13" href="#__codelineno-9-13"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">24</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">1</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">24</span>.0
-</span><span id="__span-9-14"><a id="__codelineno-9-14" name="__codelineno-9-14" href="#__codelineno-9-14"></a><span class="w">    </span>string<span class="w"> </span>station<span class="o">(</span>lat<span class="o">)</span><span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-15"><a id="__codelineno-9-15" name="__codelineno-9-15" href="#__codelineno-9-15"></a><span class="w">        </span>station:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">""</span><span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-16"><a id="__codelineno-9-16" name="__codelineno-9-16" href="#__codelineno-9-16"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">4</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="s2">"a"</span><span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="s2">"d"</span>
-</span><span id="__span-9-17"><a id="__codelineno-9-17" name="__codelineno-9-17" href="#__codelineno-9-17"></a>
-</span><span id="__span-9-18"><a id="__codelineno-9-18" name="__codelineno-9-18" href="#__codelineno-9-18"></a>//<span class="w"> </span>global<span class="w"> </span>attributes:
-</span><span id="__span-9-19"><a id="__codelineno-9-19" name="__codelineno-9-19" href="#__codelineno-9-19"></a><span class="w">        </span>:month<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-20"><a id="__codelineno-9-20" name="__codelineno-9-20" href="#__codelineno-9-20"></a><span class="w">        </span>:source<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"example"</span><span class="w"> </span><span class="p">;</span>
-</span><span id="__span-9-21"><a id="__codelineno-9-21" name="__codelineno-9-21" href="#__codelineno-9-21"></a>
-</span><span id="__span-9-22"><a id="__codelineno-9-22" name="__codelineno-9-22" href="#__codelineno-9-22"></a>//<span class="w"> </span>ordinal<span class="w"> </span><span class="m">0</span>,<span class="w"> </span>segment<span class="w"> </span>bytes<span class="w"> </span><span class="m">8</span>..1691
-</span><span id="__span-9-23"><a id="__codelineno-9-23" name="__codelineno-9-23" href="#__codelineno-9-23"></a><span class="o">}</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>show<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-01.nc
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>dataset<span class="w"> </span><span class="m">2024</span>-01.nc<span class="w"> </span><span class="o">{</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>dimensions:
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="nv">lat</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">    </span><span class="nv">lon</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>variables:
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">    </span>float64<span class="w"> </span>lat<span class="o">(</span>lat<span class="o">)</span><span class="w"> </span><span class="p">;</span><span class="w">  </span>//<span class="w"> </span>coordinate
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">        </span>lat:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span>nan<span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">4</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">3</span>.0
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">    </span>float32<span class="w"> </span>temperature<span class="o">(</span>lat,<span class="w"> </span>lon<span class="o">)</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">        </span>temperature:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span>nan<span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">        </span>temperature:units<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"celsius"</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">24</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">1</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">24</span>.0
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">    </span>string<span class="w"> </span>station<span class="o">(</span>lat<span class="o">)</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="w">        </span>station:_FillValue<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">""</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="w">        </span>//<span class="w"> </span>stats:<span class="w"> </span><span class="nv">count</span><span class="o">=</span><span class="m">4</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="s2">"a"</span><span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="s2">"d"</span>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a>//<span class="w"> </span>global<span class="w"> </span>attributes:
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="w">        </span>:month<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a><span class="w">        </span>:source<span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s2">"example"</span><span class="w"> </span><span class="p">;</span>
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21" href="#__codelineno-12-21"></a>
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22" href="#__codelineno-12-22"></a>//<span class="w"> </span>ordinal<span class="w"> </span><span class="m">0</span>,<span class="w"> </span>segment<span class="w"> </span>bytes<span class="w"> </span><span class="m">8</span>..1691
+</span><span id="__span-12-23"><a id="__codelineno-12-23" name="__codelineno-12-23" href="#__codelineno-12-23"></a><span class="o">}</span>
 </span></code></pre></div>
 <p>The shape follows <code>ncdump -h</code> on purpose, with two additions.</p>
 <p><strong>Statistics</strong> under each variable. <code>count</code> is the total element count.
@@ -1139,20 +1214,20 @@ footer holds them. To print them therefore needs no more I/O than <code>ls</code
 and any <code>array-format</code> reader opens the result.</p>
 <p><code>--json</code> prints the whole structure. Script against that form.</p>
 <h2 id="info">info</h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>info<span class="w"> </span>/data/collection
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>collection<span class="w"> </span>/data/collection
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span>format<span class="w"> </span>version<span class="w">    </span><span class="m">1</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span>created<span class="w">           </span><span class="m">2026</span>-08-31T08:32:57Z
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span>codec<span class="w">             </span>zstd
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span>container<span class="w"> </span>size<span class="w">    </span><span class="m">5</span>.4<span class="w"> </span>KiB
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span>datasets<span class="w">          </span><span class="m">2</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span>removed<span class="w">           </span><span class="m">1</span><span class="w"> </span><span class="o">(</span>of<span class="w"> </span><span class="m">3</span><span class="w"> </span>written<span class="p">;</span><span class="w"> </span>space<span class="w"> </span>not<span class="w"> </span>reclaimed<span class="o">)</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span>interned<span class="w"> </span>schemas<span class="w">  </span><span class="m">1</span>
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span>distinct<span class="w"> </span>arrays<span class="w">   </span><span class="m">4</span>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">      </span>lat<span class="w">          </span><span class="nv">count</span><span class="o">=</span><span class="m">8</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">3</span>.0
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">      </span>lon<span class="w">          </span><span class="nv">count</span><span class="o">=</span><span class="m">12</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">5</span>.0
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">      </span>station<span class="w">      </span><span class="nv">count</span><span class="o">=</span><span class="m">8</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="s2">"a"</span><span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="s2">"d"</span>
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">      </span>temperature<span class="w">  </span><span class="nv">count</span><span class="o">=</span><span class="m">48</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">1</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">26</span>.0
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>info<span class="w"> </span>/data/collection
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>collection<span class="w"> </span>/data/collection
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">  </span>format<span class="w"> </span>version<span class="w">    </span><span class="m">1</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">  </span>created<span class="w">           </span><span class="m">2026</span>-08-31T08:32:57Z
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="w">  </span>codec<span class="w">             </span>zstd
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="w">  </span>container<span class="w"> </span>size<span class="w">    </span><span class="m">5</span>.4<span class="w"> </span>KiB
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a><span class="w">  </span>datasets<span class="w">          </span><span class="m">2</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="w">  </span>removed<span class="w">           </span><span class="m">1</span><span class="w"> </span><span class="o">(</span>of<span class="w"> </span><span class="m">3</span><span class="w"> </span>written<span class="p">;</span><span class="w"> </span>space<span class="w"> </span>not<span class="w"> </span>reclaimed<span class="o">)</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9" href="#__codelineno-13-9"></a><span class="w">  </span>interned<span class="w"> </span>schemas<span class="w">  </span><span class="m">1</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10" href="#__codelineno-13-10"></a><span class="w">  </span>distinct<span class="w"> </span>arrays<span class="w">   </span><span class="m">4</span>
+</span><span id="__span-13-11"><a id="__codelineno-13-11" name="__codelineno-13-11" href="#__codelineno-13-11"></a><span class="w">      </span>lat<span class="w">          </span><span class="nv">count</span><span class="o">=</span><span class="m">8</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">3</span>.0
+</span><span id="__span-13-12"><a id="__codelineno-13-12" name="__codelineno-13-12" href="#__codelineno-13-12"></a><span class="w">      </span>lon<span class="w">          </span><span class="nv">count</span><span class="o">=</span><span class="m">12</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">0</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">5</span>.0
+</span><span id="__span-13-13"><a id="__codelineno-13-13" name="__codelineno-13-13" href="#__codelineno-13-13"></a><span class="w">      </span>station<span class="w">      </span><span class="nv">count</span><span class="o">=</span><span class="m">8</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="s2">"a"</span><span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="s2">"d"</span>
+</span><span id="__span-13-14"><a id="__codelineno-13-14" name="__codelineno-13-14" href="#__codelineno-13-14"></a><span class="w">      </span>temperature<span class="w">  </span><span class="nv">count</span><span class="o">=</span><span class="m">48</span><span class="w">  </span><span class="nv">min</span><span class="o">=</span><span class="m">1</span>.0<span class="w">  </span><span class="nv">max</span><span class="o">=</span><span class="m">26</span>.0
 </span></code></pre></div>
 <p><code>removed</code> appears only when the mask hides something, and says plainly that
 those bytes are still in the file.</p>
@@ -1164,27 +1239,27 @@ smallest of the minimums. The maximum is the largest of the maximums. A
 removed dataset counts for nothing. Use <code>atlas show</code> for one dataset.</p>
 <h2 id="exit-codes">Exit codes</h2>
 <p><code>0</code> on success, <code>1</code> on any error, with a one-line message on stderr:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>ls<span class="w"> </span>/tmp/not-a-collection
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>atlas:<span class="w"> </span>not<span class="w"> </span>an<span class="w"> </span>atlas<span class="w"> </span>collection:<span class="w"> </span>no<span class="w"> </span><span class="s1">'data.atlas'</span><span class="w"> </span>under<span class="w"> </span>this<span class="w"> </span>prefix
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="nv">$?</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="m">1</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>ls<span class="w"> </span>/tmp/not-a-collection
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>atlas:<span class="w"> </span>not<span class="w"> </span>an<span class="w"> </span>atlas<span class="w"> </span>collection:<span class="w"> </span>no<span class="w"> </span><span class="s1">'data.atlas'</span><span class="w"> </span>under<span class="w"> </span>this<span class="w"> </span>prefix
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>$<span class="w"> </span><span class="nb">echo</span><span class="w"> </span><span class="nv">$?</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="m">1</span>
 </span></code></pre></div>
 <p><code>atlas create</code> also exits <code>1</code> when <code>--skip-errors</code> skipped something, so a
 pipeline notices, while still writing the collection.</p>
 <h2 id="scripting">Scripting</h2>
 <p><code>--json</code> on any read command, and the output is stable:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Every dataset whose temperature maximum exceeds 30</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="k">for</span><span class="w"> </span>name<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>atlas<span class="w"> </span>ls<span class="w"> </span><span class="s2">"</span><span class="nv">$C</span><span class="s2">"</span><span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">'.[]'</span><span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>atlas<span class="w"> </span>show<span class="w"> </span><span class="s2">"</span><span class="nv">$C</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$name</span><span class="s2">"</span><span class="w"> </span>--json<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">    </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>--arg<span class="w"> </span>n<span class="w"> </span><span class="s2">"</span><span class="nv">$name</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">        </span><span class="s1">'.arrays[] | select(.name=="temperature" and .stats.max &gt; 30) | $n'</span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="k">done</span>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="c1"># Total elements across the collection, in one call</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a>atlas<span class="w"> </span>info<span class="w"> </span><span class="s2">"</span><span class="nv">$C</span><span class="s2">"</span><span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'[.array_stats[].row_count] | add'</span>
-</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a>
-</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="c1"># The temperature range over every live dataset</span>
-</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a>atlas<span class="w"> </span>info<span class="w"> </span><span class="s2">"</span><span class="nv">$C</span><span class="s2">"</span><span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'.array_stats.temperature | {min, max}'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="c1"># Every dataset whose temperature maximum exceeds 30</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a><span class="k">for</span><span class="w"> </span>name<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>atlas<span class="w"> </span>ls<span class="w"> </span><span class="s2">"</span><span class="nv">$C</span><span class="s2">"</span><span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">'.[]'</span><span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>atlas<span class="w"> </span>show<span class="w"> </span><span class="s2">"</span><span class="nv">$C</span><span class="s2">"</span><span class="w"> </span><span class="s2">"</span><span class="nv">$name</span><span class="s2">"</span><span class="w"> </span>--json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">    </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span>--arg<span class="w"> </span>n<span class="w"> </span><span class="s2">"</span><span class="nv">$name</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">        </span><span class="s1">'.arrays[] | select(.name=="temperature" and .stats.max &gt; 30) | $n'</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="k">done</span>
+</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>
+</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a><span class="c1"># Total elements across the collection, in one call</span>
+</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>atlas<span class="w"> </span>info<span class="w"> </span><span class="s2">"</span><span class="nv">$C</span><span class="s2">"</span><span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'[.array_stats[].row_count] | add'</span>
+</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>
+</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a><span class="c1"># The temperature range over every live dataset</span>
+</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>atlas<span class="w"> </span>info<span class="w"> </span><span class="s2">"</span><span class="nv">$C</span><span class="s2">"</span><span class="w"> </span>--json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">'.array_stats.temperature | {min, max}'</span>
 </span></code></pre></div>
 <p>A string statistic comes back as text in JSON, and as <code>bytes</code> from the library.</p>
 

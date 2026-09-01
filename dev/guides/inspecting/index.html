@@ -964,7 +964,7 @@
 fetches array data, so a catalogue of ten thousand datasets costs one request.</p>
 <h2 id="what-is-in-here-list_datasets-and-ls">What is in here: <code>list_datasets</code> and <code>ls</code></h2>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="s2">"/data/collection"</span><span class="p">)</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># ['2024-01', '2024-02', '2024-03']</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="c1"># ['2024-01.nc', '2024-02.nc', '2024-03.nc']</span>
 </span></code></pre></div>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>atlas<span class="w"> </span>ls<span class="w"> </span>/data/collection
 </span></code></pre></div>
@@ -1004,16 +1004,16 @@ records statistics for that array. A dataset that declares the same name with a
 different dtype stays out, because two dtypes do not compare.</p>
 <p>Use <code>describe</code> for the statistics of one dataset on its own.</p>
 <h2 id="one-dataset-in-detail-describe-and-show">One dataset in detail: <code>describe</code> and <code>show</code></h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="s2">"/data/collection"</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="s2">"/data/collection"</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)</span>
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>atlas<span class="w"> </span>show<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-01
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>atlas<span class="w"> </span>show<span class="w"> </span>/data/collection<span class="w"> </span><span class="m">2024</span>-01.nc
 </span></code></pre></div>
 <p>The CLI prints it like <code>ncdump -h</code>. The library returns the structure. Both
 give the dimensions. For every array both give the type, the shape, and the
 chunk shape. They also give the dimension names, the fill value, the
 attributes, the coordinate flag, and the statistics.</p>
 <p><code>name</code> is a dataset name, or the NetCDF path the dataset came from:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"/data/nc/2024-01.nc"</span><span class="p">)</span>   <span class="c1"># same as "2024-01"</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"/data/nc/2024-01.nc"</span><span class="p">)</span>   <span class="c1"># same as "2024-01.nc"</span>
 </span></code></pre></div>
 <h3 id="statistics">Statistics</h3>
 <p>Each array carries what the write recorded:</p>
@@ -1055,7 +1055,7 @@ collection holds.</p>
 <h3 id="coordinates">Coordinates</h3>
 <p>The ingest records which variables were xarray coordinates, and reports them
 back:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">detail</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="n">detail</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)</span>
 </span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"coordinates"</span><span class="p">]</span>              <span class="c1"># ['lat', 'lon']</span>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">[</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">detail</span><span class="p">[</span><span class="s2">"arrays"</span><span class="p">]</span> <span class="k">if</span> <span class="n">a</span><span class="p">[</span><span class="s2">"is_coordinate"</span><span class="p">]]</span>
 </span></code></pre></div>
