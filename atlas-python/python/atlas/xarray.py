@@ -267,6 +267,100 @@ def _sample_object_element(var: Any) -> Any:
     return None
 
 
+# The span of `datetime64[ns]`. A value outside it wraps silently, so every
+# conversion is checked against these first.
+_STAMP_MIN = np.datetime64("1677-09-21T00:12:44", "us")
+_STAMP_MAX = np.datetime64("2262-04-11T23:47:16", "us")
+
+
+def _is_cftime(value: Any) -> bool:
+    """Whether `value` is a cftime datetime, without importing cftime."""
+    return type(value).__module__.split(".")[0] == "cftime"
+
+
+def _cftime_to_datetime64(var_name: str, values: np.ndarray) -> np.ndarray:
+    """The same instants as `values`, on the proleptic Gregorian calendar.
+
+    cftime maps between two real-world calendars through the Julian Day, so
+    the instant survives exactly. A Julian label and a Gregorian label of one
+    instant differ by 13 days this century, and name the same moment.
+
+    The conversion runs on the whole array at once. One call per element costs
+    a few hundred times more.
+    """
+    import cftime
+
+    flat = np.ravel(values)
+    missing = np.fromiter(
+        (_is_missing_str(v) for v in flat), dtype=bool, count=flat.size
+    )
+    present = flat[~missing]
+    out = np.full(flat.size, np.datetime64("NaT", "us"), dtype="datetime64[us]")
+    if present.size == 0:
+        return out.reshape(values.shape).astype("datetime64[ns]")
+
+    calendar = present[0].calendar
+    try:
+        # The Unix epoch, written on the source calendar. Elapsed time from it
+        # is then elapsed time from the Gregorian epoch.
+        epoch = cftime.datetime(
+            1970, 1, 1, calendar="proleptic_gregorian"
+        ).change_calendar(calendar)
+    except ValueError as exc:
+        raise NotImplementedError(
+            f"variable {var_name!r} uses the {calendar!r} calendar, which names "
+            f"no real instant, so no exact Gregorian date exists. Only a "
+            f"real-world calendar converts. Pass decode_times=False to keep "
+            f"the raw numbers"
+        ) from exc
+
+    units = "microseconds since " + epoch.strftime("%Y-%m-%d %H:%M:%S")
+    micros = np.rint(
+        np.asarray(cftime.date2num(present, units, calendar=calendar), dtype="float64")
+    ).astype("int64")
+    stamps = np.datetime64(0, "us") + micros.astype("timedelta64[us]")
+
+    outside = (stamps < _STAMP_MIN) | (stamps > _STAMP_MAX)
+    if outside.any():
+        worst = stamps[outside][0]
+        raise NotImplementedError(
+            f"variable {var_name!r} holds {int(outside.sum())} date(s) outside "
+            f"the range of a nanosecond timestamp, such as {worst}. Atlas "
+            f"stores {_STAMP_MIN} to {_STAMP_MAX}. Pass decode_times=False to "
+            f"keep the raw numbers"
+        )
+
+    out[~missing] = stamps
+    return out.reshape(values.shape).astype("datetime64[ns]")
+
+
+def with_converted_calendars(ds: "xr.Dataset") -> "xr.Dataset":
+    """A copy of `ds` with every cftime array turned into `datetime64[ns]`.
+
+    Each timestamp keeps its instant. The calendar label changes, so a Julian
+    1973-02-25 becomes the Gregorian 1973-03-10 that names the same moment.
+    """
+    replacements = {}
+    for name in list(ds.coords) + list(ds.data_vars):
+        var = ds[name]
+        if np.dtype(var.dtype).kind != "O":
+            continue
+        sample = _sample_object_element(var)
+        if sample is None or not _is_cftime(sample):
+            continue
+        values = _cftime_to_datetime64(str(name), np.asarray(var.values))
+        replacements[str(name)] = (var.dims, values, dict(var.attrs))
+
+    if not replacements:
+        return ds
+    out = ds.copy()
+    for name, entry in replacements.items():
+        # The (dims, data, attrs) tuple assigns without importing xarray here.
+        out[name] = entry
+        _LOG.info("converted %r from cftime to an exact Gregorian timestamp", name)
+    return out
+
+
 def _reject_unstorable_object_array(var_name: str, var: Any) -> None:
     """Raises when an object array holds something atlas cannot store.
 
@@ -280,14 +374,14 @@ def _reject_unstorable_object_array(var_name: str, var: Any) -> None:
         return
 
     kind = type(sample)
-    if kind.__module__.split(".")[0] == "cftime":
+    if _is_cftime(sample):
         raise NotImplementedError(
             f"variable {var_name!r} holds cftime objects ({kind.__name__}), "
             f"which atlas cannot store. xarray decodes a calendar it cannot "
             f"map to datetime64[ns], such as a Julian one, into cftime. Pass "
-            f"decode_times=False, or --no-decode-times, to keep the raw "
-            f"numbers and their units. Or convert the calendar first with "
-            f"ds.convert_calendar('standard')"
+            f"convert_calendar=True, or --convert-calendar, for the exact "
+            f"Gregorian instant. Pass decode_times=False to keep the raw "
+            f"numbers and their units instead"
         )
     raise NotImplementedError(
         f"variable {var_name!r} is an object array of {kind.__name__}. Atlas "
@@ -424,6 +518,7 @@ def _write_xarray_to_view(
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
     on_unsupported: str = "stop",
+    convert_calendar: bool = False,
 ) -> list[dict[str, str]]:
     """Fills an empty `DatasetWriter` from an xarray Dataset.
 
@@ -440,6 +535,9 @@ def _write_xarray_to_view(
         raise ValueError(
             f"on_unsupported must be 'stop' or 'skip', got {on_unsupported!r}"
         )
+
+    if convert_calendar:
+        ds = with_converted_calendars(ds)
 
     coord_names = [str(n) for n in ds.coords.keys()]
     order = coord_names + [str(n) for n in ds.data_vars.keys()]
@@ -584,6 +682,7 @@ def _write_xarray_dataset(
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
     on_unsupported: str = "stop",
+    convert_calendar: bool = False,
 ) -> list[dict[str, str]]:
     """Writes an ``xarray.Dataset`` into an open writer, under ``name``.
 
@@ -602,6 +701,7 @@ def _write_xarray_dataset(
             chunks=chunks,
             fill_value=fill_value,
             on_unsupported=on_unsupported,
+            convert_calendar=convert_calendar,
         )
     except BaseException:
         dataset_writer.abort()

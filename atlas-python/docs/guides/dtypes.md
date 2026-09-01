@@ -29,33 +29,58 @@ atlas: profile.nc: variable 'JULD' holds cftime objects (DatetimeJulian),
 which atlas cannot store...
 ```
 
-Atlas refuses rather than converts, because a Julian date and a Gregorian date
-of the same number are days apart. A silent conversion would move every
-timestamp.
+Atlas refuses by default rather than guess, because two conversions exist and
+they differ by 13 days. Pick one.
 
-Three ways forward:
+**Convert to the exact instant.** This is almost always what you want:
 
-**Keep the raw numbers.** The time axis stores as an integer, with its `units`
-and `calendar` attributes beside it. Nothing is lost, and a reader decodes it
-with `cftime.num2date`:
+```bash
+atlas create /data/nc /data/collection --convert-calendar
+```
+
+```python
+atlas.create("/data/nc", dest, convert_calendar=True)
+```
+
+The axis becomes `timestamp_nanoseconds`, and every value keeps the moment it
+named. A Julian `1973-02-25 18:15` becomes the Gregorian `1973-03-10 18:15`.
+Those are one instant under two calendars. cftime maps between them through
+the Julian Day, so nothing is approximated.
+
+**Keep the raw numbers.** The axis stores as an integer, with its `units` and
+`calendar` attributes beside it. A reader decodes it later with
+`cftime.num2date`:
 
 ```bash
 atlas create /data/nc /data/collection --no-decode-times
 ```
 
-```python
-atlas.create("/data/nc", dest, decode_times=False)
-```
-
-**Convert the calendar first.** This gives a real `timestamp_nanoseconds`
-array, and shifts the dates onto the standard calendar:
-
-```python
-xr.open_dataset(path).convert_calendar("standard").to_netcdf(clean_path)
-```
-
-**Drop the axis.** `--skip-unsupported` leaves the time array out and keeps
+**Drop the axis.** `--skip-unsupported` leaves the time array out, and keeps
 the rest of the dataset.
+
+#### Two conversions, 13 days apart
+
+The Julian calendar takes a leap year every four years. The Gregorian calendar
+drops three of those every four centuries. The gap grows by about three days
+per 400 years, and holds at 13 days from 1900 to 2100.
+
+| Conversion | Julian 2024-01-01 becomes | It keeps |
+|---|---|---|
+| `--convert-calendar` | 2024-01-14 | the instant |
+| `xr.Dataset.convert_calendar("standard")` | 2024-01-01 | the labels |
+
+The xarray method keeps the year, month, and day, which moves the moment by 13
+days. Use it only when the labels matter more than the instant.
+
+#### Two limits
+
+**An artificial calendar names no instant.** A `360_day`, `noleap`, or
+`all_leap` year is a model convention with no place on a real timeline.
+`--convert-calendar` raises for one. Use `--no-decode-times` instead.
+
+**A nanosecond timestamp spans 1677-09-21 to 2262-04-11.** A date outside that
+raises. numpy wraps such a date in silence, so atlas checks every value before
+it stores one.
 
 ### datetime and timedelta
 

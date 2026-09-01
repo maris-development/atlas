@@ -162,6 +162,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         open_chunks=open_chunks,
         chunk_size=args.chunk_size,
         decode_times=not args.no_decode_times,
+        convert_calendar=args.convert_calendar,
         on_error="skip" if args.skip_errors else "stop",
         on_unsupported="skip" if args.skip_unsupported else "stop",
         progress=progress,
@@ -360,6 +361,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-errors",
         action="store_true",
         help="skip files that fail instead of abandoning the collection",
+    )
+    p.add_argument(
+        "--convert-calendar",
+        action="store_true",
+        help=(
+            "turn a cftime axis into exact Gregorian timestamps. Each one "
+            "keeps its instant, so a Julian date moves to the Gregorian date "
+            "that names the same moment"
+        ),
     )
     p.add_argument(
         "--no-decode-times",

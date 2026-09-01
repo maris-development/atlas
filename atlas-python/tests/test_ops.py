@@ -273,6 +273,73 @@ def test_a_cftime_axis_can_be_skipped_per_array(
     ]
 
 
+def test_convert_calendar_keeps_the_exact_instant(
+    netcdf_dir_with_a_julian_calendar, tmp_path
+):
+    """A Julian label and its Gregorian label name one moment, 13 days apart."""
+    dest = tmp_path / "c"
+    atlas.create(netcdf_dir_with_a_julian_calendar, str(dest), convert_calendar=True)
+
+    arrays = {a["name"]: a for a in atlas.describe(str(dest), "julian.nc")["arrays"]}
+    assert arrays["time"]["dtype"] == "timestamp_nanoseconds"
+
+    # The fixture holds Julian 2024-01-01 through 2024-01-04. The same instants
+    # carry the Gregorian labels 2024-01-14 through 2024-01-17.
+    first = np.datetime64(arrays["time"]["stats"]["min"], "ns")
+    last = np.datetime64(arrays["time"]["stats"]["max"], "ns")
+    assert first == np.datetime64("2024-01-14T00:00:00")
+    assert last == np.datetime64("2024-01-17T00:00:00")
+
+
+def test_convert_calendar_matches_a_per_element_conversion(
+    netcdf_dir_with_a_julian_calendar,
+):
+    """The array-at-once conversion must equal the obvious slow one."""
+    from atlas.xarray import _cftime_to_datetime64
+
+    ds = xr.open_dataset(netcdf_dir_with_a_julian_calendar / "julian.nc")
+    values = np.asarray(ds["time"].values)
+
+    fast = _cftime_to_datetime64("time", values)
+    slow = np.array(
+        [
+            np.datetime64(v.change_calendar("proleptic_gregorian").isoformat(), "ns")
+            for v in values
+        ]
+    )
+    assert np.array_equal(fast, slow)
+
+
+def test_an_artificial_calendar_has_no_exact_gregorian_date(tmp_path):
+    """A 360_day year names no real instant, so no conversion exists."""
+    import cftime
+
+    from atlas.xarray import _cftime_to_datetime64
+
+    values = np.array([cftime.Datetime360Day(2024, 2, 30)], dtype=object)
+    with pytest.raises(NotImplementedError, match="360_day"):
+        _cftime_to_datetime64("time", values)
+
+
+def test_a_date_outside_the_nanosecond_range_is_refused_not_wrapped(tmp_path):
+    """numpy wraps such a date in silence. Atlas must not pass one on."""
+    import cftime
+
+    from atlas.xarray import _cftime_to_datetime64
+
+    for year in (1600, 2300):
+        values = np.array([cftime.DatetimeJulian(year, 1, 1)], dtype=object)
+        with pytest.raises(NotImplementedError, match="outside the range"):
+            _cftime_to_datetime64("time", values)
+
+
+def test_convert_calendar_leaves_a_normal_time_axis_alone(netcdf_dir, tmp_path):
+    dest = tmp_path / "c"
+    atlas.create(netcdf_dir, str(dest), convert_calendar=True)
+    arrays = {a["name"]: a for a in atlas.describe(str(dest), "2024-01.nc")["arrays"]}
+    assert arrays["time"]["dtype"] == "timestamp_nanoseconds"
+
+
 def test_an_object_array_of_something_else_is_refused_clearly(tmp_path):
     """numpy reports `object` for both a string array and this one."""
     from atlas.xarray import _reject_unstorable_object_array

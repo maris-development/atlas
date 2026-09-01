@@ -106,6 +106,7 @@ def create(
     open_chunks: Any = "auto",
     chunk_size: str = DEFAULT_CHUNK_SIZE,
     decode_times: bool = True,
+    convert_calendar: bool = False,
     on_error: str = "stop",
     on_unsupported: str = "stop",
     progress: Optional[Any] = None,
@@ -142,6 +143,12 @@ def create(
     a calendar it cannot map to `datetime64[ns]`, such as a Julian one,
     decodes to cftime objects, which atlas cannot store. Set it false to keep
     the raw numbers and their `units` and `calendar` attributes instead.
+
+    `convert_calendar` turns those cftime objects into exact Gregorian
+    timestamps. Each one keeps its instant, so a Julian 1973-02-25 becomes the
+    Gregorian 1973-03-10 that names the same moment. A calendar with no real
+    instant, such as `360_day`, and a date outside the nanosecond range both
+    raise instead.
 
     `progress` takes each file name as that file lands.
 
@@ -193,7 +200,13 @@ def create(
                     # before the file closes.
                     with xr.open_dataset(path, **open_kwargs) as ds:
                         left_out = _xarray._write_xarray_dataset(
-                            writer, ds, name, chunks, None, on_unsupported
+                            writer,
+                            ds,
+                            name,
+                            chunks,
+                            None,
+                            on_unsupported,
+                            convert_calendar,
                         )
                     for item in left_out:
                         _LOG.warning(

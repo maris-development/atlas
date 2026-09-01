@@ -63,6 +63,7 @@ def create(
     open_chunks: Union[str, dict[str, int], None] = "auto",
     chunk_size: str = "128MiB",
     decode_times: bool = True,
+    convert_calendar: bool = False,
     on_error: str = "stop",
     on_unsupported: str = "stop",
     progress: Optional[Callable[[str], None]] = None,
@@ -120,6 +121,11 @@ def create(
             one, decodes to cftime objects, which atlas cannot store. Set it
             false to keep the raw numbers, with their ``units`` and
             ``calendar`` attributes.
+        convert_calendar: Turn a cftime axis into exact Gregorian timestamps.
+            Each one keeps its instant, so a Julian ``1973-02-25`` becomes the
+            Gregorian ``1973-03-10`` that names the same moment. A calendar
+            with no real instant, such as ``360_day``, and a date outside the
+            nanosecond range both raise instead.
         on_error: ``"stop"`` is the default. It abandons the whole collection
             on the first bad file. ``"skip"`` records that file and continues.
         on_unsupported: What one array of an unsupported dtype costs.
