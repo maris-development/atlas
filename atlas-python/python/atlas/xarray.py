@@ -693,7 +693,32 @@ def _write_xarray_dataset(
     leaves the dataset, and the rest of it still lands. Returns one record per
     variable it left out, each tagged with the dataset name.
     """
-    dataset_writer = writer.add_dataset(name)
+    return fill_and_finish(
+        writer.add_dataset(name),
+        ds,
+        name,
+        chunks=chunks,
+        fill_value=fill_value,
+        on_unsupported=on_unsupported,
+        convert_calendar=convert_calendar,
+    )
+
+
+def fill_and_finish(
+    dataset_writer: Any,
+    ds: "xr.Dataset",
+    name: str,
+    chunks: Optional[dict[str, Sequence[int]]] = None,
+    fill_value: Any = None,
+    on_unsupported: str = "stop",
+    convert_calendar: bool = False,
+) -> list[dict[str, str]]:
+    """Fills a `DatasetWriter` somebody already opened, then commits it.
+
+    A parallel ingest calls `add_dataset` on one thread, in file order, and
+    hands the result here. The ordinal therefore follows the input, and the
+    costly part still runs on a worker.
+    """
     try:
         skipped = _write_xarray_to_view(
             dataset_writer,

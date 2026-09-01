@@ -148,6 +148,82 @@ def test_every_codec_round_trips(netcdf_dir, tmp_path, codec):
     assert len(atlas.list_datasets(str(dest))) == 3
 
 
+# ── parallel staging ─────────────────────────────────────────────────
+
+
+@pytest.fixture
+def many_netcdf_files(tmp_path):
+    """Enough files that several workers actually overlap."""
+    d = tmp_path / "many"
+    d.mkdir()
+    for i in range(12):
+        make_dataset((i % 12) + 1).to_netcdf(d / f"m{i:03d}.nc")
+    return d
+
+
+@pytest.mark.parametrize("workers", [2, 4])
+def test_workers_keep_the_ordinals_of_a_sequential_build(
+    many_netcdf_files, tmp_path, workers
+):
+    """add_dataset runs in file order, so a worker cannot move an ordinal."""
+    one = tmp_path / "one"
+    many = tmp_path / f"many{workers}"
+    atlas.create(many_netcdf_files, str(one))
+    atlas.create(many_netcdf_files, str(many), workers=workers)
+
+    assert atlas.list_datasets(str(one)) == atlas.list_datasets(str(many))
+    for name in atlas.list_datasets(str(one)):
+        assert (
+            atlas.describe(str(one), name)["ordinal"]
+            == atlas.describe(str(many), name)["ordinal"]
+        )
+
+
+def test_workers_produce_the_same_collection(many_netcdf_files, tmp_path):
+    one = tmp_path / "one"
+    many = tmp_path / "many"
+    r1 = atlas.create(many_netcdf_files, str(one))
+    r4 = atlas.create(many_netcdf_files, str(many), workers=4)
+
+    assert r1["written"] == r4["written"]
+    a, b = atlas.info(str(one)), atlas.info(str(many))
+    assert a["array_stats"] == b["array_stats"]
+    assert a["dataset_count"] == b["dataset_count"]
+    assert a["interned_schemas"] == b["interned_schemas"]
+
+    # Every dataset still reads back with its own values.
+    for name in atlas.list_datasets(str(many)):
+        assert atlas.describe(str(many), name)["attributes"] == atlas.describe(
+            str(one), name
+        )["attributes"]
+
+
+def test_workers_still_stop_on_a_bad_file(many_netcdf_files, tmp_path):
+    xr.Dataset({"flag": xr.DataArray(np.array([True]), dims=["x"])}).to_netcdf(
+        many_netcdf_files / "bad.nc"
+    )
+    with pytest.raises(atlas.AtlasError):
+        atlas.create(many_netcdf_files, str(tmp_path / "c"), workers=4)
+
+
+def test_workers_can_skip_a_bad_file(many_netcdf_files, tmp_path):
+    xr.Dataset({"flag": xr.DataArray(np.array([True]), dims=["x"])}).to_netcdf(
+        many_netcdf_files / "bad.nc"
+    )
+    result = atlas.create(
+        many_netcdf_files, str(tmp_path / "c"), workers=4, on_error="skip"
+    )
+    assert [s["file"].endswith("bad.nc") for s in result["skipped"]] == [True]
+    assert len(result["written"]) == 12
+    # The order of what landed still follows the input.
+    assert atlas.list_datasets(str(tmp_path / "c")) == sorted(result["written"])
+
+
+def test_workers_below_one_is_refused(netcdf_dir, tmp_path):
+    with pytest.raises(atlas.AtlasError, match="workers must be at least 1"):
+        atlas.create(netcdf_dir, str(tmp_path / "c"), workers=0)
+
+
 # ── unsupported dtypes ───────────────────────────────────────────────
 
 
@@ -472,6 +548,30 @@ def test_chunk_size_controls_the_stored_chunk_shape(tmp_path):
     assert np.prod(small) < np.prod(large)
     # The larger budget covers the whole 8 MiB array in one block.
     assert large == [1024, 1024]
+
+
+def test_auto_opens_a_small_file_whole_and_a_large_one_in_blocks(tmp_path):
+    """`auto` picks a strategy per file. dask costs more than it saves on a
+    small one, and the stored layout comes out the same either way."""
+    from atlas._ops import _open_kwargs_for
+
+    budget = 128 * 1024 * 1024
+    base = {"chunks": "auto"}
+
+    small = tmp_path / "small.nc"
+    small.write_bytes(b"x" * 1024)
+    assert "chunks" not in _open_kwargs_for(small, "auto", base, budget)
+
+    large = tmp_path / "large.nc"
+    large.write_bytes(b"x" * (64 * 1024 * 1024))
+    assert _open_kwargs_for(large, "auto", base, budget) == base
+
+    # Every other mode is an explicit choice, and passes through untouched.
+    assert _open_kwargs_for(small, "native", {"chunks": {}}, budget) == {"chunks": {}}
+    assert _open_kwargs_for(small, None, {}, budget) == {}
+
+    # A smaller budget pulls the threshold down with it.
+    assert _open_kwargs_for(small, "auto", base, 1024) == base
 
 
 def test_small_files_still_land_as_a_single_chunk(netcdf_dir, tmp_path):

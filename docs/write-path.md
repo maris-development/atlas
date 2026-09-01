@@ -97,6 +97,12 @@ Concurrent datasets therefore land in finish order, and never interleave their
 bytes. `tests/integration.rs` asserts that the segments still tile the
 container without a gap under concurrent staging.
 
+**Ordinals do not follow that order.** Each dataset carries the number of the
+`add_dataset` call that opened it. `AtlasWriter::finish` then sorts the footer
+entries on that number. Stage a directory twice and every dataset lands at the same
+ordinal, however many threads did the work. Each entry holds its own byte
+range, so the segments need no matching order on disk.
+
 ## Failure
 
 | What happens | Result |

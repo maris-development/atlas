@@ -186,6 +186,37 @@ def test_create_descends_by_default_and_no_recursive_opts_out(capsys, tmp_path):
     assert code == 0, err
 
 
+def test_create_counts_progress_and_what_is_left(capsys, netcdf_dir, tmp_path):
+    code, _, err = run(capsys, "create", str(netcdf_dir), str(tmp_path / "c"))
+    assert code == 0
+    assert "from 3 file(s)" in err
+    assert "[1/3] 2024-01.nc  (2 left)" in err
+    assert "[3/3] 2024-03.nc  (0 left)" in err
+
+
+def test_log_file_says_where_it_writes(capsys, netcdf_dir, tmp_path):
+    log = tmp_path / "run.log"
+    code, _, err = run(
+        capsys, "create", str(netcdf_dir), str(tmp_path / "c"), "-q",
+        "--log-file", str(log),
+    )
+    assert code == 0
+    assert f"logging to {log}" in err
+    # The log carries the same counter, for a run nobody watched.
+    text = log.read_text()
+    assert "[1/3] wrote 2024-01.nc" in text
+    assert "[3/3] wrote 2024-03.nc" in text
+
+
+def test_workers_flag_builds_the_same_collection(capsys, netcdf_dir, tmp_path):
+    run(capsys, "create", str(netcdf_dir), str(tmp_path / "one"), "-q")
+    run(capsys, "create", str(netcdf_dir), str(tmp_path / "many"), "-q", "-j", "4")
+
+    code, a, _ = run(capsys, "ls", str(tmp_path / "one"))
+    code, b, _ = run(capsys, "ls", str(tmp_path / "many"))
+    assert a.split() == b.split() == ["2024-01.nc", "2024-02.nc", "2024-03.nc"]
+
+
 # ── ls ───────────────────────────────────────────────────────────────
 
 

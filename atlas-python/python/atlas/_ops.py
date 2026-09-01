@@ -33,6 +33,12 @@ NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf", ".netcdf")
 #   a dict    explicit, per dimension: {"time": 100, "lat": -1}
 OPEN_CHUNK_MODES = ("auto", "native")
 
+# Under "auto", a file well inside the block budget opens whole. dask spends
+# about 40 ms per file on its graph. That dwarfs the read of a small file, and
+# buys nothing. A small variable lands as one chunk either way. The divisor
+# leaves room for a file that grows as it decompresses.
+AUTO_WHOLE_FILE_DIVISOR = 4
+
 # Block size dask aims at under "auto". It also caps how much of one variable
 # stays in memory during a write.
 DEFAULT_CHUNK_SIZE = "128MiB"
@@ -68,6 +74,74 @@ def find_netcdf_files(
         raise AtlasError(f"not a directory: {root}")
     walk = root.rglob("*") if recursive else root.glob("*")
     return sorted(p for p in walk if p.is_file() and p.suffix.lower() in NETCDF_SUFFIXES)
+
+
+def _ingest_parallel(
+    writer: Any,
+    files: list[pathlib.Path],
+    workers: int,
+    stage: Any,
+    record: Any,
+    claim: Any,
+) -> None:
+    """Stages many files at once, and books the results in file order.
+
+    `add_dataset` runs here, on one thread, in file order. That fixes each
+    ordinal to the input, whatever order the workers finish in. Only the read
+    and the flush go to the pool, and those are the costly part.
+
+    At most `workers * 2` files are in flight, so a long list does not open a
+    staging directory for every file at once.
+    """
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
+    in_flight: dict[Any, tuple[int, pathlib.Path, str]] = {}
+
+    def collect(limit: int) -> None:
+        while len(in_flight) > limit:
+            done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for future in done:
+                index, path, name = in_flight.pop(future)
+                record(index, path, name, future.exception() or future.result())
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        try:
+            for index, path in enumerate(files, start=1):
+                name = claim(index, path)
+                if name is None:
+                    continue
+                opened = writer.add_dataset(name)
+                in_flight[pool.submit(stage, path, opened)] = (index, path, name)
+                collect(workers * 2)
+            collect(0)
+        finally:
+            # A raise leaves futures running. Let them settle before the
+            # writer goes, so no worker touches it afterwards.
+            for future in in_flight:
+                future.cancel()
+            wait(list(in_flight))
+
+
+def _open_kwargs_for(
+    path: "pathlib.Path", open_chunks: Any, base: dict[str, Any], budget: int
+) -> dict[str, Any]:
+    """The `xr.open_dataset` arguments for one file.
+
+    Under `open_chunks="auto"`, a file well inside the block budget opens
+    whole. That skips the dask graph, which is most of the cost of a small
+    file. A larger file keeps the streaming path, so memory stays bounded.
+
+    Every other mode is an explicit choice, and passes through unchanged.
+    """
+    if open_chunks != "auto":
+        return base
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return base
+    if size * AUTO_WHOLE_FILE_DIVISOR > budget:
+        return base
+    return {k: v for k, v in base.items() if k != "chunks"}
 
 
 def _open_kwargs(open_chunks: Any) -> dict[str, Any]:
@@ -107,6 +181,7 @@ def create(
     chunk_size: str = DEFAULT_CHUNK_SIZE,
     decode_times: bool = True,
     convert_calendar: bool = False,
+    workers: int = 1,
     on_error: str = "stop",
     on_unsupported: str = "stop",
     progress: Optional[Any] = None,
@@ -150,7 +225,13 @@ def create(
     instant, such as `360_day`, and a date outside the nanosecond range both
     raise instead.
 
-    `progress` takes each file name as that file lands.
+    `workers` stages that many files at once. The costly part of an ingest is
+    the flush. It holds no lock and releases the GIL, so it scales to about
+    three times on a many-core machine. Ordinals do not move: `add_dataset`
+    runs in file order whatever the workers do.
+
+    `progress` takes each file name as that file lands. Under `workers` above
+    one it arrives in completion order.
 
     Returns a summary. How many datasets landed, which files the run skipped,
     and which arrays it left out.
@@ -161,6 +242,8 @@ def create(
         raise AtlasError(
             f"on_unsupported must be 'stop' or 'skip', got {on_unsupported!r}"
         )
+    if workers < 1:
+        raise AtlasError(f"workers must be at least 1, got {workers}")
 
     open_kwargs = _open_kwargs(open_chunks)
     if not decode_times:
@@ -168,69 +251,95 @@ def create(
 
     import dask
     import xarray as xr
+    from dask.utils import parse_bytes
+
+    budget = parse_bytes(chunk_size)
 
     files = find_netcdf_files(directory, recursive=recursive)
     if not files:
         raise AtlasError(f"no NetCDF files under {directory}")
 
     names: set[str] = set()
-    written: list[str] = []
-    skipped: list[dict[str, str]] = []
-    skipped_arrays: list[dict[str, str]] = []
+    # Each list holds (file index, payload). A worker books its result the
+    # moment it finishes. Sorting on the index at the end therefore makes the
+    # summary identical, whatever `workers` is set to.
+    written: list[tuple[int, str]] = []
+    skipped: list[tuple[int, dict[str, str]]] = []
+    skipped_arrays: list[tuple[int, dict[str, str]]] = []
     _LOG.info("ingesting %d file(s) into %s", len(files), _source.describe(destination))
 
     target = _source.resolve(destination, **store_options)
-    # "auto" sizes its blocks against `array.chunk-size`. That value therefore
+
+    def stage(path: pathlib.Path, opened: Any) -> list[dict[str, str]]:
+        """Reads one file into an open `DatasetWriter`. Runs on a worker."""
+        per_file = _open_kwargs_for(path, open_chunks, open_kwargs, budget)
+        # The write runs inside the `with`, so every block lands before the
+        # file closes.
+        with xr.open_dataset(path, **per_file) as ds:
+            return _xarray.fill_and_finish(
+                opened,
+                ds,
+                dataset_name(path),
+                chunks,
+                None,
+                on_unsupported,
+                convert_calendar,
+            )
+
+    def record(index: int, path: pathlib.Path, name: str, outcome: Any) -> None:
+        """Books one finished file. Always on the calling thread."""
+        if isinstance(outcome, BaseException):
+            if on_error == "stop":
+                _LOG.error("%s: %s", path, describe_exception(outcome))
+                raise AtlasError(f"{path}: {outcome}") from outcome
+            _LOG.warning("skipping %s: %s", path, describe_exception(outcome))
+            skipped.append((index, {"file": str(path), "error": str(outcome)}))
+            return
+        for item in outcome:
+            _LOG.warning(
+                "%s: skipped array %r of dtype %s: %s",
+                path,
+                item["array"],
+                item["dtype"],
+                item["error"],
+            )
+        skipped_arrays.extend((index, item) for item in outcome)
+        names.add(name)
+        written.append((index, name))
+        _LOG.info("[%d/%d] wrote %s", index, len(files), name)
+        if progress is not None:
+            progress(name)
+
+    def claim(index: int, path: pathlib.Path) -> Optional[str]:
+        """The dataset name for `path`, or `None` when it is a repeat."""
+        name = dataset_name(path)
+        if name not in names:
+            return name
+        message = f"duplicate dataset name {name!r} from {path}"
+        if on_error == "stop":
+            _LOG.error("%s", message)
+            raise AtlasError(message)
+        _LOG.warning("skipping %s: %s", path, message)
+        skipped.append((index, {"file": str(path), "error": message}))
+        return None
+
+    # "auto" sizes its blocks against `array.chunk-size". That value therefore
     # also caps how much of one variable stays in memory during a write.
     with dask.config.set({"array.chunk-size": chunk_size}):
         with _atlas.AtlasWriter.create(target, codec) as writer:
-            for path in files:
-                name = dataset_name(path)
-                if name in names:
-                    message = f"duplicate dataset name {name!r} from {path}"
-                    if on_error == "stop":
-                        _LOG.error("%s", message)
-                        raise AtlasError(message)
-                    _LOG.warning("skipping %s: %s", path, message)
-                    skipped.append({"file": str(path), "error": message})
-                    continue
+            if workers > 1:
+                _ingest_parallel(writer, files, workers, stage, record, claim)
+            else:
+                for index, path in enumerate(files, start=1):
+                    name = claim(index, path)
+                    if name is None:
+                        continue
+                    try:
+                        outcome: Any = stage(path, writer.add_dataset(name))
+                    except Exception as exc:
+                        outcome = exc
+                    record(index, path, name, outcome)
 
-                try:
-                    # The write runs inside the `with`, so every block lands
-                    # before the file closes.
-                    with xr.open_dataset(path, **open_kwargs) as ds:
-                        left_out = _xarray._write_xarray_dataset(
-                            writer,
-                            ds,
-                            name,
-                            chunks,
-                            None,
-                            on_unsupported,
-                            convert_calendar,
-                        )
-                    for item in left_out:
-                        _LOG.warning(
-                            "%s: skipped array %r of dtype %s: %s",
-                            path,
-                            item["array"],
-                            item["dtype"],
-                            item["error"],
-                        )
-                    skipped_arrays.extend(left_out)
-                except Exception as exc:
-                    if on_error == "stop":
-                        _LOG.error("%s: %s", path, describe_exception(exc))
-                        raise AtlasError(f"{path}: {exc}") from exc
-                    _LOG.warning(
-                        "skipping %s: %s", path, describe_exception(exc)
-                    )
-                    skipped.append({"file": str(path), "error": str(exc)})
-                    continue
-
-                names.add(name)
-                written.append(name)
-                if progress is not None:
-                    progress(name)
 
     _LOG.info(
         "wrote %d dataset(s); skipped %d file(s) and %d array(s)",
@@ -238,11 +347,14 @@ def create(
         len(skipped),
         len(skipped_arrays),
     )
+    # Back to file order, so the summary does not depend on `workers`.
     return {
         "destination": _source.describe(destination),
-        "written": written,
-        "skipped": skipped,
-        "skipped_arrays": skipped_arrays,
+        "written": [name for _, name in sorted(written)],
+        "skipped": [item for _, item in sorted(skipped, key=lambda p: p[0])],
+        "skipped_arrays": [
+            item for _, item in sorted(skipped_arrays, key=lambda p: p[0])
+        ],
         "dataset_count": len(written),
     }
 

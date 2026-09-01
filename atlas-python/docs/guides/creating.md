@@ -140,8 +140,10 @@ that stream to stderr. See [Installation](../installation.md).
 These are one decision. The blocks a file *reads* in are the chunks it
 *stores* in.
 
-Each file opens with dask chunking. `open_chunks="auto"` is the default. dask
-then sizes the blocks to `chunk_size`, which is 128 MiB. Three results follow:
+`open_chunks="auto"` is the default, and it picks a strategy per file. A file
+well inside the block budget opens whole. The dask graph costs about 40 ms
+per file, and a small variable lands as one chunk either way. A larger
+file streams through dask, so memory stays bounded. Three results follow:
 
 - A file far larger than memory streams block by block, and does not read
   whole.
@@ -158,13 +160,14 @@ atlas.create("/data/nc", dest, chunk_size="64MiB")
 ```
 
 `chunk_size` is about the memory ceiling per variable. Lower it on a small
-machine. Raise it for larger stored chunks.
+machine. Raise it for larger stored chunks. It also moves the threshold at
+which `"auto"` stops opening a file whole.
 
 ### How files are opened
 
 | `open_chunks` | Reads | Stored chunk shape |
 |---|---|---|
-| `"auto"` *(default)* | blocks sized to `chunk_size` | those blocks |
+| `"auto"` *(default)* | whole when small, else blocks sized to `chunk_size` | those blocks |
 | `"native"` | the file's own chunk encoding | that encoding |
 | `None` | each variable whole | one full-shape chunk |
 | `{"time": 100}` | as given, per dimension | as given |
@@ -206,6 +209,46 @@ arrays["temperature"]["chunk_shape"]
 atlas show dest 2024-01.nc | grep _ChunkShape
 ```
 
+### Speed on many small files
+
+A directory of small files spends most of its time per file, not per byte. On
+213 KiB profile files the default runs at about 30 files per second, or five
+minutes for ten thousand.
+
+**`--workers N` stages N files at once.** It is the largest single win:
+
+```bash
+atlas create /data/nc /data/collection --workers 4
+```
+
+```text
+workers=1 :  31 files/s   1.00x
+workers=2 :  53 files/s   1.71x
+workers=4 :  91 files/s   2.93x
+workers=8 :  88 files/s   2.81x   <- plateau
+```
+
+The costly part of an ingest is the flush. It holds no lock and releases the
+GIL, so it overlaps. The rest, the netCDF read and the append, does not, which
+is why the curve flattens near four.
+
+Nothing else changes. `add_dataset` runs on one thread in file order, so every
+ordinal matches a sequential build. The summary sorts back into file order
+too. Only `progress` reports in completion order.
+
+Two more settings matter when that is still too slow:
+
+- **`--open-chunks native`** forces dask on every file. That costs about twice
+  as long on a small file. Use it only when the file's own chunking is what
+  you want stored.
+- **`--codec none`** trades size for speed. It saved about 20 percent on the
+  same files.
+
+Past the plateau, run several `atlas create` commands at once, one per part of
+the tree. Each has its own writer, so nothing serialises between them. That
+reached 3.7x on eight processes where threads reached 2.9x. The cost is one
+collection per part.
+
 ### The writer's own memory
 
 Staging runs on local disk. `array-format` spills each compressed chunk to a
@@ -233,8 +276,15 @@ used.
 atlas.create("/data/nc", dest, progress=lambda name: print(name))
 ```
 
-The CLI does this by default, to stderr, so a pipe still reads stdout. `-q`
-turns it off.
+The CLI does this by default, to stderr, so a pipe still reads stdout. Each
+line counts the files and says how many remain:
+
+```text
+  [ 12/10000] 000043_CFPOINT_3593_V0.nc  (9988 left)
+```
+
+`-q` turns the per-file lines off. Pass `--log-file PATH` to keep the same
+counter in a file. The command prints the absolute path it opened.
 
 ## What can go wrong
 

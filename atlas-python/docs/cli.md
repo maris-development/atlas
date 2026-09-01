@@ -25,7 +25,15 @@ Every subcommand takes `--json` and `--log-file PATH`, plus the remote flags
 
 ## Logging
 
-`--log-file PATH` appends every error and warning to a file, with the reason:
+`--log-file PATH` appends to the file you name. There is no default location,
+and no log at all without the flag. The command prints the absolute path it
+opened, so it is never a guess:
+
+```text
+atlas: logging to /home/you/ingest.log
+```
+
+The file gets every error and warning, with the reason:
 
 ```bash
 $ atlas create /data/nc /data/collection --skip-unsupported --log-file ingest.log
@@ -66,11 +74,25 @@ A failure part-way leaves no collection, and not a partial one.
 | `--open-chunks MODE` | How files are read: `auto`, `native`, `none`, or a JSON dict |
 | `--chunks JSON` | Override the stored chunk shape, `'{"temperature": [64, 64]}'` |
 | `--skip-errors` | Skip files that fail instead of abandoning the collection |
+| `-j`, `--workers N` | Stage N files at once. About 3x on a many-core machine. Ordinals do not move |
+| `--convert-calendar` | Turn a cftime axis into exact Gregorian timestamps, each keeping its instant |
 | `--no-decode-times` | Keep a time axis as raw numbers, for a calendar that decodes to cftime |
 | `--skip-unsupported` | Leave out an array of an unsupported dtype, and keep the rest of the dataset |
 | `-q`, `--quiet` | Do not list a file as it lands |
 
-Progress goes to stderr, so a pipe still reads stdout.
+Progress goes to stderr, so a pipe still reads stdout. Each line counts the
+files and says how many remain:
+
+```text
+Writing /data/collection from 3 file(s)
+  [1/3] 2024-01.nc  (2 left)
+  [2/3] 2024-02.nc  (1 left)
+  [3/3] 2024-03.nc  (0 left)
+3 dataset(s) written to /data/collection
+```
+
+`-q` turns the per-file lines off. The same counter goes to `--log-file`, for
+a run nobody watched.
 
 ### Unsupported dtypes
 
@@ -110,7 +132,7 @@ size. `--open-chunks` picks another strategy:
 
 | Mode | Reads | Stored chunk shape |
 |---|---|---|
-| `auto` *(default)* | blocks sized to `--chunk-size` | those blocks |
+| `auto` *(default)* | whole when the file is small, else blocks sized to `--chunk-size` | those blocks |
 | `native` | the file's own chunk encoding | that encoding |
 | `none` | each variable whole | one full-shape chunk |
 | JSON dict | as given, per dimension | as given |

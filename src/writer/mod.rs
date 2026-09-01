@@ -28,9 +28,15 @@
 //!
 //! A [`DatasetWriter`] touches the container only in
 //! [`DatasetWriter::finish`], which takes the writer's lock for the whole
-//! append. Several datasets can therefore stage at once, which helps with many
-//! input files. They land in the container in finish order, and never
+//! append. The costly part, the flush and the compact, runs outside that lock.
+//! Several datasets can therefore stage at once, which is what makes a
+//! many-file ingest scale. Their bytes land in finish order, and never
 //! interleave.
+//!
+//! Ordinals do not follow that order. Each dataset carries the number of the
+//! [`AtlasWriter::add_dataset`] call that opened it, and the footer sorts on
+//! that at the end. Stage a directory twice and every dataset lands at the
+//! same ordinal, however many threads did the work.
 //!
 //! # Failure
 //!
@@ -71,7 +77,11 @@ struct WriterState {
     /// Bytes written so far. This is also the offset of the next segment.
     offset: u64,
     interner: Interner,
-    entries: Vec<DatasetEntry>,
+    /// Each committed dataset, tagged with the `add_dataset` call that opened
+    /// it. A dataset appends as soon as it finishes, so this arrives in
+    /// completion order. Sorting by the tag at the end restores call order,
+    /// which is what fixes the ordinals.
+    entries: Vec<(u64, DatasetEntry)>,
     /// Every name handed to `add_dataset`. It refuses a repeat, and the hash
     /// keeps that check flat as the collection grows.
     names: HashSet<String>,
@@ -192,13 +202,15 @@ impl AtlasWriter {
             return Err(Error::DatasetAlreadyExists(name.to_string()));
         }
         state.dataset_seq += 1;
-        let dir = state.scratch.path().join(state.dataset_seq.to_string());
+        let seq = state.dataset_seq;
+        let dir = state.scratch.path().join(seq.to_string());
         std::fs::create_dir_all(&dir)?;
         let config = state.config.clone();
         drop(state);
         Ok(DatasetWriter {
             state: Arc::clone(&self.state),
             name: name.to_string(),
+            seq,
             dir,
             config,
             file: None,
@@ -218,10 +230,20 @@ impl AtlasWriter {
     /// After this the collection is readable, and fixed for good. A
     /// [`DatasetWriter`] that is still open fails with
     /// [`Error::WriterFinished`].
+    ///
+    /// Ordinals follow the order of the [`add_dataset`](Self::add_dataset)
+    /// calls, not the order the datasets finished in. Stage a directory twice
+    /// and every dataset lands at the same ordinal, however many threads did
+    /// the work.
     pub async fn finish(self) -> Result<()> {
         let mut state = self.state.lock().await;
         let mut out = state.out.take().ok_or(Error::WriterFinished)?;
         let (schema_pool, attr_key_pool) = std::mem::take(&mut state.interner).into_pools();
+        // Back to call order. Each entry carries its own byte range, so the
+        // segments need no matching order on disk.
+        let mut tagged = std::mem::take(&mut state.entries);
+        tagged.sort_by_key(|(seq, _)| *seq);
+        let datasets: Vec<DatasetEntry> = tagged.into_iter().map(|(_, e)| e).collect();
         let footer = CollectionFooter {
             version: format::FORMAT_VERSION,
             segment_format: format::SEGMENT_FORMAT,
@@ -229,7 +251,7 @@ impl AtlasWriter {
             created_unix_ms: chrono::Utc::now().timestamp_millis(),
             schema_pool,
             attr_key_pool,
-            datasets: std::mem::take(&mut state.entries),
+            datasets,
         };
         let bytes = footer.encode()?;
         let footer_size = bytes.len() as u64;
@@ -267,6 +289,9 @@ impl Drop for WriterState {
 pub struct DatasetWriter {
     state: Arc<Mutex<WriterState>>,
     name: String,
+    /// Which `add_dataset` call opened this one. It fixes the ordinal, so a
+    /// dataset that finishes out of turn still lands where it was asked for.
+    seq: u64,
     dir: std::path::PathBuf,
     config: WriterConfig,
     file: Option<ArrayFile>,
@@ -454,15 +479,18 @@ impl DatasetWriter {
         }
         let schema = state.interner.intern_schema(DatasetSchema { arrays });
 
-        state.entries.push(DatasetEntry {
-            name: std::mem::take(&mut self.name),
-            schema,
-            seg_offset,
-            seg_len,
-            global_attrs,
-            array_attrs,
-            array_stats,
-        });
+        state.entries.push((
+            self.seq,
+            DatasetEntry {
+                name: std::mem::take(&mut self.name),
+                schema,
+                seg_offset,
+                seg_len,
+                global_attrs,
+                array_attrs,
+                array_stats,
+            },
+        ));
         drop(state);
         // The staging area is large. Reclaim it now, not at the end.
         let _ = std::fs::remove_dir_all(&self.dir);

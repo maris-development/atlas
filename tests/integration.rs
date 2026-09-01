@@ -967,6 +967,48 @@ async fn duplicate_names_are_refused() {
 }
 
 #[tokio::test]
+async fn ordinals_follow_add_dataset_order_not_finish_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+        .await
+        .unwrap();
+
+    // Open three in order, then finish them backwards. Parallel staging does
+    // the same thing, just without the deliberate reversal.
+    let mut open = Vec::new();
+    for name in ["a", "b", "c"] {
+        let mut ds = w.add_dataset(name).await.unwrap();
+        ds.define_array::<i64>("x", vec!["i".into()], vec![1], None, None)
+            .await
+            .unwrap();
+        let data = Array1::from_vec(vec![name.as_bytes()[0] as i64]).into_dyn();
+        ds.write_array("x", vec![0], data.view()).await.unwrap();
+        open.push(ds);
+    }
+    for ds in open.into_iter().rev() {
+        ds.finish().await.unwrap();
+    }
+    w.finish().await.unwrap();
+
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+    // Call order, not finish order.
+    assert_eq!(atlas.list_datasets(), vec!["a", "b", "c"]);
+    assert_eq!(atlas.dataset("a").unwrap().ordinal(), 0);
+    assert_eq!(atlas.dataset("c").unwrap().ordinal(), 2);
+
+    // Every segment still reads back, wherever its bytes landed.
+    for name in ["a", "b", "c"] {
+        let got = atlas
+            .dataset(name)
+            .unwrap()
+            .read_array::<i64>("x", vec![], vec![])
+            .await
+            .unwrap();
+        assert_eq!(got[[0]], name.as_bytes()[0] as i64);
+    }
+}
+
+#[tokio::test]
 async fn a_name_stays_reserved_after_an_aborted_dataset() {
     let tmp = tempfile::tempdir().unwrap();
     let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
