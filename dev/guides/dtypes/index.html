@@ -612,6 +612,45 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#calendars-that-decode-to-cftime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Calendars that decode to cftime
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Calendars that decode to cftime">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-conversions-13-days-apart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two conversions, 13 days apart
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#two-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#datetime-and-timedelta" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -858,6 +897,45 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
+  <a href="#calendars-that-decode-to-cftime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Calendars that decode to cftime
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Calendars that decode to cftime">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#two-conversions-13-days-apart" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two conversions, 13 days apart
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#two-limits" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Two limits
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#datetime-and-timedelta" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1010,6 +1088,66 @@
 </table>
 <p><code>atlas show</code> prints the atlas name, so a <code>datetime64[ns]</code> variable appears as
 <code>timestamp_nanoseconds</code>.</p>
+<h3 id="calendars-that-decode-to-cftime">Calendars that decode to cftime</h3>
+<p>xarray decodes a time axis to <code>datetime64[ns]</code> only when the calendar allows
+it. A Julian, <code>360_day</code>, or <code>noleap</code> calendar, or a date outside the
+<code>datetime64[ns]</code> range, decodes to a <code>cftime</code> object instead. Those arrive as
+a numpy <code>object</code> array, and atlas cannot store one:</p>
+<div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>atlas: profile.nc: variable 'JULD' holds cftime objects (DatetimeJulian),
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>which atlas cannot store...
+</span></code></pre></div>
+<p>Atlas refuses by default rather than guess, because two conversions exist and
+they differ by 13 days. Pick one.</p>
+<p><strong>Convert to the exact instant.</strong> This is almost always what you want:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--convert-calendar
+</span></code></pre></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">convert_calendar</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></code></pre></div>
+<p>The axis becomes <code>timestamp_nanoseconds</code>, and every value keeps the moment it
+named. A Julian <code>1973-02-25 18:15</code> becomes the Gregorian <code>1973-03-10 18:15</code>.
+Those are one instant under two calendars. cftime maps between them through
+the Julian Day, so nothing is approximated.</p>
+<p><strong>Keep the raw numbers.</strong> The axis stores as an integer, with its <code>units</code> and
+<code>calendar</code> attributes beside it. A reader decodes it later with
+<code>cftime.num2date</code>:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--no-decode-times
+</span></code></pre></div>
+<p><strong>Drop the axis.</strong> <code>--skip-unsupported</code> leaves the time array out, and keeps
+the rest of the dataset.</p>
+<h4 id="two-conversions-13-days-apart">Two conversions, 13 days apart</h4>
+<p>The Julian calendar takes a leap year every four years. The Gregorian calendar
+drops three of those every four centuries. The gap grows by about three days
+per 400 years, and holds at 13 days from 1900 to 2100.</p>
+<table>
+<thead>
+<tr>
+<th>Conversion</th>
+<th>Julian 2024-01-01 becomes</th>
+<th>It keeps</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>--convert-calendar</code></td>
+<td>2024-01-14</td>
+<td>the instant</td>
+</tr>
+<tr>
+<td><code>xr.Dataset.convert_calendar("standard")</code></td>
+<td>2024-01-01</td>
+<td>the labels</td>
+</tr>
+</tbody>
+</table>
+<p>The xarray method keeps the year, month, and day, which moves the moment by 13
+days. Use it only when the labels matter more than the instant.</p>
+<h4 id="two-limits">Two limits</h4>
+<p><strong>An artificial calendar names no instant.</strong> A <code>360_day</code>, <code>noleap</code>, or
+<code>all_leap</code> year is a model convention with no place on a real timeline.
+<code>--convert-calendar</code> raises for one. Use <code>--no-decode-times</code> instead.</p>
+<p><strong>A nanosecond timestamp spans 1677-09-21 to 2262-04-11.</strong> A date outside that
+raises. numpy wraps such a date in silence, so atlas checks every value before
+it stores one.</p>
 <h3 id="datetime-and-timedelta">datetime and timedelta</h3>
 <p>Atlas supports the <code>[ns]</code> resolution of <code>datetime64</code> alone. It rejects every
 other resolution. Convert with <code>.astype("datetime64[ns]")</code> before you write the
@@ -1062,15 +1200,15 @@ array a default sentinel:</p>
 <p>The <code>_FillValue</code> attribute of a variable beats the default. It stores as the
 fill of the array, and not as an attribute.</p>
 <p>Check what landed:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">arrays</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]:</span> <span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]}</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">arrays</span><span class="p">[</span><span class="s2">"temperature"</span><span class="p">][</span><span class="s2">"fill_value"</span><span class="p">]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">arrays</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]:</span> <span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]}</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">arrays</span><span class="p">[</span><span class="s2">"temperature"</span><span class="p">][</span><span class="s2">"fill_value"</span><span class="p">]</span>
 </span></code></pre></div>
 <h2 id="0-d-scalars">0-D scalars</h2>
 <p>Every dtype works at <code>shape=[]</code>. A NetCDF product uses one for a value such as
 a <code>TRAJECTORY</code> identifier. Those are single values, and they belong to the
 array data, not to the attributes. They come through unchanged:</p>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>    string TRAJECTORY() ;
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>        // stats: count=1  min="6801adf"  max="6801adf"
+<div class="language-text highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>    string TRAJECTORY() ;
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>        // stats: count=1  min="6801adf"  max="6801adf"
 </span></code></pre></div>
 <h2 id="not-yet-available-as-array-types">Not yet available as array types</h2>
 <table>
@@ -1107,8 +1245,8 @@ scalar works: <code>bool</code>, the integer widths, a float, a string, bytes, a
 nanosecond timestamp. A list of one of those works too.</p>
 <p>Some xarray attributes are no scalar. A nested dict, a ragged list, and a numpy
 array each encode as JSON on the way in. <code>describe</code> decodes them again:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"attributes"</span><span class="p">]</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># {'month': 1, 'bounds': [1.0, 2.0], 'nested': {'a': 1}}</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"attributes"</span><span class="p">]</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># {'month': 1, 'bounds': [1.0, 2.0], 'nested': {'a': 1}}</span>
 </span></code></pre></div>
 <p>A value JSON cannot serialize fails the ingest.</p>
 <h2 id="reading-values">Reading values</h2>
