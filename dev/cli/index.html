@@ -1006,6 +1006,9 @@
 <h1 id="the-atlas-command">The <code>atlas</code> command</h1>
 <p><code>pip install atlas-python</code> puts <code>atlas</code> on your PATH. Five subcommands, one per
 operation.</p>
+<p><code>python -m atlas</code> runs the same command without a PATH lookup. Use it in a
+container, in a CI job, or when the shell cannot find <code>atlas</code>. See
+<a href="../installation/#the-atlas-command-is-not-found">Installation</a>.</p>
 <div class="language-text highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>atlas create &lt;netcdf-dir&gt; &lt;collection&gt;   build a collection
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>atlas rm     &lt;collection&gt; &lt;name&gt;...      remove datasets
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>atlas ls     &lt;collection&gt;                list datasets
@@ -1022,7 +1025,7 @@ operation.</p>
 <p><code>--log-file PATH</code> appends every error and warning to a file, with the reason:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-unsupported<span class="w"> </span>--log-file<span class="w"> </span>ingest.log
 </span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>$<span class="w"> </span>cat<span class="w"> </span>ingest.log
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.cli:<span class="w"> </span>atlas<span class="w"> </span><span class="m">0</span>.16.1:<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>...
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.cli:<span class="w"> </span>atlas<span class="w"> </span><span class="m">0</span>.16.2:<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>...
 </span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.ops:<span class="w"> </span>ingesting<span class="w"> </span><span class="m">2</span><span class="w"> </span>file<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>into<span class="w"> </span>/data/collection
 </span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>WARNING<span class="w"> </span>atlas.ops:<span class="w"> </span>/data/nc/buoy.nc:<span class="w"> </span>skipped<span class="w"> </span>array<span class="w"> </span><span class="s1">'flag'</span><span class="w"> </span>of<span class="w"> </span>dtype<span class="w"> </span>bool:<span class="w"> </span>numpy<span class="w"> </span>dtype<span class="w"> </span>dtype<span class="o">(</span><span class="s1">'bool'</span><span class="o">)</span><span class="w"> </span>is<span class="w"> </span>not<span class="w"> </span>supported<span class="w"> </span>by<span class="w"> </span>atlas<span class="w"> </span><span class="o">(</span>supported:<span class="w"> </span>...<span class="o">)</span>
 </span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.ops:<span class="w"> </span>wrote<span class="w"> </span><span class="m">1</span><span class="w"> </span>dataset<span class="o">(</span>s<span class="o">)</span><span class="p">;</span><span class="w"> </span>skipped<span class="w"> </span><span class="m">0</span><span class="w"> </span>file<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>and<span class="w"> </span><span class="m">1</span><span class="w"> </span>array<span class="o">(</span>s<span class="o">)</span>
@@ -1034,9 +1037,11 @@ stderr.</p>
 <h2 id="create">create</h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection
 </span></code></pre></div>
-<p>Each NetCDF file becomes one dataset, named after the file. <code>2024-01.nc</code>
-becomes <code>2024-01.nc</code>, suffix and all. The files land in sorted order, which
-makes the ordinals of a collection reproducible.</p>
+<p>The scan descends into every subdirectory. Each NetCDF file becomes one
+dataset, named after the file. <code>2024-01.nc</code> becomes <code>2024-01.nc</code>, suffix and
+all. A name carries no directory, so two files of one name in two
+subdirectories collide. The files land in sorted order, which makes the
+ordinals of a collection reproducible.</p>
 <p>Nothing at the destination is readable until every file lands, with the footer.
 A failure part-way leaves no collection, and not a partial one.</p>
 <table>
@@ -1048,8 +1053,12 @@ A failure part-way leaves no collection, and not a partial one.</p>
 </thead>
 <tbody>
 <tr>
+<td><code>--no-recursive</code></td>
+<td>Scan the top directory alone. The scan descends by default</td>
+</tr>
+<tr>
 <td><code>-r</code>, <code>--recursive</code></td>
-<td>Descend into subdirectories</td>
+<td>Accepted for compatibility. The scan already descends</td>
 </tr>
 <tr>
 <td><code>--codec {zstd,lz4,none}</code></td>
@@ -1146,7 +1155,7 @@ size. <code>--open-chunks</code> picks another strategy:</p>
 reads. Each misaligned block then costs a read-modify-write. Use
 <code>--open-chunks</code> when it can say what you want.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># One collection from a tree of monthly directories, tolerating bad files</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--recursive<span class="w"> </span>--skip-errors
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-errors
 </span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
 </span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># A big grid, chunked for selective reads, straight to a bucket</span>
 </span><span id="__span-7-5"><a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>s3://bucket/2024<span class="w"> </span>--chunk-size<span class="w"> </span>64MiB<span class="w"> </span>--region<span class="w"> </span>eu-west-1

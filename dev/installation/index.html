@@ -387,6 +387,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-atlas-command-is-not-found" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The atlas command is not found
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#optional-cloud-storage-s3-gcs-azure" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -840,6 +851,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-atlas-command-is-not-found" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The atlas command is not found
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#optional-cloud-storage-s3-gcs-azure" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -914,19 +936,48 @@ debug build is correct, and much slower on a large read.</p>
 <p>To run the test suite:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pytest<span class="w"> </span>atlas-python/tests/<span class="w"> </span>-v
 </span></code></pre></div>
+<h2 id="the-atlas-command-is-not-found">The <code>atlas</code> command is not found</h2>
+<p><code>pip install</code> puts the <code>atlas</code> script in the script directory of the
+environment it installed into. The shell finds it only when that directory is
+on <code>PATH</code>.</p>
+<p>Run the command through Python instead. This form needs no <code>PATH</code> entry, so it
+works everywhere the package imports:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>python<span class="w"> </span>-m<span class="w"> </span>atlas<span class="w"> </span>--version
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>python<span class="w"> </span>-m<span class="w"> </span>atlas<span class="w"> </span>ls<span class="w"> </span>/data/collection
+</span></code></pre></div>
+<p>To fix the <code>PATH</code> itself, first find where the script landed:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pip<span class="w"> </span>show<span class="w"> </span>-f<span class="w"> </span>atlas-python<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-i<span class="w"> </span>bin
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import sysconfig; print(sysconfig.get_path('scripts'))"</span>
+</span></code></pre></div>
+<p>Three causes cover almost every case:</p>
+<ul>
+<li><strong><code>pip install --user</code>.</strong> The script goes to <code>~/.local/bin</code>. Many
+  distributions leave that off <code>PATH</code>. Add it:
+  <code>export PATH="$HOME/.local/bin:$PATH"</code>.</li>
+<li><strong>A virtual environment nobody activated.</strong> Run <code>source .venv/bin/activate</code>,
+  or call <code>.venv/bin/atlas</code> directly.</li>
+<li><strong>Two Pythons.</strong> <code>pip</code> and <code>python</code> resolve to different environments. Use
+  <code>python -m pip install atlas-python</code> to install into the interpreter you
+  actually run.</li>
+</ul>
+<p>Confirm the package itself is sound:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import atlas; print(atlas.__version__, atlas.__file__)"</span>
+</span></code></pre></div>
+<p>A version and a path mean the install worked, and only the script lookup
+failed.</p>
 <h2 id="optional-cloud-storage-s3-gcs-azure">Optional: cloud storage (S3, GCS, Azure)</h2>
 <p>Install the <code>cloud</code> extra to open or create an atlas store on S3, GCS, Azure
 Blob, or any other backend
 <a href="https://docs.rs/object_store"><code>object_store</code></a> supports. It installs
 <a href="https://github.com/developmentseed/obstore">obstore</a>:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"atlas-python[cloud]"</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">"atlas-python[cloud]"</span>
 </span></code></pre></div>
 <p>Then pass a URL where you would otherwise pass a path:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>atlas<span class="w"> </span>ls<span class="w"> </span>s3://my-bucket/collections/2024<span class="w"> </span>--region<span class="w"> </span>eu-west-1
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>atlas<span class="w"> </span>ls<span class="w"> </span>s3://my-bucket/collections/2024<span class="w"> </span>--region<span class="w"> </span>eu-west-1
 </span></code></pre></div>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
-</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
-</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="s2">"s3://my-bucket/collections/2024"</span><span class="p">,</span> <span class="n">region</span><span class="o">=</span><span class="s2">"eu-west-1"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
+</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
+</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="s2">"s3://my-bucket/collections/2024"</span><span class="p">,</span> <span class="n">region</span><span class="o">=</span><span class="s2">"eu-west-1"</span><span class="p">)</span>
 </span></code></pre></div>
 <p>See <a href="../guides/cloud-storage/">Cloud storage (S3, GCS, Azure)</a> for the
 full guide.</p>
@@ -935,10 +986,10 @@ full guide.</p>
 They run through tracing-subscriber. Pass an
 <a href="https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html"><code>env_filter</code></a>
 directive to override the default:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
-</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">atlas</span><span class="o">.</span><span class="n">init_tracing</span><span class="p">(</span><span class="s2">"debug"</span><span class="p">)</span>           <span class="c1"># everything</span>
-</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">init_tracing</span><span class="p">(</span><span class="s2">"atlas=info"</span><span class="p">)</span>      <span class="c1"># the atlas crate alone, at info and above</span>
-</span><span id="__span-7-4"><a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="n">atlas</span><span class="o">.</span><span class="n">init_tracing</span><span class="p">()</span>                  <span class="c1"># read ATLAS_LOG and RUST_LOG again</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="n">atlas</span><span class="o">.</span><span class="n">init_tracing</span><span class="p">(</span><span class="s2">"debug"</span><span class="p">)</span>           <span class="c1"># everything</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">init_tracing</span><span class="p">(</span><span class="s2">"atlas=info"</span><span class="p">)</span>      <span class="c1"># the atlas crate alone, at info and above</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">atlas</span><span class="o">.</span><span class="n">init_tracing</span><span class="p">()</span>                  <span class="c1"># read ATLAS_LOG and RUST_LOG again</span>
 </span></code></pre></div>
 
 

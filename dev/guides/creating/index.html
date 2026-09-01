@@ -1079,26 +1079,32 @@
 </span></code></pre></div>
 <h2 id="what-happens">What happens</h2>
 <p><code>create</code> collects every file that matches <code>.nc</code>, <code>.nc4</code>, <code>.cdf</code>, or <code>.netcdf</code>.
-It <strong>sorts</strong> them, and writes one dataset per file, named after the file.
-<code>2024-01.nc</code> becomes the dataset <code>2024-01.nc</code>. The suffix is part of the name,
-so <code>jan.nc</code> and <code>jan.nc4</code> are two datasets.</p>
+The scan <strong>descends into every subdirectory</strong>. It <strong>sorts</strong> the result, and
+writes one dataset per file, named after the file. <code>2024-01.nc</code> becomes the
+dataset <code>2024-01.nc</code>. The suffix is part of the name, so <code>jan.nc</code> and
+<code>jan.nc4</code> are two datasets.</p>
+<p>Pass <code>recursive=False</code>, or <code>--no-recursive</code>, to scan the top directory alone:</p>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">recursive</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</span></code></pre></div>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--no-recursive
+</span></code></pre></div>
 <p>The sort matters. An ordinal comes from the write order, so a sorted ingest
 makes it reproducible. Rebuild the same directory, and every dataset lands at
 the same position.</p>
 <p>Check what the call picks up before you run it:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">find_netcdf_files</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">)</span>             <span class="c1"># sorted list of paths</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="n">atlas</span><span class="o">.</span><span class="n">find_netcdf_files</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">recursive</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">find_netcdf_files</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">)</span>                  <span class="c1"># sorted, and recursive</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">atlas</span><span class="o">.</span><span class="n">find_netcdf_files</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">recursive</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>  <span class="c1"># the top level alone</span>
 </span></code></pre></div>
 <h2 id="all-or-nothing">All or nothing</h2>
 <p>Nothing at the destination is readable until every file lands, with the footer.
 A process that dies at file 900 of 1000 leaves no collection there, and not a
 partial one.</p>
 <p>That is what you usually want. When it is not:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">on_error</span><span class="o">=</span><span class="s2">"skip"</span><span class="p">)</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">result</span><span class="p">[</span><span class="s2">"written"</span><span class="p">]</span>   <span class="c1"># ['2024-01.nc', '2024-03.nc']</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="n">result</span><span class="p">[</span><span class="s2">"skipped"</span><span class="p">]</span>   <span class="c1"># [{'file': '.../2024-02.nc', 'error': '...'}]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">on_error</span><span class="o">=</span><span class="s2">"skip"</span><span class="p">)</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">result</span><span class="p">[</span><span class="s2">"written"</span><span class="p">]</span>   <span class="c1"># ['2024-01.nc', '2024-03.nc']</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="n">result</span><span class="p">[</span><span class="s2">"skipped"</span><span class="p">]</span>   <span class="c1"># [{'file': '.../2024-02.nc', 'error': '...'}]</span>
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-errors
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-errors
 </span></code></pre></div>
 <p>A skipped file leaves no trace in the collection. The writer moves to the next
 one. The CLI exits <code>1</code> when it skipped anything, so a pipeline sees that. It
@@ -1107,11 +1113,11 @@ still writes the collection.</p>
 <p><code>on_error</code> works at the granularity of a file. One variable of an unsupported
 dtype therefore costs the whole dataset. <code>on_unsupported="skip"</code> narrows that
 to the array:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">on_unsupported</span><span class="o">=</span><span class="s2">"skip"</span><span class="p">)</span>
-</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="n">result</span><span class="p">[</span><span class="s2">"skipped_arrays"</span><span class="p">]</span>
-</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># [{'array': 'flag', 'dtype': 'bool', 'error': '...', 'dataset': '2024-01.nc'}]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="n">result</span> <span class="o">=</span> <span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">on_unsupported</span><span class="o">=</span><span class="s2">"skip"</span><span class="p">)</span>
+</span><span id="__span-7-2"><a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="n">result</span><span class="p">[</span><span class="s2">"skipped_arrays"</span><span class="p">]</span>
+</span><span id="__span-7-3"><a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># [{'array': 'flag', 'dtype': 'bool', 'error': '...', 'dataset': '2024-01.nc'}]</span>
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-unsupported
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-unsupported
 </span></code></pre></div>
 <p>The rest of the dataset lands as usual: every other array, every attribute,
 and the dataset itself. The skipped name is absent from the schema, so no
@@ -1123,27 +1129,27 @@ store. <code>--skip-errors</code> handles the file that fails for any other reas
 <p>See <a href="../dtypes/">Supported dtypes</a> for what atlas can store.</p>
 <h2 id="the-log-file">The log file</h2>
 <p>Both kinds of skip go to a log file, with the reason:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-unsupported<span class="w"> </span>--log-file<span class="w"> </span>ingest.log
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-unsupported<span class="w"> </span>--log-file<span class="w"> </span>ingest.log
 </span></code></pre></div>
-<div class="language-text highlight"><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>2026-09-01 14:30:41 INFO    atlas.ops: ingesting 2 file(s) into /data/collection
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/broken.nc: ValueError: did not find a match ...
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/buoy.nc: skipped array 'flag' of dtype bool: numpy dtype dtype('bool') is not supported by atlas (supported: ...)
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>2026-09-01 14:30:41 INFO    atlas.ops: wrote 1 dataset(s); skipped 1 file(s) and 1 array(s)
+<div class="language-text highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>2026-09-01 14:30:41 INFO    atlas.ops: ingesting 2 file(s) into /data/collection
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/broken.nc: ValueError: did not find a match ...
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/buoy.nc: skipped array 'flag' of dtype bool: numpy dtype dtype('bool') is not supported by atlas (supported: ...)
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>2026-09-01 14:30:41 INFO    atlas.ops: wrote 1 dataset(s); skipped 1 file(s) and 1 array(s)
 </span></code></pre></div>
 <p>Each line names the file, so a thousand-file ingest stays readable. The file
 opens in append mode, so a repeat run adds to it.</p>
 <p>From the library:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">log_to_file</span><span class="p">(</span><span class="s2">"ingest.log"</span><span class="p">)</span>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">on_unsupported</span><span class="o">=</span><span class="s2">"skip"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="n">atlas</span><span class="o">.</span><span class="n">log_to_file</span><span class="p">(</span><span class="s2">"ingest.log"</span><span class="p">)</span>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">on_unsupported</span><span class="o">=</span><span class="s2">"skip"</span><span class="p">)</span>
 </span></code></pre></div>
 <p>Atlas logs to the <code>atlas</code> logger and attaches no handler of its own, so attach
 your own to send the records somewhere else:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">"atlas"</span><span class="p">)</span><span class="o">.</span><span class="n">addHandler</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">StreamHandler</span><span class="p">())</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">"atlas"</span><span class="p">)</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">INFO</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">"atlas"</span><span class="p">)</span><span class="o">.</span><span class="n">addHandler</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">StreamHandler</span><span class="p">())</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="s2">"atlas"</span><span class="p">)</span><span class="o">.</span><span class="n">setLevel</span><span class="p">(</span><span class="n">logging</span><span class="o">.</span><span class="n">INFO</span><span class="p">)</span>
 </span></code></pre></div>
 <p><code>log_to_file</code> also captures Python warnings, such as the one about missing
 string cells. That moves them off stderr, because <code>logging.captureWarnings</code> is
@@ -1162,9 +1168,9 @@ then sizes the blocks to <code>chunk_size</code>, which is 128 MiB. Three result
 <li>A large variable stores in blocks of about <code>chunk_size</code>. That is a sensible
   read size.</li>
 </ul>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>dest<span class="w"> </span>--chunk-size<span class="w"> </span>64MiB
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>dest<span class="w"> </span>--chunk-size<span class="w"> </span>64MiB
 </span></code></pre></div>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">chunk_size</span><span class="o">=</span><span class="s2">"64MiB"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">chunk_size</span><span class="o">=</span><span class="s2">"64MiB"</span><span class="p">)</span>
 </span></code></pre></div>
 <p><code>chunk_size</code> is about the memory ceiling per variable. Lower it on a small
 machine. Raise it for larger stored chunks.</p>
@@ -1208,7 +1214,7 @@ chunking, so <code>"native"</code> reads it whole.</p>
 whole variable fits with room to spare.</p>
 <h3 id="overriding-the-stored-shape">Overriding the stored shape</h3>
 <p><code>chunks</code> sets the stored chunk shape directly, whatever the read used:</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>dest<span class="w"> </span>--chunks<span class="w"> </span><span class="s1">'{"temperature": [64, 64]}'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>dest<span class="w"> </span>--chunks<span class="w"> </span><span class="s1">'{"temperature": [64, 64]}'</span>
 </span></code></pre></div>
 <p>Use it when the read size you want on disk differs from the one that suits
 ingest. Note the cost. The source blocks no longer align with the stored
@@ -1218,17 +1224,17 @@ slower.</p>
 <p>Chunk the large variables you expect to slice. Leave a small coordinate vector
 alone. A one-chunk array reads whole, or not at all.</p>
 <p>Confirm what landed:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="n">arrays</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]:</span> <span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">dest</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]}</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a><span class="n">arrays</span><span class="p">[</span><span class="s2">"temperature"</span><span class="p">][</span><span class="s2">"chunk_shape"</span><span class="p">]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">arrays</span> <span class="o">=</span> <span class="p">{</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]:</span> <span class="n">a</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">dest</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]}</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="n">arrays</span><span class="p">[</span><span class="s2">"temperature"</span><span class="p">][</span><span class="s2">"chunk_shape"</span><span class="p">]</span>
 </span></code></pre></div>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>atlas<span class="w"> </span>show<span class="w"> </span>dest<span class="w"> </span><span class="m">2024</span>-01.nc<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>_ChunkShape
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>atlas<span class="w"> </span>show<span class="w"> </span>dest<span class="w"> </span><span class="m">2024</span>-01.nc<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>_ChunkShape
 </span></code></pre></div>
 <h3 id="the-writers-own-memory">The writer's own memory</h3>
 <p>Staging runs on local disk. <code>array-format</code> spills each compressed chunk to a
 temporary file. The memory of the writer therefore does not grow with the
 number of datasets. A thousand-file ingest costs what a one-file ingest costs.</p>
 <h2 id="compression">Compression</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="s2">"lz4"</span><span class="p">)</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">codec</span><span class="o">=</span><span class="s2">"lz4"</span><span class="p">)</span>
 </span></code></pre></div>
 <table>
 <thead>
@@ -1255,7 +1261,7 @@ number of datasets. A thousand-file ingest costs what a one-file ingest costs.</
 <p>Each block records its own codec, so nothing tells a reader which one the write
 used.</p>
 <h2 id="progress">Progress</h2>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">progress</span><span class="o">=</span><span class="k">lambda</span> <span class="n">name</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">name</span><span class="p">))</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">create</span><span class="p">(</span><span class="s2">"/data/nc"</span><span class="p">,</span> <span class="n">dest</span><span class="p">,</span> <span class="n">progress</span><span class="o">=</span><span class="k">lambda</span> <span class="n">name</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">name</span><span class="p">))</span>
 </span></code></pre></div>
 <p>The CLI does this by default, to stderr, so a pipe still reads stdout. <code>-q</code>
 turns it off.</p>
@@ -1291,7 +1297,12 @@ turns it off.</p>
 </tbody>
 </table>
 <p>Two files with one name surprise people. <code>a/jan.nc</code> and <code>b/jan.nc</code> both want
-the name <code>jan.nc</code>. Rename one, or ingest them into two collections.</p>
+the name <code>jan.nc</code>. The scan descends by default, so a tree of monthly
+directories hits this often. A dataset name carries no directory, because a
+name may hold no <code>/</code>.</p>
+<p>Three ways out. Rename the files. Ingest each subdirectory into its own
+collection. Or pass <code>on_error="skip"</code>, which keeps the first file and reports
+the second.</p>
 <p>For the dtype rules, see <a href="../dtypes/">Supported dtypes</a>.</p>
 <h2 id="changing-a-collection">Changing a collection</h2>
 <p>You cannot. One write builds a collection. There is no append, and no in-place
