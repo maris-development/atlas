@@ -215,6 +215,84 @@ def test_a_clean_ingest_reports_no_skipped_arrays(netcdf_dir, tmp_path):
     assert result["skipped_arrays"] == []
 
 
+# ── cftime calendars ─────────────────────────────────────────────────
+
+
+@pytest.fixture
+def netcdf_dir_with_a_julian_calendar(tmp_path):
+    """A time axis xarray decodes to cftime, not to datetime64."""
+    import cftime
+
+    d = tmp_path / "nc"
+    d.mkdir()
+    times = [cftime.DatetimeJulian(2024, 1, i + 1) for i in range(4)]
+    xr.Dataset(
+        {"temp": ("time", np.arange(4, dtype=np.float32))},
+        coords={"time": ("time", times)},
+    ).to_netcdf(d / "julian.nc")
+    return d
+
+
+def test_a_cftime_axis_reports_the_variable_and_the_remedy(
+    netcdf_dir_with_a_julian_calendar, tmp_path
+):
+    with pytest.raises(atlas.AtlasError) as exc:
+        atlas.create(netcdf_dir_with_a_julian_calendar, str(tmp_path / "c"))
+
+    message = str(exc.value)
+    assert "'time'" in message, "the message must name the variable"
+    assert "DatetimeJulian" in message
+    assert "decode_times=False" in message
+
+
+def test_decode_times_false_stores_a_cftime_axis_as_raw_numbers(
+    netcdf_dir_with_a_julian_calendar, tmp_path
+):
+    dest = tmp_path / "c"
+    atlas.create(netcdf_dir_with_a_julian_calendar, str(dest), decode_times=False)
+
+    arrays = {a["name"]: a for a in atlas.describe(str(dest), "julian.nc")["arrays"]}
+    assert arrays["time"]["dtype"] == "int64"
+    # The units and the calendar survive, so a reader can decode the numbers.
+    assert arrays["time"]["attributes"]["calendar"] == "julian"
+    assert "days since" in arrays["time"]["attributes"]["units"]
+    assert arrays["temp"]["dtype"] == "float32"
+
+
+def test_a_cftime_axis_can_be_skipped_per_array(
+    netcdf_dir_with_a_julian_calendar, tmp_path
+):
+    dest = tmp_path / "c"
+    result = atlas.create(
+        netcdf_dir_with_a_julian_calendar, str(dest), on_unsupported="skip"
+    )
+
+    assert [s["array"] for s in result["skipped_arrays"]] == ["time"]
+    assert [a["name"] for a in atlas.describe(str(dest), "julian.nc")["arrays"]] == [
+        "temp"
+    ]
+
+
+def test_an_object_array_of_something_else_is_refused_clearly(tmp_path):
+    """numpy reports `object` for both a string array and this one."""
+    from atlas.xarray import _reject_unstorable_object_array
+
+    var = xr.DataArray(np.array([{"a": 1}, {"b": 2}], dtype=object), dims=["x"])
+    with pytest.raises(NotImplementedError, match="object array of dict"):
+        _reject_unstorable_object_array("payload", var)
+
+
+def test_a_real_string_array_still_passes_the_object_check(tmp_path):
+    from atlas.xarray import _reject_unstorable_object_array
+
+    # A missing cell must not be mistaken for an unsupported element.
+    var = xr.DataArray(np.array([None, "b", "c"], dtype=object), dims=["x"])
+    _reject_unstorable_object_array("label", var)
+
+    empty = xr.DataArray(np.array([], dtype=object), dims=["x"])
+    _reject_unstorable_object_array("empty", empty)
+
+
 # ── the log file ─────────────────────────────────────────────────────
 
 

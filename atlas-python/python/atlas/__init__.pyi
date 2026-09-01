@@ -62,6 +62,7 @@ def create(
     chunks: Optional[dict[str, Sequence[int]]] = None,
     open_chunks: Union[str, dict[str, int], None] = "auto",
     chunk_size: str = "128MiB",
+    decode_times: bool = True,
     on_error: str = "stop",
     on_unsupported: str = "stop",
     progress: Optional[Callable[[str], None]] = None,
@@ -114,6 +115,11 @@ def create(
         chunk_size: The block size ``"auto"`` aims at, as a dask size string.
             It is about the memory ceiling per variable during ingest. It
             defaults to ``"128MiB"``.
+        decode_times: How xarray reads a time axis. Under the default, a
+            calendar it cannot map to ``datetime64[ns]``, such as a Julian
+            one, decodes to cftime objects, which atlas cannot store. Set it
+            false to keep the raw numbers, with their ``units`` and
+            ``calendar`` attributes.
         on_error: ``"stop"`` is the default. It abandons the whole collection
             on the first bad file. ``"skip"`` records that file and continues.
         on_unsupported: What one array of an unsupported dtype costs.

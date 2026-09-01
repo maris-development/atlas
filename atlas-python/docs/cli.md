@@ -66,6 +66,7 @@ A failure part-way leaves no collection, and not a partial one.
 | `--open-chunks MODE` | How files are read: `auto`, `native`, `none`, or a JSON dict |
 | `--chunks JSON` | Override the stored chunk shape, `'{"temperature": [64, 64]}'` |
 | `--skip-errors` | Skip files that fail instead of abandoning the collection |
+| `--no-decode-times` | Keep a time axis as raw numbers, for a calendar that decodes to cftime |
 | `--skip-unsupported` | Leave out an array of an unsupported dtype, and keep the rest of the dataset |
 | `-q`, `--quiet` | Do not list a file as it lands |
 

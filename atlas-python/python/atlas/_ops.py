@@ -105,6 +105,7 @@ def create(
     chunks: Optional[dict[str, Sequence[int]]] = None,
     open_chunks: Any = "auto",
     chunk_size: str = DEFAULT_CHUNK_SIZE,
+    decode_times: bool = True,
     on_error: str = "stop",
     on_unsupported: str = "stop",
     progress: Optional[Any] = None,
@@ -137,6 +138,11 @@ def create(
     `on_error` then handles. `"skip"` leaves that array out, and the rest of
     the dataset still lands.
 
+    `decode_times` controls how xarray reads a time axis. Under the default,
+    a calendar it cannot map to `datetime64[ns]`, such as a Julian one,
+    decodes to cftime objects, which atlas cannot store. Set it false to keep
+    the raw numbers and their `units` and `calendar` attributes instead.
+
     `progress` takes each file name as that file lands.
 
     Returns a summary. How many datasets landed, which files the run skipped,
@@ -150,6 +156,8 @@ def create(
         )
 
     open_kwargs = _open_kwargs(open_chunks)
+    if not decode_times:
+        open_kwargs["decode_times"] = False
 
     import dask
     import xarray as xr

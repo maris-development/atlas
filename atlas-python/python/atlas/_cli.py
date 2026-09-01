@@ -161,6 +161,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         chunks=chunks,
         open_chunks=open_chunks,
         chunk_size=args.chunk_size,
+        decode_times=not args.no_decode_times,
         on_error="skip" if args.skip_errors else "stop",
         on_unsupported="skip" if args.skip_unsupported else "stop",
         progress=progress,
@@ -359,6 +360,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-errors",
         action="store_true",
         help="skip files that fail instead of abandoning the collection",
+    )
+    p.add_argument(
+        "--no-decode-times",
+        action="store_true",
+        help=(
+            "keep a time axis as raw numbers. Use it for a calendar xarray "
+            "decodes to cftime, such as Julian, which atlas cannot store"
+        ),
     )
     p.add_argument(
         "--skip-unsupported",

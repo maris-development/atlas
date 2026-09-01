@@ -322,7 +322,7 @@ impl PyDatasetWriter {
                     String::from_utf8_lossy(&b).into_owned()
                 } else {
                     return Err(PyTypeError::new_err(format!(
-                        "string array element must be str or bytes, got {:?}",
+                        "array {name:?}: a string element must be str or bytes, got {:?}",
                         bound.get_type().name()?
                     )));
                 };

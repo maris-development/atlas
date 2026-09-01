@@ -17,6 +17,46 @@ What a NetCDF variable becomes when `atlas create` ingests it.
 `atlas show` prints the atlas name, so a `datetime64[ns]` variable appears as
 `timestamp_nanoseconds`.
 
+### Calendars that decode to cftime
+
+xarray decodes a time axis to `datetime64[ns]` only when the calendar allows
+it. A Julian, `360_day`, or `noleap` calendar, or a date outside the
+`datetime64[ns]` range, decodes to a `cftime` object instead. Those arrive as
+a numpy `object` array, and atlas cannot store one:
+
+```text
+atlas: profile.nc: variable 'JULD' holds cftime objects (DatetimeJulian),
+which atlas cannot store...
+```
+
+Atlas refuses rather than converts, because a Julian date and a Gregorian date
+of the same number are days apart. A silent conversion would move every
+timestamp.
+
+Three ways forward:
+
+**Keep the raw numbers.** The time axis stores as an integer, with its `units`
+and `calendar` attributes beside it. Nothing is lost, and a reader decodes it
+with `cftime.num2date`:
+
+```bash
+atlas create /data/nc /data/collection --no-decode-times
+```
+
+```python
+atlas.create("/data/nc", dest, decode_times=False)
+```
+
+**Convert the calendar first.** This gives a real `timestamp_nanoseconds`
+array, and shifts the dates onto the standard calendar:
+
+```python
+xr.open_dataset(path).convert_calendar("standard").to_netcdf(clean_path)
+```
+
+**Drop the axis.** `--skip-unsupported` leaves the time array out and keeps
+the rest of the dataset.
+
 ### datetime and timedelta
 
 Atlas supports the `[ns]` resolution of `datetime64` alone. It rejects every

@@ -244,6 +244,58 @@ def _fill_missing_strings(block: np.ndarray, fill: str) -> tuple[np.ndarray, int
     return np.where(mask, fill, block), n
 
 
+# How far into an object array to look for a real value. Enough to tell a
+# string array from an array of something else, and cheap on a dask block.
+_OBJECT_SAMPLE = 64
+
+
+def _sample_object_element(var: Any) -> Any:
+    """The first value of an object array that is no missing marker.
+
+    This scans a bounded prefix, and computes one dask block at most.
+    """
+    data = var.data
+    if _is_dask_array(data):
+        import dask
+
+        (head,) = dask.compute(data.reshape(-1)[:_OBJECT_SAMPLE])
+    else:
+        head = np.asarray(data).reshape(-1)[:_OBJECT_SAMPLE]
+    for value in head:
+        if not _is_missing_str(value):
+            return value
+    return None
+
+
+def _reject_unstorable_object_array(var_name: str, var: Any) -> None:
+    """Raises when an object array holds something atlas cannot store.
+
+    Atlas stores an object array as a string array. numpy reports only
+    `object` for the dtype, so the element type settles what the array really
+    holds. A missing marker and an empty array both pass, because the string
+    path handles them.
+    """
+    sample = _sample_object_element(var)
+    if sample is None or isinstance(sample, (str, bytes)):
+        return
+
+    kind = type(sample)
+    if kind.__module__.split(".")[0] == "cftime":
+        raise NotImplementedError(
+            f"variable {var_name!r} holds cftime objects ({kind.__name__}), "
+            f"which atlas cannot store. xarray decodes a calendar it cannot "
+            f"map to datetime64[ns], such as a Julian one, into cftime. Pass "
+            f"decode_times=False, or --no-decode-times, to keep the raw "
+            f"numbers and their units. Or convert the calendar first with "
+            f"ds.convert_calendar('standard')"
+        )
+    raise NotImplementedError(
+        f"variable {var_name!r} is an object array of {kind.__name__}. Atlas "
+        f"stores an object array as a string, so every element must be a str "
+        f"or bytes"
+    )
+
+
 def _is_dask_array(arr: Any) -> bool:
     """True when `arr` is a `dask.array.Array`. False when dask is absent."""
     try:
@@ -399,7 +451,14 @@ def _write_xarray_to_view(
     skipped: list[dict[str, str]] = []
     for var_name in order:
         try:
-            dtypes[var_name] = _np_to_atlas_dtype(np.dtype(ds[var_name].dtype))
+            np_dtype = np.dtype(ds[var_name].dtype)
+            atlas_dtype = _np_to_atlas_dtype(np_dtype)
+            # An object array maps to string on the dtype alone. Check what it
+            # really holds before any array is defined, so a skip leaves no
+            # half-written array behind.
+            if np_dtype.kind == "O":
+                _reject_unstorable_object_array(var_name, ds[var_name])
+            dtypes[var_name] = atlas_dtype
         except NotImplementedError as exc:
             if on_unsupported == "stop":
                 raise
