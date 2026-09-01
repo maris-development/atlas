@@ -1,8 +1,8 @@
 """Resolving a collection location, local or remote.
 
-Every operation takes a `source`: a local path, a URL, or an obstore handle.
-URLs are handed to obstore here so nothing above this module has to care which
-backend it is talking to.
+Every operation takes a `source`. That is a local path, a URL, or an obstore
+handle. This module hands each URL to obstore. Nothing above it needs to know
+the backend.
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-# Schemes obstore can build a store from. `file` is handled here instead, as a
-# local path, so the common case needs no obstore at all.
+# Schemes obstore builds a store from. This module handles `file` itself, as a
+# local path, so the common case needs no obstore.
 REMOTE_SCHEMES = (
     "s3",
     "s3a",
@@ -47,11 +47,11 @@ def resolve(source: Any, **store_options: Any) -> Any:
     `file://`), or an already-constructed obstore handle, which passes through
     untouched.
 
-    Extra keyword arguments go to obstore — `region`, `endpoint`,
-    `skip_signature`, and so on. Credentials are obstore's business; atlas
-    never sees them.
+    Extra keyword arguments go to obstore: `region`, `endpoint`,
+    `skip_signature`, and the rest. Credentials belong to obstore. Atlas never
+    sees them.
     """
-    # An obstore handle, or anything else that is not a string: pass it on and
+    # An obstore handle, or anything else that is no string. Pass it on, and
     # let the bindings decide.
     if not isinstance(source, (str, bytes)):
         return source
@@ -78,8 +78,8 @@ def resolve(source: Any, **store_options: Any) -> Any:
             'pip install "atlas-python[cloud]"'
         ) from exc
 
-    # obstore parses the URL itself, including the per-backend quirks — an
-    # Azure account in the host part, a virtual-hosted S3 URL, and so on.
+    # obstore parses the URL itself, with every backend quirk. An Azure
+    # account in the host part, a virtual-hosted S3 URL, and the rest.
     try:
         return obstore.store.from_url(text, **store_options)
     except Exception as exc:

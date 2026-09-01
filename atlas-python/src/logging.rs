@@ -1,16 +1,16 @@
 use pyo3::prelude::*;
 use tracing_subscriber::EnvFilter;
 
-/// Initialize a tracing subscriber that filters via env vars.
+/// Installs a tracing subscriber that filters on environment variables.
 ///
-/// Filter precedence: `ATLAS_LOG` → `RUST_LOG` → silent (off).
+/// The filter order is `ATLAS_LOG`, then `RUST_LOG`, then silence.
 /// Examples:
 ///   ATLAS_LOG=debug                 # everything from atlas/atlas_python at debug
 ///   ATLAS_LOG=atlas=debug,atlas_python=info
 ///   RUST_LOG=atlas::store=trace
 ///
-/// Calling this more than once is a no-op (the global subscriber is set on
-/// the first successful call).
+/// A second call does nothing. The first call that succeeds sets the global
+/// subscriber.
 pub(crate) fn try_init_from_env() {
     let filter = EnvFilter::try_from_env("ATLAS_LOG")
         .or_else(|_| EnvFilter::try_from_default_env())
@@ -24,11 +24,11 @@ pub(crate) fn try_init_from_env() {
     }
 }
 
-/// Python-callable debug-event emitter so the xarray write loop in
-/// `atlas-python/python/atlas/xarray.py` can route per-chunk timing through the
-/// same `tracing` subscriber as the Rust side. No-op unless the
-/// `atlas_python::xarray` target is enabled at debug level
-/// (e.g. `ATLAS_LOG=atlas_python=debug`).
+/// Emits a debug event from Python. The xarray write loop in
+/// `atlas-python/python/atlas/xarray.py` sends its per-chunk timing here. That
+/// timing then reaches the same `tracing` subscriber as the Rust side. This
+/// does nothing unless the `atlas_python::xarray` target runs at debug level,
+/// such as under `ATLAS_LOG=atlas_python=debug`.
 #[pyfunction]
 #[pyo3(signature = (event, var, elapsed_us, chunks=None, bytes=None))]
 pub(crate) fn log_chunk_event(
@@ -49,8 +49,8 @@ pub(crate) fn log_chunk_event(
     );
 }
 
-/// Python-callable variant: `atlas.init_tracing("debug")` forces a filter
-/// directive regardless of env vars. Passing `None` re-reads env vars.
+/// The Python entry point. `atlas.init_tracing("debug")` forces one filter
+/// directive, and ignores the environment variables. `None` reads them again.
 #[pyfunction]
 #[pyo3(signature = (filter=None))]
 pub(crate) fn init_tracing(filter: Option<&str>) -> PyResult<()> {

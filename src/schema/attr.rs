@@ -4,12 +4,12 @@ use array_format::DType;
 
 /// A typed attribute value.
 ///
-/// Attributes annotate a dataset or one of its arrays. Values live in the
-/// container footer, so a reader gets them from the same range read that lists
-/// the datasets.
+/// An attribute annotates a dataset or one of its arrays. Values live in the
+/// container footer. One range read therefore lists the datasets and gives
+/// their attributes.
 ///
-/// Timestamps have their own variant and their own wire tag. A string that
-/// happens to look like a date stays a string.
+/// A timestamp has its own variant and its own wire tag. A string that looks
+/// like a date stays a string.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Attr {
     /// Boolean.
@@ -69,8 +69,8 @@ pub enum Attr {
 }
 
 impl Attr {
-    /// The [`DType`] this value occupies. Scalars map to the matching scalar
-    /// dtype; lists map to a [`DType::List`] over the element dtype.
+    /// The [`DType`] this value occupies. A scalar maps to the matching scalar
+    /// dtype. A list maps to a [`DType::List`] over the element dtype.
     pub fn dtype(&self) -> DType {
         fn list(child: DType) -> DType {
             DType::List {

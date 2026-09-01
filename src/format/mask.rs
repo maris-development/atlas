@@ -1,8 +1,8 @@
-//! The deletion mask: the one thing about a collection that can change.
+//! The deletion mask. It is the one part of a collection that can change.
 //!
-//! The container is write-once, so deleting a dataset cannot touch it. Instead
-//! a small sidecar records the ordinals of deleted datasets, and the reader
-//! hides them.
+//! The container is write-once, so a delete cannot touch it. A small sidecar
+//! records the ordinals of the deleted datasets instead. The reader hides
+//! them.
 //!
 //! ```text
 //! b"ATLM"          4 B   magic
@@ -13,17 +13,16 @@
 //!
 //! # Concurrency
 //!
-//! Deleting reads the mask, adds one ordinal, and writes the whole file back.
-//! Two deletions racing on the same collection are last-writer-wins: one of the
-//! two deletions can be lost. Serialize deletes if that matters.
+//! A delete reads the mask, adds one ordinal, and writes the whole file back.
+//! Two deletes that race on one collection are last-writer-wins. One of the two
+//! can be lost. Serialize deletes if that matters.
 //!
 //! # Tolerance
 //!
-//! An absent mask means nothing is deleted; the writer never creates one. An
-//! ordinal past the end of the footer is ignored with a warning, so a mask left
-//! over from a different container cannot stop a collection from opening. Only
-//! a wrong magic is an error, because a foreign file at that path is a mistake
-//! worth reporting.
+//! An absent mask means nothing is deleted. The writer never creates one. An
+//! ordinal past the end of the footer draws a warning, and the reader drops it.
+//! A mask from a different container therefore cannot block an open. Only a
+//! wrong magic is an error, because a foreign file at that path is a mistake.
 
 use std::collections::BTreeSet;
 
@@ -45,10 +44,10 @@ pub(crate) fn encode(ordinals: &BTreeSet<u32>) -> Vec<u8> {
     out
 }
 
-/// Decodes a mask sidecar, dropping ordinals that do not name a dataset.
+/// Decodes a mask sidecar. Drops every ordinal that names no dataset.
 ///
-/// `dataset_count` bounds the valid range. Returns an error only when the file
-/// is not a mask at all.
+/// `dataset_count` bounds the valid range. This returns an error only when the
+/// file is no mask at all.
 pub(crate) fn decode(bytes: &[u8], dataset_count: usize) -> Result<BTreeSet<u32>> {
     if bytes.is_empty() {
         return Ok(BTreeSet::new());
@@ -107,7 +106,7 @@ mod tests {
 
     #[test]
     fn ordinals_are_written_in_order() {
-        // The set is ordered, so insertion order cannot leak into the file.
+        // The set is ordered, so insert order cannot reach the file.
         let a = encode(&set(&[7, 0, 3]));
         let b = encode(&set(&[0, 3, 7]));
         assert_eq!(a, b);

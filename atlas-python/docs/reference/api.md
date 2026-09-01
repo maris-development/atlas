@@ -1,8 +1,9 @@
 # API reference
 
-Five operations. Each takes a `source`: a local path, a URL (`s3://`, `gs://`,
-`az://`, `https://`), or an obstore handle. Extra keyword arguments are passed
-to obstore for remote sources — `region`, `endpoint`, `skip_signature`.
+Five operations. Each takes a `source`. That is a local path, a URL (`s3://`,
+`gs://`, `az://`, `https://`), or an obstore handle. For a remote source, the
+extra keyword arguments reach obstore: `region`, `endpoint`, and
+`skip_signature`.
 
 ```python
 import atlas

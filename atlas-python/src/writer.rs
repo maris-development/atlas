@@ -1,7 +1,7 @@
-//! Building a collection from Python.
+//! How Python builds a collection.
 //!
-//! Creation is the only thing Python can do to a collection's data. Reading it
-//! back is metadata only; see [`crate::reader`].
+//! A write is the only thing Python does to a collection's data. A read back
+//! gives metadata only. See [`crate::reader`].
 
 use std::sync::Arc;
 
@@ -20,7 +20,7 @@ use crate::error::to_py_err;
 use crate::runtime::runtime;
 use crate::source::{parse_codec, AtlasSource};
 
-/// Expand a body for each numeric array dtype `array-format` supports.
+/// Expands a body for each numeric array dtype `array-format` supports.
 macro_rules! numeric_dispatch {
     ($dtype:expr, $body:ident) => {
         match $dtype {
@@ -57,8 +57,8 @@ macro_rules! numeric_dispatch {
 
 #[pyclass(name = "AtlasWriter", module = "atlas._atlas")]
 pub struct PyAtlasWriter {
-    // Option so `finish` can consume the writer; a second call raises rather
-    // than corrupting the container.
+    // An Option lets `finish` consume the writer. A second call then raises,
+    // and does not damage the container.
     inner: Arc<Mutex<Option<AtlasWriter>>>,
 }
 
@@ -66,11 +66,11 @@ pub struct PyAtlasWriter {
 impl PyAtlasWriter {
     /// Start writing a collection.
     ///
-    /// `source` is a local filesystem path (`str` / `os.PathLike`) or an
+    /// `source` is a local filesystem path (`str` / `os.PathLike`), or an
     /// [obstore](https://github.com/developmentseed/obstore) store handle
     /// (`S3Store`, `GCSStore`, `AzureStore`, `MemoryStore`, ...). Credentials
-    /// and endpoint configuration are obstore's business; atlas receives an
-    /// opaque store and writes through it.
+    /// and endpoints belong to obstore. Atlas gets an opaque store, and writes
+    /// through it.
     #[staticmethod]
     #[pyo3(signature = (source, codec="zstd", block_target_size=None))]
     fn create(
@@ -138,7 +138,7 @@ impl PyAtlasWriter {
         })
     }
 
-    /// Write the footer and close the collection. Nothing is readable before
+    /// Writes the footer and closes the collection. Nothing is readable until
     /// this returns.
     fn finish(&self, py: Python<'_>) -> PyResult<()> {
         let inner = Arc::clone(&self.inner);
@@ -153,7 +153,7 @@ impl PyAtlasWriter {
         })
     }
 
-    /// Whether `finish()` has run.
+    /// Whether `finish()` ran.
     #[getter]
     fn closed(&self, py: Python<'_>) -> bool {
         let inner = Arc::clone(&self.inner);
@@ -164,8 +164,8 @@ impl PyAtlasWriter {
         slf
     }
 
-    /// Finishes on a clean exit. On an exception the writer is dropped instead,
-    /// so no readable collection is left behind and the exception propagates.
+    /// Finishes on a clean exit. An exception drops the writer instead. No
+    /// readable collection remains, and the exception propagates.
     #[pyo3(signature = (exc_type=None, exc_value=None, traceback=None))]
     fn __exit__(
         &self,
@@ -202,10 +202,10 @@ impl PyAtlasWriter {
 
 #[pyclass(name = "DatasetWriter", module = "atlas._atlas")]
 pub struct PyDatasetWriter {
-    // Option so `finish` can consume it.
+    // An Option lets `finish` consume it.
     inner: Option<DatasetWriter>,
-    /// Declared dtypes, so `write_array` knows how to read the numpy input
-    /// without going back to the Rust writer for each block.
+    /// The declared dtypes. `write_array` reads the numpy input from these,
+    /// and does not ask the Rust writer for each block.
     arrays: Vec<(String, DType)>,
 }
 
@@ -241,8 +241,8 @@ impl PyDatasetWriter {
         self.arrays.iter().map(|(name, _)| name.clone()).collect()
     }
 
-    /// Declare an array. `chunk_shape` defaults to `shape`, storing the array
-    /// as a single chunk.
+    /// Declares an array. `chunk_shape` defaults to `shape`, which stores the
+    /// array as one chunk.
     #[pyo3(signature = (name, dtype, dims, shape, chunk_shape=None, fill_value=None))]
     fn define_array(
         &mut self,
@@ -284,8 +284,8 @@ impl PyDatasetWriter {
         Ok(())
     }
 
-    /// Write `data` into `array` with its origin at `start`. The region may
-    /// span chunks and need not be chunk-aligned.
+    /// Writes `data` into `array`, with its origin at `start`. The region can
+    /// span chunks, and needs no chunk alignment.
     #[pyo3(signature = (name, start, data))]
     fn write_array(
         &mut self,
@@ -297,9 +297,9 @@ impl PyDatasetWriter {
         let stored = self.dtype_of(name)?;
 
         if matches!(&stored, DType::String) {
-            // Normalize |S<n>, |U<n>, and object inputs to object dtype so they
-            // flow through one extraction path. astype('object') is a no-op for
-            // arrays that are already object.
+            // Convert |S<n>, |U<n>, and object input to object dtype. One
+            // extraction path then handles all three. astype('object') does
+            // nothing to an array that is already object.
             let obj = data.call_method1("astype", ("object",))?;
             let arr = obj.cast::<PyArrayDyn<Py<PyAny>>>().map_err(|_| {
                 PyTypeError::new_err(format!(
@@ -338,7 +338,7 @@ impl PyDatasetWriter {
 
         if matches!(&stored, DType::TimestampNs) {
             // Accept int64 input. For datetime64[ns] the caller passes
-            // arr.view(np.int64); numpy distinguishes the dtype kinds.
+            // arr.view(np.int64). numpy keeps the two dtype kinds apart.
             let arr = data.cast::<PyArrayDyn<i64>>().map_err(|_| {
                 PyTypeError::new_err(format!(
                     "expected numpy ndarray with dtype int64 (use arr.view(np.int64) \
@@ -351,10 +351,10 @@ impl PyDatasetWriter {
                 ));
             }
             let view_i64 = unsafe { arr.as_array() };
-            // SAFETY: TimestampNs is #[repr(transparent)] over i64, so
-            // ArrayViewD<i64> and ArrayViewD<TimestampNs> have identical
-            // layout: the type parameter only affects the pointee type and a
-            // zero-sized PhantomData in ViewRepr.
+            // SAFETY: TimestampNs is #[repr(transparent)] over i64. The
+            // layout of ArrayViewD<i64> and ArrayViewD<TimestampNs> is
+            // therefore equal. The type parameter changes the pointee type and
+            // a zero-sized PhantomData in ViewRepr, and nothing else.
             let view_ts: ndarray::ArrayViewD<TimestampNs> = unsafe {
                 std::mem::transmute::<ndarray::ArrayViewD<i64>, ndarray::ArrayViewD<TimestampNs>>(
                     view_i64,
@@ -402,13 +402,13 @@ impl PyDatasetWriter {
     ) -> PyResult<()> {
         let attr = py_to_attr(value, dtype)?;
         let writer = self.get()?;
-        // Release the GIL: an xarray ingest sets on the order of a hundred
-        // attributes per file, so this call count is not small.
+        // Release the GIL. An xarray ingest sets about a hundred attributes
+        // per file, so the call count is not small.
         py.detach(|| writer.set_attribute(key, attr));
         Ok(())
     }
 
-    /// Attach an attribute to one array, which must already be defined.
+    /// Attaches an attribute to one array. Define the array first.
     #[pyo3(signature = (array, key, value, dtype=None))]
     fn set_array_attribute(
         &mut self,
@@ -424,7 +424,7 @@ impl PyDatasetWriter {
             .map_err(to_py_err)
     }
 
-    /// Commit the dataset into the collection.
+    /// Commits the dataset into the collection.
     fn finish(&mut self, py: Python<'_>) -> PyResult<()> {
         let writer = self
             .inner
@@ -434,7 +434,7 @@ impl PyDatasetWriter {
             .map_err(to_py_err)
     }
 
-    /// Discard the dataset. It never enters the collection.
+    /// Discards the dataset. It never enters the collection.
     fn abort(&mut self) {
         self.inner = None;
         self.arrays.clear();
@@ -444,7 +444,7 @@ impl PyDatasetWriter {
         slf
     }
 
-    /// Commits on a clean exit, discards on an exception.
+    /// Commits on a clean exit. Discards on an exception.
     #[pyo3(signature = (exc_type=None, exc_value=None, traceback=None))]
     fn __exit__(
         &mut self,
@@ -474,18 +474,18 @@ impl PyDatasetWriter {
     }
 }
 
-/// Build a `FillValue` from a Python scalar, type-checked against the target
-/// dtype.
+/// Builds a `FillValue` from a Python scalar. The target dtype checks the
+/// type.
 ///
-/// Mismatches are rejected with a clear `TypeError` (or `OverflowError` for an
-/// out-of-range integer) rather than silently cast:
+/// A mismatch raises a clear `TypeError`. An integer out of range raises
+/// `OverflowError`. Nothing casts in silence.
 ///   - int dtypes refuse floats, bools, strings, and out-of-range ints
 ///   - uint dtypes additionally refuse negative values
 ///   - float dtypes accept ints (coerced) but refuse bools and strings
 ///   - bool requires an actual `bool`, so `0` / `1` are rejected
 ///   - string requires a `str`
 fn py_to_fill_value(value: &Bound<'_, PyAny>, dtype: &DType) -> PyResult<FillValue> {
-    // PyBool before PyInt: `isinstance(True, int)` is True in Python.
+    // Test PyBool before PyInt. In Python, `isinstance(True, int)` is True.
     let is_bool = value.cast::<PyBool>().is_ok();
     let is_int = !is_bool && value.cast::<PyInt>().is_ok();
     let is_float = value.cast::<PyFloat>().is_ok();

@@ -1,16 +1,16 @@
 //! Compatibility test against committed bytes.
 //!
-//! `tests/fixtures/golden_v1/` holds a container written once, by hand, and
-//! checked in. The test below opens it and asserts every value. If a change to
-//! the format or the reader breaks compatibility with a v1 container, this
-//! fails, and no round-trip test would have noticed.
+//! `tests/fixtures/golden_v1/` holds one container, written by hand and
+//! committed. The test below opens it and asserts every value. A change to the
+//! format or the reader that breaks a v1 container fails here. No round-trip
+//! test catches that.
 //!
-//! The writer's output is deliberately *not* compared byte for byte. Zstd does
-//! not promise stable output across versions, so only the framing — which this
-//! crate produces itself — is asserted exactly.
+//! This test does *not* compare the writer's output byte for byte. Zstd
+//! promises no stable output across versions. Only the framing gets an exact
+//! assertion, because this crate produces the framing itself.
 //!
-//! To regenerate after an intentional format change (which means bumping
-//! `FORMAT_VERSION`):
+//! To regenerate after a deliberate format change, bump `FORMAT_VERSION`, then
+//! run:
 //!
 //! ```text
 //! cargo test --test golden -- --ignored regenerate
@@ -25,7 +25,7 @@ fn fixture_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_v1")
 }
 
-/// Writes the fixture. Kept in sync with what the assertions below expect.
+/// Writes the fixture. Keep it in step with the assertions below.
 async fn write_golden(dir: &Path) {
     let w = AtlasWriter::create_path(
         dir,
@@ -56,7 +56,7 @@ async fn write_golden(dir: &Path) {
         ds.define_array::<i64>("counts", vec!["lat".into()], vec![4], None, None)
             .await
             .unwrap();
-        // Deliberately never written: it must read back as zero.
+        // Nobody writes this array. It must read back as zero.
 
         ds.set_attribute("month", Attr::Int64(1));
         ds.set_attribute("scale", Attr::Float64(0.5));
@@ -137,7 +137,7 @@ async fn the_committed_v1_container_still_opens() {
     assert_eq!(temp.shape(), &[4, 6]);
     assert_eq!(temp[[0, 0]], 0.0);
     assert_eq!(temp[[3, 5]], 23.0);
-    // A window straddling the 2x3 chunk grid.
+    // A window across the 2x3 chunk grid.
     let window = grid
         .read_array::<f32>("temperature", vec![1, 2], vec![2, 2])
         .await
@@ -151,7 +151,7 @@ async fn the_committed_v1_container_still_opens() {
         .unwrap();
     assert_eq!(counts.as_slice().unwrap(), &[0, 0, 0, 0]);
 
-    // Statistics were computed at write time and live in the footer.
+    // The write computed these statistics. They live in the footer.
     let stats = grid
         .array_stats("temperature")
         .expect("temperature has stats");
@@ -159,20 +159,20 @@ async fn the_committed_v1_container_still_opens() {
     assert_eq!(stats.row_count, 24);
     assert_eq!(stats.min, Some(StatValue::Float(0.0)));
     assert_eq!(stats.max, Some(StatValue::Float(23.0)));
-    // Every cell was written, and none of them is NaN.
+    // The write covered every cell, and no cell holds NaN.
     assert_eq!(stats.null_count, 0);
 
-    // counts was declared and never written, so every one of its elements is
-    // the fill value — which is exactly what the null count says.
+    // counts is declared and never written. Every element is therefore the
+    // fill value, which is what the null count reports.
     let counts_stats = grid.array_stats("counts").expect("counts has stats");
     assert_eq!(counts_stats.row_count, 4);
     assert_eq!(counts_stats.null_count, 4);
     assert_eq!(counts_stats.min, None);
 
-    // An array this dataset does not declare has none.
+    // An array this dataset does not declare has no statistics.
     assert!(grid.array_stats("missing").is_none());
 
-    // Strings get a lexicographic min and max, as raw bytes.
+    // A string gets a lexicographic min and max, as raw bytes.
     let labels = atlas.dataset("labels").unwrap();
     let name_stats = labels.array_stats("name").expect("name has stats");
     assert_eq!(name_stats.row_count, 3);
@@ -212,8 +212,7 @@ async fn the_committed_container_has_the_v1_framing() {
     );
 }
 
-/// Bytes between the header and the footer, i.e. everything the segments
-/// occupy.
+/// The bytes between the header and the footer. The segments fill them.
 fn segment_bytes(bytes: &[u8], footer_size: usize) -> usize {
     bytes.len() - 8 - footer_size - 16
 }

@@ -14,15 +14,15 @@ atlas create /data/nc /data/collection
 
 ## What happens
 
-Files matching `.nc`, `.nc4`, `.cdf`, or `.netcdf` are collected, **sorted**,
-and written one dataset each, named after the file stem. `2024-01.nc` becomes
-the dataset `2024-01`.
+`create` collects every file that matches `.nc`, `.nc4`, `.cdf`, or `.netcdf`.
+It **sorts** them, and writes one dataset per file, named after the file stem.
+`2024-01.nc` becomes the dataset `2024-01`.
 
-Sorting matters: ordinals are handed out in write order, so a sorted ingest
-makes them reproducible. Rebuild the same directory and every dataset lands at
+The sort matters. An ordinal comes from the write order, so a sorted ingest
+makes it reproducible. Rebuild the same directory, and every dataset lands at
 the same position.
 
-Check what will be picked up before committing to it:
+Check what the call picks up before you run it:
 
 ```python
 atlas.find_netcdf_files("/data/nc")             # sorted list of paths
@@ -31,11 +31,11 @@ atlas.find_netcdf_files("/data/nc", recursive=True)
 
 ## All or nothing
 
-Nothing at the destination is readable until every file has been written and
-the footer lands. If the process dies at file 900 of 1000, there is no
-collection at the destination — not a partial one.
+Nothing at the destination is readable until every file lands, with the footer.
+A process that dies at file 900 of 1000 leaves no collection there, and not a
+partial one.
 
-That is usually what you want. When it is not:
+That is what you usually want. When it is not:
 
 ```python
 result = atlas.create("/data/nc", dest, on_error="skip")
@@ -47,24 +47,23 @@ result["skipped"]   # [{'file': '.../2024-02.nc', 'error': '...'}]
 atlas create /data/nc /data/collection --skip-errors
 ```
 
-A skipped file leaves no trace in the collection; the writer moves to the next.
-The CLI exits `1` when anything was skipped, so a pipeline notices, while still
-writing the collection.
+A skipped file leaves no trace in the collection. The writer moves to the next
+one. The CLI exits `1` when it skipped anything, so a pipeline sees that. It
+still writes the collection.
 
 ## Chunking and memory
 
-These are one decision, because the blocks a file is *read* in are the chunks
-it is *stored* in.
+These are one decision. The blocks a file *reads* in are the chunks it
+*stores* in.
 
-Files are opened with dask chunking. By default `open_chunks="auto"` lets dask
-pick blocks sized to `chunk_size` (128 MiB), so:
+Each file opens with dask chunking. `open_chunks="auto"` is the default. dask
+then sizes the blocks to `chunk_size`, which is 128 MiB. Three results follow:
 
-- a file far larger than memory streams block by block rather than being read
-  whole;
-- a small variable still comes out as one chunk, exactly as if nothing were
-  chunked at all;
-- a large variable is stored in blocks of roughly `chunk_size`, which is a
-  sensible read granularity.
+- A file far larger than memory streams block by block, and does not read
+  whole.
+- A small variable still comes out as one chunk, as it would with no chunking.
+- A large variable stores in blocks of about `chunk_size`. That is a sensible
+  read size.
 
 ```bash
 atlas create /data/nc dest --chunk-size 64MiB
@@ -74,8 +73,8 @@ atlas create /data/nc dest --chunk-size 64MiB
 atlas.create("/data/nc", dest, chunk_size="64MiB")
 ```
 
-`chunk_size` is roughly the memory ceiling per variable. Lower it on a small
-machine; raise it when you want bigger stored chunks.
+`chunk_size` is about the memory ceiling per variable. Lower it on a small
+machine. Raise it for larger stored chunks.
 
 ### How files are opened
 
@@ -86,30 +85,31 @@ machine; raise it when you want bigger stored chunks.
 | `None` | each variable whole | one full-shape chunk |
 | `{"time": 100}` | as given, per dimension | as given |
 
-`"native"` avoids read amplification during ingest, since dask blocks line up
-with the NetCDF chunks exactly. The catch is that a netCDF4 file often has very
-small chunks — which then become very small atlas chunks — and a netCDF3 file
-has no chunking at all, so `"native"` reads it whole.
+`"native"` reads no extra bytes during ingest, because the dask blocks match
+the NetCDF chunks. There is a catch. A netCDF4 file often has very small
+chunks, and those become very small atlas chunks. A netCDF3 file has no
+chunking, so `"native"` reads it whole.
 
-`None` is only for files you know are small; it is the fastest path when a
-whole variable fits comfortably.
+Use `None` only for a file you know is small. It is the fastest path when a
+whole variable fits with room to spare.
 
 ### Overriding the stored shape
 
-`chunks` sets the stored chunk shape directly, whatever the file was read in:
+`chunks` sets the stored chunk shape directly, whatever the read used:
 
 ```bash
 atlas create /data/nc dest --chunks '{"temperature": [64, 64]}'
 ```
 
-Use it when the read granularity you want on disk differs from the one that
-suits ingest. Note the cost: source blocks no longer align with stored chunks,
-so writes become read-modify-write. Correct, but slower.
+Use it when the read size you want on disk differs from the one that suits
+ingest. Note the cost. The source blocks no longer align with the stored
+chunks, so each write becomes a read-modify-write. That is correct, and
+slower.
 
 ### Choosing
 
-Chunk the large variables you expect to slice; leave small coordinate vectors
-alone. A one-chunk array is read whole or not at all.
+Chunk the large variables you expect to slice. Leave a small coordinate vector
+alone. A one-chunk array reads whole, or not at all.
 
 Confirm what landed:
 
@@ -124,9 +124,9 @@ atlas show dest 2024-01 | grep _ChunkShape
 
 ### The writer's own memory
 
-Staging happens on local disk — `array-format` spills compressed chunks to a
-temporary file — so the writer's memory does not grow with the number of
-datasets either. A thousand-file ingest costs the same as a one-file ingest.
+Staging runs on local disk. `array-format` spills each compressed chunk to a
+temporary file. The memory of the writer therefore does not grow with the
+number of datasets. A thousand-file ingest costs what a one-file ingest costs.
 
 ## Compression
 
@@ -136,12 +136,12 @@ atlas.create("/data/nc", dest, codec="lz4")
 
 | Codec | When |
 |---|---|
-| `zstd` *(default)* | Best ratio at moderate CPU. Pick this unless you have a reason not to |
-| `lz4` | Larger files, faster to decompress. For scan-heavy reading |
-| `none` | Fastest write, no size reduction |
+| `zstd` *(default)* | The best ratio at moderate CPU. Pick this without a reason to do otherwise |
+| `lz4` | Larger files, and faster to decompress. For a read-heavy scan |
+| `none` | The fastest write. It makes the file no smaller |
 
-Blocks record their own codec, so nothing has to be told which was used when
-reading.
+Each block records its own codec, so nothing tells a reader which one the write
+used.
 
 ## Progress
 
@@ -149,27 +149,26 @@ reading.
 atlas.create("/data/nc", dest, progress=lambda name: print(name))
 ```
 
-The CLI does this by default, to stderr, so stdout stays pipeable. `-q` turns
-it off.
+The CLI does this by default, to stderr, so a pipe still reads stdout. `-q`
+turns it off.
 
 ## What can go wrong
 
 | Situation | Result |
 |---|---|
 | Directory holds no NetCDF files | `AtlasError` |
-| Two files share a stem | `AtlasError` — dataset names must be unique |
+| Two files share a stem | `AtlasError`. A dataset name must be unique |
 | A variable has a dtype atlas cannot store | `AtlasError` (or skipped) |
 | Destination URL cannot be resolved | `SourceError` |
 
-Two files sharing a stem is the one that surprises people: `a/jan.nc` and
-`b/jan.nc` both want to be `jan`. Rename, or ingest them into separate
-collections.
+Two files with one stem surprise people. `a/jan.nc` and `b/jan.nc` both want
+the name `jan`. Rename one, or ingest them into two collections.
 
 For the dtype rules, see [Supported dtypes](dtypes.md).
 
 ## Changing a collection
 
-You cannot. A collection is written once; there is no append and no in-place
+You cannot. One write builds a collection. There is no append, and no in-place
 update. To change a dataset, rebuild the collection from its sources.
 
-The one exception is removing datasets — see [Removing datasets](removing.md).
+A remove is the one exception. See [Removing datasets](removing.md).

@@ -1,4 +1,4 @@
-"""Shared fixtures: a directory of NetCDF files, and a collection built from it."""
+"""Shared fixtures. A directory of NetCDF files, and a collection from it."""
 
 import numpy as np
 import pytest
@@ -8,7 +8,7 @@ import atlas
 
 
 def make_dataset(month: int) -> xr.Dataset:
-    """One month of a small gridded product, with the dtypes that matter."""
+    """One month of a small gridded product, in the dtypes that matter."""
     return xr.Dataset(
         data_vars={
             "temperature": xr.DataArray(
@@ -34,7 +34,7 @@ def make_dataset(month: int) -> xr.Dataset:
 
 @pytest.fixture
 def netcdf_dir(tmp_path):
-    """Three NetCDF files, named so their stems sort predictably."""
+    """Three NetCDF files. Their names give a predictable stem order."""
     d = tmp_path / "nc"
     d.mkdir()
     for month in (1, 2, 3):
@@ -44,7 +44,7 @@ def netcdf_dir(tmp_path):
 
 @pytest.fixture
 def collection(netcdf_dir, tmp_path):
-    """A collection built from `netcdf_dir`."""
+    """A collection from `netcdf_dir`."""
     dest = tmp_path / "collection"
     atlas.create(netcdf_dir, str(dest))
     return dest

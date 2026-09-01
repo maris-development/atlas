@@ -1,17 +1,18 @@
-//! The container footer: everything a reader needs before it touches data.
+//! The container footer. It holds everything a reader needs before it touches
+//! data.
 //!
 //! One [`CollectionFooter`] sits between the last segment and the trailer. It
-//! holds every dataset name, its segment byte range, its schema, and all of its
-//! attribute values. Opening a collection reads this and nothing else, so
-//! listing datasets or inspecting schemas costs one range read.
+//! holds every dataset name, its segment byte range, its schema, and its
+//! attribute values. An open reads this and nothing else. To list the datasets
+//! or to inspect a schema therefore costs one range read.
 //!
 //! Two pools keep the footer small when a collection holds many similar
-//! datasets: identical schemas are interned by content hash, and attribute keys
-//! are interned as strings. Both are ordinary indices into a `Vec`.
+//! datasets. Equal schemas intern by content hash. Attribute keys intern as
+//! strings. Both pools are plain indices into a `Vec`.
 //!
 //! The footer is MessagePack in compact (positional) form, then zstd. Compact
-//! form omits field names, so [`FORMAT_VERSION`](super::FORMAT_VERSION) pins the
-//! field order: changing any struct below is a format change.
+//! form drops the field names, so [`FORMAT_VERSION`](super::FORMAT_VERSION)
+//! pins the field order. A change to any struct below is a format change.
 
 use std::collections::HashMap;
 
@@ -25,13 +26,13 @@ use crate::{Error, Result};
 /// The complete metadata of one collection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct CollectionFooter {
-    /// Footer schema version. Matches the trailer; checked again here so a
-    /// truncated read cannot pass as a valid footer.
+    /// Footer schema version. It matches the trailer. The check runs again
+    /// here, so a truncated read cannot pass as a valid footer.
     pub version: u32,
     /// `array-format` footer version of the embedded segments.
     pub segment_format: u32,
-    /// Block codec the writer used. Informational: every block records its own
-    /// codec, so a reader never needs this to decode.
+    /// Block codec the writer used. For information only. Every block records
+    /// its own codec, so a reader never needs this field.
     pub codec: crate::Codec,
     /// Creation time, milliseconds since the Unix epoch.
     pub created_unix_ms: i64,
@@ -40,12 +41,11 @@ pub(crate) struct CollectionFooter {
     /// Interned attribute keys. Attribute entries index this.
     pub attr_key_pool: Vec<String>,
     /// One entry per dataset, in write order. A dataset's position here is its
-    /// **ordinal**, the identity the deletion mask refers to.
+    /// **ordinal**. The deletion mask names that ordinal.
     pub datasets: Vec<DatasetEntry>,
 }
 
-/// One dataset: where its bytes are, what it holds, and what it is annotated
-/// with.
+/// One dataset. Where its bytes are, what it holds, and what annotates it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct DatasetEntry {
     /// Dataset name, unique within the collection.
@@ -59,22 +59,24 @@ pub(crate) struct DatasetEntry {
     /// Dataset-level attributes as `(attr_key_pool index, value)`.
     pub global_attrs: Vec<(u32, AttrS)>,
     /// Per-array attributes as `(array position in the schema, attributes)`.
-    /// Position rather than name, because the schema is shared.
+    /// The entry stores a position, not a name, because datasets share the
+    /// schema.
     pub array_attrs: Vec<(u32, Vec<(u32, AttrS)>)>,
     /// Per-array statistics as `(array position in the schema, stats)`.
     ///
-    /// `array-format` computes these while the dataset is staged, so recording
-    /// them here costs nothing at write time and makes them free at read time —
-    /// no different from any other footer metadata. An array that was declared
-    /// but never written has no entry.
+    /// `array-format` computes these while the dataset stages. To record them
+    /// here therefore costs nothing at write time, and makes them free at read
+    /// time. They behave like any other footer metadata. An array that is
+    /// declared but never written has no entry.
     pub array_stats: Vec<(u32, ArrayStatsS)>,
 }
 
-/// Content hash of a schema, consistent with its `PartialEq`. Used to intern.
+/// Content hash of a schema, in step with its `PartialEq`. The interner uses
+/// it.
 fn schema_hash(schema: &DatasetSchema) -> u64 {
     use std::hash::{Hash, Hasher};
 
-    // DType derives neither Hash nor Eq, so spell the hash out.
+    // DType derives neither Hash nor Eq, so the hash is explicit here.
     fn hash_dtype<H: Hasher>(dtype: &DType, state: &mut H) {
         std::mem::discriminant(dtype).hash(state);
         match dtype {
@@ -95,16 +97,16 @@ fn schema_hash(schema: &DatasetSchema) -> u64 {
         array.shape.hash(&mut state);
         array.chunk_shape.hash(&mut state);
         array.dimension_names.hash(&mut state);
-        // Fill values hold floats; hash the discriminant and let PartialEq
-        // settle equality on collision.
+        // A fill value holds a float. Hash the discriminant, and let
+        // PartialEq settle a collision.
         std::mem::discriminant(&array.fill_value).hash(&mut state);
     }
     state.finish()
 }
 
-/// Interns schemas and attribute keys while a collection is being written.
+/// Interns schemas and attribute keys during a write.
 ///
-/// The writer holds one of these and hands out the indices the footer stores.
+/// The writer holds one, and hands out the indices the footer stores.
 #[derive(Debug, Default)]
 pub(crate) struct Interner {
     schemas: Vec<DatasetSchema>,
@@ -114,8 +116,8 @@ pub(crate) struct Interner {
 }
 
 impl Interner {
-    /// Index of `schema` in the pool, adding it if this is the first time.
-    /// Hash collisions fall back to `PartialEq` over the bucket.
+    /// Index of `schema` in the pool. Adds the schema on the first call. A
+    /// hash collision falls back to `PartialEq` over the bucket.
     pub(crate) fn intern_schema(&mut self, schema: DatasetSchema) -> u32 {
         let bucket = self.schema_index.entry(schema_hash(&schema)).or_default();
         for &i in bucket.iter() {
@@ -129,7 +131,7 @@ impl Interner {
         idx
     }
 
-    /// Index of `key` in the attribute-key pool, adding it if new.
+    /// Index of `key` in the attribute-key pool. Adds the key if it is new.
     pub(crate) fn intern_key(&mut self, key: &str) -> u32 {
         if let Some(&i) = self.key_index.get(key) {
             return i;
@@ -147,15 +149,15 @@ impl Interner {
 }
 
 impl CollectionFooter {
-    /// Serializes to the bytes stored in the container: compact MessagePack,
+    /// Serializes to the bytes the container stores. Compact MessagePack,
     /// then zstd.
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {
         let packed = rmp_serde::to_vec(self)?;
         Ok(zstd::stream::encode_all(packed.as_slice(), 0)?)
     }
 
-    /// Reverses [`encode`](Self::encode) and checks the collection is
-    /// internally consistent.
+    /// Reverses [`encode`](Self::encode). Then checks the collection agrees
+    /// with itself.
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
         let packed = zstd::stream::decode_all(bytes)
             .map_err(|e| Error::CorruptCollection(format!("footer is not valid zstd: {e}")))?;
@@ -164,8 +166,8 @@ impl CollectionFooter {
         Ok(footer)
     }
 
-    /// Rejects a footer whose indices do not resolve. Cheaper to check once
-    /// here than to handle a dangling index at every use site.
+    /// Rejects a footer whose indices do not resolve. One check here costs
+    /// less than a dangling index at every use site.
     fn validate(&self) -> Result<()> {
         if self.version != super::FORMAT_VERSION {
             return Err(Error::UnsupportedVersion {
@@ -248,7 +250,8 @@ impl CollectionFooter {
     }
 }
 
-/// Serde mirror of [`array_format::StatValue`], which implements rkyv only.
+/// Serde mirror of [`array_format::StatValue`]. That type implements rkyv
+/// only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum StatValueS {
     /// Signed integer.
@@ -287,11 +290,11 @@ impl From<StatValueS> for StatValue {
     }
 }
 
-/// What `array-format` recorded about one array while it was written.
+/// What `array-format` recorded about one array during the write.
 ///
-/// `null_count` counts elements equal to the array's fill value, which is how
-/// a never-written cell is represented. `row_count` is the total element count
-/// across every chunk that exists.
+/// `null_count` counts the elements equal to the array's fill value. That is
+/// how the format stores a cell nobody wrote. `row_count` is the total element
+/// count across every chunk that exists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArrayStatsS {
     /// Smallest value across the array, or `None` for a dtype with no ordering.
@@ -316,6 +319,17 @@ impl From<&ArrayStats> for ArrayStatsS {
 }
 
 impl ArrayStatsS {
+    /// Folds another dataset's statistics for the same array into these.
+    ///
+    /// The counts add up. Each bound takes the wider of the two. A bound that
+    /// is absent yields to a bound that is present.
+    pub(crate) fn merge(&mut self, other: &Self) {
+        self.null_count = self.null_count.saturating_add(other.null_count);
+        self.row_count = self.row_count.saturating_add(other.row_count);
+        self.min = pick(self.min.take(), other.min.clone(), Bound::Min);
+        self.max = pick(self.max.take(), other.max.clone(), Bound::Max);
+    }
+
     /// Rebuilds the `array-format` form, which needs the array's name.
     pub(crate) fn to_array_stats(&self, name: &str) -> ArrayStats {
         ArrayStats {
@@ -328,11 +342,46 @@ impl ArrayStatsS {
     }
 }
 
+/// Which end of the range [`pick`] keeps.
+#[derive(Clone, Copy)]
+enum Bound {
+    Min,
+    Max,
+}
+
+/// The smaller or the larger of two bounds. `None` means a dataset recorded no
+/// bound, so the other one stands.
+fn pick(a: Option<StatValueS>, b: Option<StatValueS>, bound: Bound) -> Option<StatValueS> {
+    match (a, b) {
+        (None, x) | (x, None) => x,
+        (Some(a), Some(b)) => {
+            let keep_a = match bound {
+                Bound::Min => is_le(&a, &b),
+                Bound::Max => !is_le(&a, &b),
+            };
+            Some(if keep_a { a } else { b })
+        }
+    }
+}
+
+/// Orders two bounds of one variant. Two variants mean two dtypes. The caller
+/// excludes those before it merges.
+fn is_le(a: &StatValueS, b: &StatValueS) -> bool {
+    match (a, b) {
+        (StatValueS::Int(a), StatValueS::Int(b)) => a <= b,
+        (StatValueS::UInt(a), StatValueS::UInt(b)) => a <= b,
+        (StatValueS::Float(a), StatValueS::Float(b)) => a.total_cmp(b).is_le(),
+        (StatValueS::Bytes(a), StatValueS::Bytes(b)) => a <= b,
+        (StatValueS::TimestampNs(a), StatValueS::TimestampNs(b)) => a <= b,
+        _ => false,
+    }
+}
+
 /// Serde mirror of [`Attr`].
 ///
-/// [`Attr`] is the public type and carries no serde impl of its own; this is
-/// its wire form. Timestamps carry their own tag, so a string that happens to
-/// look like a date stays a string on the way back.
+/// [`Attr`] is the public type, and carries no serde impl of its own. This is
+/// its wire form. A timestamp carries its own tag, so a string that looks like
+/// a date stays a string on the way back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum AttrS {
     Bool(bool),
@@ -558,8 +607,8 @@ mod tests {
 
     #[test]
     fn rfc3339_strings_stay_strings() {
-        // Timestamps have a tag of their own, so nothing has to guess at a
-        // date-shaped string.
+        // A timestamp has its own tag, so nothing guesses at a date-shaped
+        // string.
         let v = Attr::String("2023-11-14T22:13:20Z".into());
         let back: Attr = AttrS::from(v.clone()).into();
         assert_eq!(back, v);

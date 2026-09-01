@@ -1,7 +1,7 @@
-"""The six operations atlas supports from Python.
+"""The five operations atlas offers from Python.
 
-Everything here works the same against a local directory or an object store;
-see `_source.resolve`.
+Every one behaves the same against a local directory and an object store. See
+`_source.resolve`.
 """
 
 from __future__ import annotations
@@ -14,37 +14,36 @@ from . import _atlas
 from . import _source
 from . import xarray as _xarray
 
-# Files that look like NetCDF. `create` scans a directory for these.
+# Suffixes `create` treats as NetCDF. It scans a directory for these.
 NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf", ".netcdf")
 
-# How `create` opens a NetCDF file. This decides two things at once: how much
-# of a file is in memory at a time, and — unless `chunks=` overrides it — the
-# chunk shape the arrays are stored with.
+# How `create` opens a NetCDF file. This sets two things at once. How much of a
+# file stays in memory, and the stored chunk shape. `chunks=` overrides the
+# second.
 #
-#   "auto"    dask picks block sizes to hit `chunk_size`. The default: a file
-#             far larger than memory streams, and a small one still lands as a
-#             single chunk.
-#   "native"  use the file's own chunk encoding. No read amplification during
-#             ingest, but a netCDF4 file with tiny chunks produces tiny atlas
-#             chunks, and a netCDF3 file has no chunking to use.
-#   None      read each variable whole. Only for files you know are small.
+#   "auto"    dask sizes blocks to `chunk_size`. The default. A file far larger
+#             than memory streams. A small one still lands as one chunk.
+#   "native"  use the chunk encoding of the file. Ingest reads no extra bytes.
+#             A netCDF4 file with tiny chunks gives tiny atlas chunks, and a
+#             netCDF3 file has no chunking to use.
+#   None      read each variable whole. Only for a file you know is small.
 #   a dict    explicit, per dimension: {"time": 100, "lat": -1}
 OPEN_CHUNK_MODES = ("auto", "native")
 
-# Target size dask aims at per block under "auto". Also the ceiling on how much
-# of one variable is resident while it is written.
+# Block size dask aims at under "auto". It also caps how much of one variable
+# stays in memory during a write.
 DEFAULT_CHUNK_SIZE = "128MiB"
 
 
 class AtlasError(RuntimeError):
-    """An operation could not complete. The message says what went wrong."""
+    """An operation did not complete. The message says what went wrong."""
 
 
 def dataset_name(path: "pathlib.Path | str") -> str:
-    """The dataset name a NetCDF file is stored under: its stem.
+    """The dataset name of a NetCDF file. That is its stem.
 
-    `/data/2024/jan.nc` becomes `jan`. Accepts a bare name too, so callers can
-    pass either a path or a name and get the same answer.
+    `/data/2024/jan.nc` becomes `jan`. This also takes a bare name, so a path
+    and a name give the same answer.
     """
     stem = pathlib.PurePath(str(path)).stem
     return stem or str(path)
@@ -53,7 +52,7 @@ def dataset_name(path: "pathlib.Path | str") -> str:
 def find_netcdf_files(
     directory: "pathlib.Path | str", recursive: bool = False
 ) -> list[pathlib.Path]:
-    """NetCDF files in `directory`, sorted, so a collection's order is stable."""
+    """NetCDF files in `directory`, sorted. The sort fixes a collection's order."""
     root = pathlib.Path(directory)
     if not root.is_dir():
         raise AtlasError(f"not a directory: {root}")
@@ -62,13 +61,13 @@ def find_netcdf_files(
 
 
 def _open_kwargs(open_chunks: Any) -> dict[str, Any]:
-    """Translate `open_chunks` into `xr.open_dataset` keyword arguments."""
+    """Translates `open_chunks` into `xr.open_dataset` keyword arguments."""
     if open_chunks is None:
-        # No `chunks=` at all: xarray reads each variable whole.
+        # No `chunks=` at all. xarray then reads each variable whole.
         return {}
     if isinstance(open_chunks, str):
         if open_chunks == "native":
-            # xarray spells "the file's own chunking" as an empty dict.
+            # xarray spells "the chunking of the file" as an empty dict.
             return {"chunks": {}}
         if open_chunks == "auto":
             return {"chunks": "auto"}
@@ -100,22 +99,22 @@ def create(
     progress: Optional[Any] = None,
     **store_options: Any,
 ) -> dict[str, Any]:
-    """Build a collection at `destination` from the NetCDF files in `directory`.
+    """Builds a collection at `destination` from the NetCDF files in `directory`.
 
-    Each file becomes one dataset, named after the file stem. Nothing is
-    readable at `destination` until every file has been written and the footer
-    lands, so a failure leaves no half-built collection behind.
+    Each file becomes one dataset, named after the file stem. Nothing at
+    `destination` is readable until every file lands, with the footer. A
+    failure therefore leaves no half-built collection.
 
-    Files are opened with dask chunking (`open_chunks="auto"` by default), so a
-    file far larger than memory streams block by block rather than being read
-    whole. Those blocks also become the arrays' stored chunk shape, unless
-    `chunks` names one explicitly.
+    Each file opens with dask chunking, under `open_chunks="auto"` by default.
+    A file far larger than memory then streams block by block. Those blocks
+    also become the stored chunk shape of the arrays, unless `chunks` names
+    one.
 
-    `on_error` is `"stop"` (the default, abandoning the whole collection) or
-    `"skip"` (recording the failure and carrying on). `progress` is called with
-    each file's name as it is written.
+    `on_error` is `"stop"` or `"skip"`. `"stop"` is the default, and abandons
+    the whole collection. `"skip"` records the failure and continues.
+    `progress` takes each file name as that file lands.
 
-    Returns a summary: how many datasets were written, and what was skipped.
+    Returns a summary. How many datasets landed, and what the run skipped.
     """
     if on_error not in ("stop", "skip"):
         raise AtlasError(f"on_error must be 'stop' or 'skip', got {on_error!r}")
@@ -134,8 +133,8 @@ def create(
     skipped: list[dict[str, str]] = []
 
     target = _source.resolve(destination, **store_options)
-    # `array.chunk-size` is what "auto" sizes blocks against, so it is also the
-    # ceiling on how much of one variable is resident while it is written.
+    # "auto" sizes its blocks against `array.chunk-size`. That value therefore
+    # also caps how much of one variable stays in memory during a write.
     with dask.config.set({"array.chunk-size": chunk_size}):
         with _atlas.AtlasWriter.create(target, codec) as writer:
             for path in files:
@@ -148,8 +147,8 @@ def create(
                     continue
 
                 try:
-                    # The write happens inside the `with`, so every block is
-                    # materialised before the file is closed.
+                    # The write runs inside the `with`, so every block lands
+                    # before the file closes.
                     with xr.open_dataset(path, **open_kwargs) as ds:
                         _xarray._write_xarray_dataset(writer, ds, name, chunks, None)
                 except Exception as exc:
@@ -181,19 +180,24 @@ def remove(
     missing_ok: bool = False,
     **store_options: Any,
 ) -> dict[str, Any]:
-    """Remove datasets from a collection, in one call.
+    """Removes datasets from a collection, in one call.
 
-    `targets` are dataset names or NetCDF file paths — a path is reduced to its
-    stem, so the same list that built the collection can tear part of it down.
+    Each entry of `targets` is a dataset name or a NetCDF file path. A path
+    reduces to its stem. The list that built the collection can therefore tear
+    part of it down.
 
-    This updates the deletion mask beside the container; the container itself
-    is untouched, so no space is reclaimed and no ordinal moves. Rewrite the
+    This updates the deletion mask beside the container. The container does not
+    change, so this reclaims no space and moves no ordinal. Rewrite the
     collection to reclaim the bytes.
 
-    With `missing_ok`, a name that is absent or already removed is reported
-    rather than raised.
+    One mask write covers the whole call. Ten thousand names therefore cost
+    what one name costs. A repeated name counts once.
+
+    Under `missing_ok`, a name that is absent or already removed appears in the
+    result instead of an error.
     """
-    wanted = [dataset_name(t) for t in targets]
+    # dict.fromkeys drops a repeat and keeps the order the caller gave.
+    wanted = list(dict.fromkeys(dataset_name(t) for t in targets))
     if not wanted:
         raise AtlasError("no datasets given")
 
@@ -206,11 +210,9 @@ def remove(
             f"not in the collection (or already removed): {', '.join(sorted(missing))}"
         )
 
-    removed = []
-    for name in wanted:
-        if name in present:
-            collection.delete_dataset(name)
-            removed.append(name)
+    removed = [n for n in wanted if n in present]
+    if removed:
+        collection.delete_datasets(removed)
 
     return {
         "removed": removed,
@@ -223,7 +225,7 @@ def remove(
 
 
 def list_datasets(source: Any, **store_options: Any) -> list[str]:
-    """Names of the datasets in the collection, with the deletion mask applied."""
+    """Names of the datasets in the collection. The deletion mask applies."""
     collection = _atlas.Atlas.open(_source.resolve(source, **store_options))
     return collection.list_datasets()
 
@@ -234,10 +236,10 @@ def list_datasets(source: Any, **store_options: Any) -> list[str]:
 def describe_dataset(source: Any, name: Any, **store_options: Any) -> dict[str, Any]:
     """Everything the collection records about one dataset.
 
-    `name` may be a dataset name or the NetCDF path it came from.
+    `name` is a dataset name, or the NetCDF path the dataset came from.
 
-    Returns dimensions, every array's type, shape, chunking, fill value,
-    attributes, and the statistics recorded when it was written.
+    Returns the dimensions. For every array it returns the type, the shape, the
+    chunking, the fill value, the attributes, and the statistics of the write.
     """
     wanted = dataset_name(name)
     collection = _atlas.Atlas.open(_source.resolve(source, **store_options))
@@ -288,10 +290,15 @@ def describe_dataset(source: Any, name: Any, **store_options: Any) -> dict[str, 
 
 
 def info(source: Any, **store_options: Any) -> dict[str, Any]:
-    """A summary of the whole collection."""
+    """A summary of the whole collection.
+
+    `array_stats` combines each array over every live dataset that holds it.
+    Use `describe_dataset` for the statistics of one dataset on its own.
+    """
     collection = _atlas.Atlas.open(_source.resolve(source, **store_options))
     summary = collection.summary()
     live = collection.list_datasets()
+    arrays = collection.list_arrays()
     return {
         "source": _source.describe(source),
         "format_version": summary["format_version"],
@@ -301,7 +308,8 @@ def info(source: Any, **store_options: Any) -> dict[str, Any]:
         "dataset_count": len(live),
         "deleted_count": summary["total_datasets"] - len(live),
         "total_datasets": summary["total_datasets"],
-        "distinct_arrays": collection.list_arrays(),
+        "distinct_arrays": arrays,
+        "array_stats": {name: collection.array_stats(name) for name in arrays},
         "interned_schemas": summary["interned_schemas"],
     }
 
@@ -310,7 +318,7 @@ def info(source: Any, **store_options: Any) -> dict[str, Any]:
 
 
 def _coords_of(view: Any) -> list[str]:
-    """Which of a dataset's arrays were xarray coordinates, if atlas wrote it."""
+    """Which arrays of a dataset were xarray coordinates. Atlas records this."""
     raw = view.get_attribute(_xarray._COORDS_ATTR)
     if raw is None:
         return []
@@ -321,7 +329,7 @@ def _coords_of(view: Any) -> list[str]:
 
 
 def _global_attrs(view: Any) -> dict[str, Any]:
-    """Dataset attributes, decoded, without atlas's own bookkeeping keys."""
+    """Dataset attributes, decoded, without the internal keys of atlas."""
     return {
         key: _xarray._decode_attr_value(value)
         for key, value in view.attributes().items()

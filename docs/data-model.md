@@ -13,24 +13,23 @@ collection                      one data.atlas file
     └── …
 ```
 
-A **dataset** is what a NetCDF file or an `xarray.Dataset` holds: a set of named
-N-dimensional arrays that share dimensions, plus attributes. A **collection**
-holds many datasets, and is the unit of a file.
+A **dataset** holds what a NetCDF file or an `xarray.Dataset` holds. That is a
+set of named N-dimensional arrays that share dimensions, and attributes. A
+**collection** holds many datasets. One collection is one file.
 
-An **array** is typed, shaped, chunked, and belongs to exactly one dataset. Two
-datasets may both declare `temperature`; those are separate arrays that happen
-to share a name. Nothing is shared between them — not bytes, not schema
-identity beyond interning, not dimensions.
+An **array** has a type, a shape, and a chunking. It belongs to one dataset.
+Two datasets can both declare `temperature`. Those are two arrays with one
+name. They share no bytes, no dimensions, and no schema identity beyond the
+interning.
 
 ## Ordinals
 
-A dataset's position in the footer is its **ordinal**, assigned in write order
-and fixed for the life of the container. It is the identity the deletion mask
-refers to.
+A dataset's position in the footer is its **ordinal**. The write order assigns
+it, and it holds for the life of the container. The deletion mask names it.
 
-Ordinals never shift. Deleting a dataset does not renumber the others, because
-there is no operation that could — the footer is immutable. An ordinal you
-recorded a year ago still names the same dataset.
+No ordinal ever moves. A delete does not renumber the others, because no
+operation can. The footer is immutable. An ordinal from a year ago still names
+the same dataset.
 
 ## Arrays
 
@@ -44,14 +43,13 @@ recorded a year ago still names the same dataset.
 
 ### Chunking
 
-Chunk shape is what makes a partial read cheap: reading a region fetches only
-the chunks it overlaps. An array stored as one chunk is read whole or not at
-all.
+The chunk shape makes a partial read cheap. A read of a region fetches only
+the chunks it overlaps. An array in one chunk reads whole, or not at all.
 
-Declaring an array does not allocate anything. Write into whatever part of it
-you like, in any order and any number of slabs, aligned or not — partially
-covered chunks are handled for you. Regions never written cost no bytes and read
-back as the fill value.
+To declare an array allocates nothing. Write into any part of it, in any order,
+and in any number of slabs. Alignment does not matter, because atlas handles a
+part-covered chunk. A region nobody writes costs no bytes, and reads back as
+the fill value.
 
 ### Types
 
@@ -59,52 +57,56 @@ Scalars: `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`, `Float32`, `Float64`,
 `String`, `Binary`, `TimestampNs`.
 Nested: `List<T>`, `FixedSizeList<T, n>`.
 
-Strings and lists are variable length: an offsets buffer plus concatenated
-values. `TimestampNs` is nanoseconds since the Unix epoch, stored as `i64`.
+A string and a list have a variable length. Each holds an offsets buffer and
+the values behind it. `TimestampNs` is nanoseconds from the Unix epoch, in an
+`i64`.
 
-Not every type is reachable from Python. `Bool` arrays are not supported by
-`array-format`; `Binary` and the nested types are not yet exposed in the
-bindings. All of them round-trip in the footer as *attribute* values.
+Python does not reach every type. `array-format` supports no `Bool` array. The
+bindings expose neither `Binary` nor the nested types. Every one of them still
+round-trips in the footer as an *attribute* value.
 
 ### No type reconciliation
 
-Two datasets may declare the same array name with unrelated types — `int32` in
-one, `string` in another — and both are stored as declared. There is no merged
-schema, no widening, and no mismatch policy: with one segment per dataset there
-is nothing to reconcile. A reader that wants a collection-wide view builds it
-from the per-dataset schemas, which are all in the footer.
+Two datasets can declare one array name with unrelated types, such as `int32`
+in one and `string` in another. Atlas stores each as declared. There is no
+merged schema, no widening, and no mismatch policy. One segment per dataset
+leaves nothing to reconcile. A reader that wants a collection-wide view builds
+it from the per-dataset schemas, which all sit in the footer.
 
 ## Attributes
 
 Two scopes:
 
-- **Dataset-level** — annotates the whole dataset. `title`, `month`, `source`.
-- **Per-array** — annotates one array. `units`, `long_name`.
+- **Dataset-level.** It annotates the whole dataset. `title`, `month`,
+  `source`.
+- **Per-array.** It annotates one array. `units`, `long_name`.
 
-Both hold a typed value: any scalar type above, or a homogeneous list of one.
-Both preserve the order they were set in. Setting a key twice replaces the
-value.
+Both hold a typed value. That is any scalar type above, or a list of one type.
+Both keep the order somebody set them in. A second write to one key replaces
+the value.
 
-Values live in the footer, not in the segments, so reading them costs nothing
-beyond the open. See [format.md](format.md#attributes-live-here-not-in-the-segments).
+The values live in the footer, and not in the segments. To read them therefore
+costs nothing beyond the open. See
+[format.md](format.md#attributes-live-here-not-in-the-segments).
 
 ### Timestamps are a real type
 
-`Attr::TimestampNanoseconds` has its own wire tag, so nothing has to guess at a
-date-shaped string. An RFC 3339 string round-trips as a string; a timestamp
+`Attr::TimestampNanoseconds` has its own wire tag, so nothing guesses at a
+date-shaped string. An RFC 3339 string round-trips as a string. A timestamp
 round-trips as a timestamp.
 
 ## What a collection cannot do
 
-Worth stating plainly:
+State it plainly:
 
 | Not available | Instead |
 |---|---|
 | Append a dataset to a finished collection | Rewrite it |
-| Modify an array | Rewrite the collection |
+| Change an array | Rewrite the collection |
 | Add an array to an existing dataset | Rewrite the collection |
-| Reclaim space from a deleted dataset | Rewrite the collection |
-| Compact | Nothing to compact — there are no layers |
-| Flush | No durability boundary; the file exists or it does not |
+| Reclaim the space of a deleted dataset | Rewrite the collection |
+| Compact | Nothing to compact. There are no layers |
+| Flush | No durability boundary. The file exists, or it does not |
 
-Deleting a dataset is the one post-write operation, and it only writes the mask.
+A delete is the one operation after a write. It writes the mask, and no more.
+One write covers any number of datasets.

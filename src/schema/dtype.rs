@@ -1,11 +1,11 @@
-//! Serde support for [`DType`], which comes from `array_format` and implements
-//! rkyv rather than serde.
+//! Serde support for [`DType`]. That type comes from `array_format`, which
+//! implements rkyv and not serde.
 
 /// Serde helpers for [`DType`](array_format::DType), usable via
 /// `#[serde(with = "dtype_serde")]`.
 ///
-/// The representation is an externally tagged enum: in compact MessagePack a
-/// scalar dtype costs a variant index, and nested list types recurse.
+/// The wire form is an externally tagged enum. In compact MessagePack a scalar
+/// dtype costs one variant index. A nested list type recurses.
 pub(crate) mod dtype_serde {
     use array_format::DType;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

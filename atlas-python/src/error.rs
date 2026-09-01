@@ -16,14 +16,14 @@ pub fn to_py_err(err: atlas::Error) -> PyErr {
             PyFileExistsError::new_err(format!("array already exists: {name}"))
         }
         atlas::Error::InvalidName(name) => PyValueError::new_err(format!("invalid name: {name}")),
-        // Bad input rather than a broken store: the caller opened the wrong
-        // path, or a collection this build is too old to read.
+        // Bad input, not a broken store. The caller opened the wrong path,
+        // or a collection this build is too old to read.
         e @ (atlas::Error::NotAnAtlasCollection { .. }
         | atlas::Error::UnsupportedVersion { .. }
         | atlas::Error::WriterFinished) => PyValueError::new_err(e.to_string()),
         atlas::Error::Io(e) => PyOSError::new_err(e.to_string()),
-        // On-disk damage or an atlas-internal invariant violation: a runtime
-        // failure the caller cannot fix by changing arguments.
+        // On-disk damage, or a broken atlas invariant. The caller cannot fix
+        // this with a different argument.
         e @ (atlas::Error::CorruptCollection(_)
         | atlas::Error::CorruptMask(_)
         | atlas::Error::Internal(_)

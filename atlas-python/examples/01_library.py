@@ -1,7 +1,8 @@
 """The five operations, as a library.
 
-Builds a small collection from NetCDF files, then inspects and prunes it.
-Everything here also works against object storage — see 02_object_store.py.
+This builds a small collection from NetCDF files. Then it inspects the
+collection, and removes part of it. Everything here also works against object
+storage. See 02_object_store.py.
 
 Run:
     python atlas-python/examples/01_library.py
@@ -16,7 +17,7 @@ import atlas
 
 
 def write_source_files(directory: Path) -> None:
-    """Three monthly grids, the kind of thing a model run produces."""
+    """Three monthly grids, of the kind a model run produces."""
     for month in (1, 2, 3):
         xr.Dataset(
             data_vars={
@@ -46,12 +47,12 @@ def main() -> None:
 
         # ── 1. create ────────────────────────────────────────────────
         # One dataset per file, named after the file stem. Nothing is
-        # readable until every file is written and the footer lands.
+        # readable until every file lands, with the footer.
         print("Files to ingest:", [p.name for p in atlas.find_netcdf_files(source)])
-        # Files are opened with dask chunking, so one far larger than memory
-        # would stream block by block. `chunk_size` is the block budget, and
-        # roughly the memory ceiling per variable. These files are tiny, so
-        # every array still lands as a single chunk.
+        # Each file opens with dask chunking. A file far larger than memory
+        # therefore streams block by block. `chunk_size` is the block budget,
+        # and about the memory ceiling per variable. These files are tiny, so
+        # every array still lands as one chunk.
         result = atlas.create(source, collection, chunk_size="64MiB")
         print(f"created {result['dataset_count']} datasets\n")
 
@@ -65,6 +66,10 @@ def main() -> None:
         print(f"  {summary['dataset_count']} datasets, "
               f"{summary['container_bytes']} bytes, codec {summary['codec']}")
         print(f"  arrays: {summary['distinct_arrays']}")
+        # One set of statistics per array, over every live dataset.
+        for name, stats in summary["array_stats"].items():
+            print(f"    {name}: count={stats['row_count']} "
+                  f"min={stats['min']!r} max={stats['max']!r}")
         # All three months declare the same arrays, so one schema is stored.
         print(f"  interned schemas: {summary['interned_schemas']}\n")
 
@@ -77,8 +82,8 @@ def main() -> None:
         for array in detail["arrays"]:
             dims = ", ".join(array["dimensions"])
             print(f"  {array['dtype']:>22s} {array['name']}({dims})")
-            # Statistics were computed when the array was written and live in
-            # the footer, so reading them costs nothing.
+            # The write computed these statistics, and the footer holds them.
+            # To read them therefore costs nothing.
             stats = array["stats"]
             print(f"  {'':>22s}   count={stats['row_count']} "
                   f"nulls={stats['null_count']} "
@@ -86,7 +91,7 @@ def main() -> None:
         print()
 
         # ── 5. remove ────────────────────────────────────────────────
-        # Several at once, by name or by the file they came from.
+        # Several at once, by name or by the file each came from.
         removed = atlas.remove(collection, ["2024-02", source / "2024-03.nc"])
         print(f"removed {removed['removed']}, {removed['remaining']} remain")
         print("datasets now:", atlas.list_datasets(collection))

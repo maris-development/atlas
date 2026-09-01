@@ -27,18 +27,18 @@
 
 | Concern | Owner |
 |---|---|
-| Container framing, footer, deletion mask | `atlas-rust` — `src/format/` |
-| Building a collection | `atlas-rust` — `src/writer/` |
-| Opening one, lazy reads | `atlas-rust` — `src/reader/` |
+| Container framing, footer, deletion mask | `atlas-rust`, `src/format/` |
+| Building a collection | `atlas-rust`, `src/writer/` |
+| Opening one, and lazy reads | `atlas-rust`, `src/reader/` |
 | Chunk layout, blocks, compression, fill values | `array-format` |
 | Byte-range I/O against any backend | `object_store` |
 | numpy ⇄ Rust arrays, Python exceptions | `atlas-python/src/` |
 | NetCDF ingest, the CLI, xarray mapping | `atlas-python/python/` |
 
-The **file format is Rust only**. `atlas-python` holds no format knowledge: it
-cannot construct a header, a footer, or a mask. Grep it for `ATLS` and you get
-nothing. That is deliberate — one implementation of the bytes, one place for a
-bug to live.
+The **file format is Rust only**. `atlas-python` holds no format knowledge. It
+builds no header, no footer, and no mask. Grep it for `ATLS`, and you get
+nothing. That is deliberate. One implementation of the bytes gives a bug one
+place to live.
 
 ## The central types
 
@@ -58,43 +58,43 @@ Atlas ──dataset()──▶ DatasetView ──read_array()──▶ ndarray
 
 - **`AtlasWriter`** owns the output stream, the interner, and the scratch area.
 - **`DatasetWriter`** stages one dataset. It touches the shared output only in
-  `finish()`, under one lock, so several may be staged at once.
+  `finish()`, under one lock. Several can therefore stage at once.
 - **`Atlas`** holds the decoded footer and the deletion mask.
-- **`DatasetView`** answers metadata from the footer with no I/O, and opens its
-  segment lazily.
-- **`SegmentStore`** presents one byte range of the container to `array-format`
-  as if it were a standalone object.
+- **`DatasetView`** answers metadata from the footer with no I/O. It opens its
+  segment on demand.
+- **`SegmentStore`** presents one byte range of the container to
+  `array-format` as one standalone object.
 
 ## Why segments are `array-format` files
 
-Each dataset's bytes are a complete `array-format` file, embedded verbatim. The
-alternative — a bespoke chunk table in the atlas footer — would mean
-reimplementing block allocation, per-block codecs, variable-length encoding,
-fill values, and partial-region assembly. Embedding reuses all of it for the
-cost of one adapter.
+The bytes of each dataset are a complete `array-format` file, held word for
+word. The other option is a private chunk table in the atlas footer. That means
+a second implementation of block allocation, per-block codecs, variable-length
+encoding, fill values, and partial-region assembly. To embed the file reuses
+all of it, and costs one adapter.
 
-It also makes the format inspectable. `DatasetView::segment_range()` gives you
-byte offsets; `dd` those out and `array-format` opens the result with no atlas
-involved. `tests/integration.rs` asserts exactly that.
+It also makes the format open to inspection. `DatasetView::segment_range()`
+gives the byte offsets. `dd` those out, and `array-format` opens the result
+with no atlas in the way. `tests/integration.rs` asserts that.
 
-The cost is one indirection: reading a dataset opens its segment footer first
-(two small range reads), then fetches chunks. Those reads are cached per
-collection handle, so it is once per dataset, not once per read.
+The cost is one indirection. A read of a dataset opens its segment footer
+first, in two small range reads, and then fetches chunks. Each collection
+handle caches those reads. They happen once per dataset, not once per read.
 
 ## Concurrency
 
-**Reading** needs no locks. The data is immutable, so `Atlas` and `DatasetView`
-are `Send + Sync` and concurrent reads never contend. Segment handles open once
-through a `tokio::sync::OnceCell`; the block cache is shared across every
-segment in a collection and keyed by `(segment path, block id)` — the virtual
-path carries the dataset ordinal, so one dataset's blocks can never answer
-another's read.
+**A read** needs no lock. The data is immutable, so `Atlas` and `DatasetView`
+are `Send + Sync`, and two reads never contend. A `tokio::sync::OnceCell` opens
+each segment handle once. Every segment in a collection shares the block cache,
+which keys on `(segment path, block id)`. The virtual path carries the dataset
+ordinal, so the blocks of one dataset can never answer the read of another.
 
-**Writing** shares one `tokio::sync::Mutex` over the output stream and the
-footer under construction. A `DatasetWriter` takes it only in `finish()`, for
-the duration of its append, so staging is fully parallel and only the append is
-serialized. Datasets land in finish order.
+**A write** shares one `tokio::sync::Mutex` over the output stream and the
+footer. A `DatasetWriter` takes that lock only in `finish()`, for its append.
+Staging is therefore parallel, and only the append serializes. Datasets land in
+finish order.
 
-The one mutable thing in a finished collection is the deletion mask, guarded by
-a `parking_lot::RwLock` in memory and rewritten whole on disk. Concurrent
-deletes are last-writer-wins; see [format.md](format.md#deletion-mask).
+The deletion mask is the one part of a finished collection that changes. A
+`parking_lot::RwLock` guards it in memory, and a write replaces the whole file
+on disk. Concurrent deletes are last-writer-wins. See
+[format.md](format.md#deletion-mask).

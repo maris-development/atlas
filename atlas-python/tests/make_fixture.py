@@ -1,12 +1,12 @@
 """Write the cross-language fixture that the Rust suite reads back.
 
-Python writes collections but cannot read their arrays, so a pytest run alone
-cannot prove that the bytes it wrote are the bytes it meant. This script builds
-a collection from NetCDF files the way `atlas create` does, and
-`tests/cross_fixture.rs` in the repository root opens it with the Rust reader
+Python writes a collection, and cannot read its arrays. A pytest run alone
+therefore cannot prove it wrote the bytes it meant. This script builds a
+collection from NetCDF files, the way `atlas create` does. Then
+`tests/cross_fixture.rs` in the repository root opens it with the Rust reader,
 and checks every value.
 
-Regenerate after an intentional change to the write path or the format:
+Regenerate after a deliberate change to the write path or the format:
 
     python atlas-python/tests/make_fixture.py
 
@@ -29,7 +29,7 @@ FIXTURE_DIR = pathlib.Path(__file__).resolve().parents[2] / "tests/fixtures/from
 
 
 def build_dataset() -> xr.Dataset:
-    """Values the Rust side asserts on. Keep in sync with cross_fixture.rs."""
+    """The values the Rust side asserts. Keep it in step with cross_fixture.rs."""
     return xr.Dataset(
         data_vars={
             "temperature": xr.DataArray(
@@ -69,9 +69,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as staging:
         source = pathlib.Path(staging)
         dataset = build_dataset()
-        # Two files with identical contents. `create` applies one chunking to
-        # every file, so the two datasets end up with the same schema — which
-        # is what the interning assertion in cross_fixture.rs turns on.
+        # Two files with equal contents. `create` applies one chunking to
+        # every file, so the two datasets get the same schema. The interning
+        # assertion in cross_fixture.rs depends on that.
         dataset.to_netcdf(source / "grid.nc")
         dataset.to_netcdf(source / "grid_copy.nc")
 

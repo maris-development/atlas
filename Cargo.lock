@@ -71,7 +71,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-python"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "atlas-rust",
  "ndarray",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-rust"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "array-format",
  "async-trait",

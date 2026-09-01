@@ -3,16 +3,17 @@
 //! ATLAS (Aggregated Tensor Large Array Store) keeps thousands of named
 //! datasets in a single immutable file.
 //!
-//! A dataset is a set of named N-dimensional arrays with attributes, the shape
-//! an xarray `Dataset` or a NetCDF file has. A collection holds many of them.
+//! A dataset is a set of named N-dimensional arrays with attributes. It has the
+//! shape of an xarray `Dataset` or a NetCDF file. A collection holds many.
 //!
 //! # The format in one paragraph
 //!
-//! A collection is one write-once file, `data.atlas`. Each dataset occupies a
-//! contiguous segment; a footer at the end records every dataset's name,
-//! schema, attributes, and segment byte range. Opening reads the footer, so
-//! every metadata question is answered by one range read however large the
-//! collection is. Array data is fetched chunk by chunk, only when asked for.
+//! A collection is one write-once file, `data.atlas`. Each dataset occupies one
+//! contiguous segment. A footer at the end records every dataset's name,
+//! schema, attributes, and segment byte range. To open the file, read the
+//! footer. One range read then answers every metadata question, whatever the
+//! size of the collection. Atlas fetches array data chunk by chunk, on
+//! demand.
 //!
 //! ```text
 //! my_collection/
@@ -22,15 +23,15 @@
 //!
 //! # Immutability
 //!
-//! A collection cannot be changed once written. There is no append, no
-//! in-place update, and no compaction: to change a dataset you rewrite the
-//! whole collection. The single exception is [`Atlas::delete_dataset`], which
-//! adds an ordinal to a small mask sidecar and leaves the container alone.
+//! A collection cannot change after a write. There is no append, no in-place
+//! update, and no compaction. To change a dataset, rewrite the whole
+//! collection. [`Atlas::delete_dataset`] is the one exception. It adds an
+//! ordinal to a small mask sidecar, and leaves the container alone.
 //!
-//! That constraint is what makes the format simple. There are no delta layers
-//! to resolve, no tombstones inside the data, and no ordinal that shifts under
-//! a reader. A segment is a complete, self-describing `array-format` file: you
-//! can cut one out of the container with `dd` and open it on its own.
+//! That constraint keeps the format simple. There are no delta layers to
+//! resolve. There are no tombstones inside the data. No ordinal moves under a
+//! reader. A segment is a complete `array-format` file that describes itself.
+//! Cut one out of the container with `dd`, and it opens on its own.
 //!
 //! # Writing
 //!
@@ -78,14 +79,15 @@
 //!
 //! # Thread safety
 //!
-//! [`Atlas`] and [`DatasetView`] are `Send + Sync`, and reads never block one
-//! another: the data is immutable, so there is nothing to lock. Segment handles
-//! open once through a `OnceCell` and are shared, as is the block cache.
+//! [`Atlas`] and [`DatasetView`] are `Send + Sync`. One read never blocks
+//! another, because the data is immutable and nothing needs a lock. A
+//! `OnceCell` opens each segment handle once. Every view shares those handles
+//! and the block cache.
 //!
-//! [`AtlasWriter`] is `Send + Sync` too, and several [`DatasetWriter`]s may be
-//! staged at once. A dataset touches the shared output only in
-//! [`DatasetWriter::finish`], which holds one lock for the whole append, so
-//! concurrent datasets land in finish order and never interleave.
+//! [`AtlasWriter`] is `Send + Sync` too. Several [`DatasetWriter`]s can stage
+//! at once. A dataset touches the shared output only in
+//! [`DatasetWriter::finish`], which holds one lock for the whole append.
+//! Concurrent datasets therefore land in finish order, and never interleave.
 
 mod config;
 mod error;

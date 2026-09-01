@@ -1,4 +1,4 @@
-# ATLAS — Aggregated Tensor Large Array Store
+# ATLAS: Aggregated Tensor Large Array Store
 
 [![CI](https://github.com/maris-development/atlas/actions/workflows/ci.yaml/badge.svg)](https://github.com/maris-development/atlas/actions/workflows/ci.yaml)
 [![crates.io](https://img.shields.io/crates/v/atlas-rust.svg?logo=rust)](https://crates.io/crates/atlas-rust)
@@ -9,10 +9,11 @@
 
 **Thousands of N-dimensional datasets in one immutable file.**
 
-A collection is a single write-once file. Every dataset — a set of named
-N-dimensional arrays with attributes, the shape a NetCDF file or an
-`xarray.Dataset` has — occupies a contiguous byte range inside it, and a footer
-at the end records where each one lives along with its schema and attributes.
+A collection is one write-once file. A dataset is a set of named N-dimensional
+arrays with attributes. It has the shape of a NetCDF file or an
+`xarray.Dataset`. Each dataset occupies one contiguous byte range inside the
+file. A footer at the end records where each one lives, with its schema and its
+attributes.
 
 ```text
 my_collection/
@@ -20,26 +21,26 @@ my_collection/
 └── deleted.mask    optional: ordinals of deleted datasets
 ```
 
-Two things follow, and they are most of the point:
+Two results follow, and they are most of the point:
 
-- **Metadata is one read.** Opening a collection fetches the footer and nothing
-  else. Listing datasets, inspecting schemas, and reading attributes are then
-  free — for ten datasets or a million.
-- **Data is fetched by the chunk.** Reading a region of an array fetches only
+- **Metadata is one read.** An open of a collection fetches the footer and
+  nothing else. To list the datasets, to inspect a schema, and to read an
+  attribute are then free. Ten datasets and a million datasets cost the same.
+- **Data arrives chunk by chunk.** A read of a region of an array fetches only
   the chunks that region overlaps.
 
-Built on [`array-format`](https://github.com/robinskil/array-format) for the
-chunked-array encoding and [`object_store`](https://crates.io/crates/object_store)
-for I/O, so a collection works identically on local disk, S3, GCS, Azure, or
-in memory.
+Atlas builds on [`array-format`](https://github.com/robinskil/array-format) for
+the chunked-array encoding, and on
+[`object_store`](https://crates.io/crates/object_store) for I/O. A collection
+therefore behaves the same on local disk, S3, GCS, Azure, and in memory.
 
-> **Python?** `pip install atlas-python` gives you the `atlas` command:
-> `atlas create` a collection from a directory of NetCDF files, then `ls`,
-> `show`, `info`, and `rm` — locally or against a bucket. Array data is read
-> from Rust. See [`atlas-python/`](atlas-python/) and the
+> **Python?** `pip install atlas-python` gives the `atlas` command. Run
+> `atlas create` on a directory of NetCDF files, then `ls`, `show`, `info`, and
+> `rm`. Each works on a local path and on a bucket. The Rust API reads array
+> data. See [`atlas-python/`](atlas-python/) and the
 > [documentation site](https://maris-development.github.io/atlas/).
 >
-> **Architecture?** [`docs/`](docs/) walks through it —
+> **Architecture?** [`docs/`](docs/) walks through it:
 > [architecture](docs/architecture.md), [data model](docs/data-model.md),
 > [the format](docs/format.md), [write path](docs/write-path.md),
 > [read path](docs/read-path.md), and [the Python package](docs/python.md).
@@ -93,24 +94,25 @@ cargo add atlas-rust
 
 ## Immutability
 
-A collection cannot be changed once written. There is no append, no in-place
-update, and no compaction: to change a dataset you rewrite the whole collection.
+A collection cannot change after a write. There is no append, no in-place
+update, and no compaction. To change a dataset, rewrite the whole collection.
 
-That constraint is what keeps the format simple. It removes delta layers to
-resolve on read, tombstones interleaved with data, ordinals shifting under a
-concurrent reader, and any durability boundary to reason about — the file either
-has a trailer or it is not a collection.
+That constraint keeps the format simple. It removes the delta layers a read
+must resolve. It removes the tombstones between the data. It removes the
+ordinal that moves under a reader. It removes the durability boundary. The file
+has a trailer, or it is no collection.
 
-The one exception is **deleting a dataset**, which appends an ordinal to a small
-`deleted.mask` file beside the container and never touches it. Ordinals stay
-stable, and no space is reclaimed.
+**A delete** is the one exception. It adds an ordinal to a small
+`deleted.mask` file beside the container, and never touches the container. Each
+ordinal stays put, and this reclaims no space. `Atlas::delete_datasets` takes
+any number of names, and still writes the mask once.
 
 | Not available | Instead |
 |---|---|
 | Append to a finished collection | Rewrite it |
-| Modify an array | Rewrite it |
-| `flush` / `compact` | Nothing to flush; no layers to compact |
-| Reclaim space from a deleted dataset | Rewrite it |
+| Change an array | Rewrite it |
+| `flush` or `compact` | Nothing to flush, and no layer to compact |
+| Reclaim the space of a deleted dataset | Rewrite it |
 
 ---
 
@@ -129,35 +131,34 @@ end - 8      format_version u32 LE = 1   4 B  ├ trailer
 end - 4      b"ATLS"                     4 B  ┘
 ```
 
-Opening reads the last 64 KiB, validates the trailer, and usually has the footer
-in the same request. The magic appears at both ends: the trailing copy is what a
-reader checks, the leading copy is so `file` and `xxd` can identify it.
+An open reads the last 64 KiB and checks the trailer. The footer usually
+arrives in the same request. The magic appears at both ends. A reader checks
+the trailing copy. The leading copy lets `file` and `xxd` name the file.
 
 ### Segments
 
-One per dataset. Each is a complete, self-describing `array-format` file — you
-can cut one out and open it standalone:
+One per dataset. Each is a complete `array-format` file that describes itself.
+Cut one out, and it opens on its own:
 
 ```bash
 # offsets from DatasetView::segment_range()
 dd if=data.atlas of=jan.af bs=1 skip=8 count=1438
 ```
 
-Inside, arrays are keyed by their real names and every block records its own
-codec, which is why a reader never needs to be told how a collection was
-compressed.
+Inside, each array keys on its real name, and each block records its own codec.
+Nothing therefore needs to tell a reader how a collection compresses.
 
 ### Footer
 
-MessagePack, zstd-compressed, holding every dataset's name, segment byte range,
-schema, and attributes. Two pools keep it small: schemas are interned by content
-hash, so a fleet of a thousand identically-shaped datasets stores one copy; and
-attribute keys are interned as strings.
+MessagePack, then zstd. It holds every dataset name, segment byte range,
+schema, and attribute. Two pools keep it small. Schemas intern by content hash,
+so a fleet of a thousand datasets of one shape stores one copy. Attribute keys
+intern as strings.
 
-Attribute **values** live here too, not in the segments, along with each array's
-minimum, maximum, and null count — computed while the dataset was staged, since
-the writer had to walk the data anyway. That is what makes a metadata-only open
-answer every question about a collection with no further I/O.
+Attribute **values** live here too, and not in the segments. So do the minimum,
+the maximum, and the null count of each array. The staging step computes those,
+because the writer walks the data anyway. A metadata-only open therefore
+answers every question about a collection with no further I/O.
 
 Full byte-level detail in [`docs/format.md`](docs/format.md).
 
@@ -170,6 +171,8 @@ let atlas = Atlas::open_path(path).await?;   // 1–2 requests, any collection s
 
 atlas.list_datasets();
 atlas.list_arrays();
+atlas.array_stats("temperature");            // every live dataset, combined
+atlas.array_stats_by_dataset("temperature"); // the same, split per dataset
 let ds = atlas.dataset("jan_2024")?;         // no I/O
 ds.schema();
 ds.array_meta("temperature");
@@ -181,23 +184,24 @@ ds.array_stats("temperature");               // min, max, null count, row count
 None of that touches the store after the open. `tests/integration.rs` proves it
 with a request-counting `ObjectStore`.
 
-Array reads are lazy and partial:
+An array read is lazy and partial:
 
 ```rust
 let all    = ds.read_array::<f32>("temperature", vec![], vec![]).await?;
 let window = ds.read_array::<f32>("temperature", vec![1, 3], vec![2, 2]).await?;
 ```
 
-The first read on a dataset opens its segment (two small range reads, cached
-thereafter); the read itself fetches only the overlapping chunks. Cells never
-written come from the fill value at no I/O cost.
+The first read on a dataset opens its segment, in two small range reads. The
+handle then stays in the cache. The read fetches the overlapping chunks, and no
+more. Every cell nobody wrote comes from the fill value, and costs no I/O.
 
 ---
 
 ## Writing
 
-`AtlasWriter` streams one object. Each dataset is staged as a complete
-`array-format` file on local scratch, then copied verbatim into the stream:
+`AtlasWriter` streams one object. Each dataset stages as a complete
+`array-format` file on local scratch. The writer then copies that file into the
+stream, byte for byte:
 
 ```text
 add_dataset("jan")  ──▶ scratch/1/data.af      define, write, define, write, …
@@ -205,12 +209,12 @@ add_dataset("jan")  ──▶ scratch/1/data.af      define, write, define, writ
 AtlasWriter::finish ──▶ footer, trailer, done
 ```
 
-Memory stays bounded whatever the dataset size: `array-format` spills compressed
-chunks to a temp file, and the copy streams in 8 MiB pieces.
+Memory stays bounded, whatever the dataset size. `array-format` spills each
+compressed chunk to a temporary file, and the copy streams in 8 MiB pieces.
 
-`add_dataset` returns an owned writer, so several datasets can be staged
-concurrently — each takes the writer's lock only for its append, so segments
-land in finish order and never interleave.
+`add_dataset` returns an owned writer, so several datasets can stage at once.
+Each takes the writer's lock for its append alone. The segments therefore land
+in finish order, and never interleave.
 
 ---
 
@@ -219,32 +223,33 @@ land in finish order and never interleave.
 Scalars: `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`, `Float32`, `Float64`,
 `String`, `Binary`, `TimestampNs`. Nested: `List<T>`, `FixedSizeList<T, n>`.
 
-Two datasets may declare the same array name with unrelated types; each is
-stored as declared. There is no merged schema and no type widening — with one
-segment per dataset there is nothing to reconcile.
+Two datasets can declare one array name with unrelated types. Atlas stores each
+as declared. There is no merged schema, and no type widening. One segment per
+dataset leaves nothing to reconcile. `Atlas::array_stats` leaves such a dataset
+out, because two dtypes do not compare.
 
-Attributes take any scalar type or a homogeneous list, at dataset or array
-scope. Timestamps have their own wire tag, so a string that happens to look like
-a date stays a string.
+An attribute takes any scalar type, or a list of one type. It sits at dataset
+scope or at array scope. A timestamp has its own wire tag, so a string that
+looks like a date stays a string.
 
 ---
 
 ## Compression
 
-`WriterConfig { codec }` is `Zstd` (default), `Lz4`, or `Uncompressed`, with a
-`block_target_size` defaulting to 8 MiB. Blocks are self-describing, so
+`WriterConfig { codec }` is `Zstd`, `Lz4`, or `Uncompressed`. `Zstd` is the
+default. `block_target_size` defaults to 8 MiB. Each block describes itself, so
 `Atlas::open` takes no codec argument.
 
 ---
 
 ## Thread safety
 
-Reads need no locks: the data is immutable, so `Atlas` and `DatasetView` are
-`Send + Sync` and concurrent reads never contend. Segment handles open once
-through a `OnceCell`, and one block cache is shared across a collection.
+A read needs no lock. The data is immutable, so `Atlas` and `DatasetView` are
+`Send + Sync`, and two reads never contend. A `OnceCell` opens each segment
+handle once. One block cache serves a whole collection.
 
-Writing shares one `tokio::sync::Mutex` over the output stream and the footer
-under construction, taken only for the duration of a dataset's append.
+A write shares one `tokio::sync::Mutex` over the output stream and the footer.
+A dataset takes that lock for its append alone.
 
 ---
 
@@ -254,12 +259,11 @@ under construction, taken only for the duration of a dataset's append.
 cargo test -p atlas-rust
 ```
 
-Covers the format framing, the footer and mask codecs, the segment-store
-adapter, and the full lifecycle end to end. Two committed fixtures pin
-compatibility: `tests/fixtures/golden_v1/` is a v1 container read back with
-every value asserted, and `tests/fixtures/from_python/` is written by the Python
-xarray layer and verified from Rust — which is what keeps the two honest now
-that Python cannot read arrays.
+This covers the format framing, the footer and mask codecs, the segment-store
+adapter, and the whole lifecycle. Two committed fixtures pin compatibility.
+`tests/fixtures/golden_v1/` is a v1 container, read back with every value
+asserted. The Python xarray layer writes `tests/fixtures/from_python/`, and
+Rust checks it. That keeps the two in agreement, because Python reads no array.
 
 ---
 

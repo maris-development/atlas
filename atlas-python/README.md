@@ -1,7 +1,8 @@
 # atlas-python
 
-Thousands of NetCDF datasets in one immutable file, on local disk or object
-storage (S3 / GCS / Azure / HTTP). A Rust core, five operations, and a command.
+Thousands of NetCDF datasets in one immutable file. It sits on local disk or on
+object storage: S3, GCS, Azure, or HTTP. A Rust core, five operations, and one
+command.
 
 ```bash
 pip install atlas-python
@@ -31,7 +32,7 @@ import atlas
 atlas.create("/data/nc", "/data/collection")   # from a directory of NetCDF files
 atlas.list_datasets("/data/collection")        # ['2024-01', '2024-02', '2024-03']
 atlas.describe("/data/collection", "2024-01")  # types, shapes, attrs, statistics
-atlas.info("/data/collection")                 # counts, size, codec
+atlas.info("/data/collection")                 # counts, size, codec, statistics
 atlas.remove("/data/collection", ["2024-02"])  # updates the mask
 ```
 
@@ -47,20 +48,20 @@ atlas.list_datasets("s3://my-bucket/collections/2024", region="eu-west-1")
 
 ## Two things to internalise
 
-**A collection is written once.** No append, no in-place update, no `flush` —
-the file either has a valid trailer or it is not a collection. To change a
-dataset, rebuild the collection. The one exception is `remove`, which writes a
-small mask file and never touches the container, so it reclaims no space and
-moves no ordinals.
+**One write builds a collection.** There is no append, no in-place update, and
+no `flush`. The file has a valid trailer, or it is no collection. To change a
+dataset, rebuild the collection. `remove` is the one exception. It writes a
+small mask file, and never touches the container. It therefore reclaims no
+space, and moves no ordinal.
 
-**Python writes; Rust reads array data.** From Python you build collections and
-read their *metadata* — dataset names, array types, shapes, chunk shapes, fill
-values, attributes, and the statistics recorded at write time. There is no
-`read_array`; array values come from the Rust API.
+**Python writes. Rust reads array data.** From Python you build a collection
+and read its *metadata*. That is the dataset names, the array types, the
+shapes, the chunk shapes, the fill values, the attributes, and the statistics
+of the write. There is no `read_array`. Array values come from the Rust API.
 
-That split is why the read side is free: every metadata call is answered from
-the footer that opening already fetched, so cataloguing a thousand datasets is
-one request.
+That split makes the read side free. The footer an open already fetched answers
+every metadata call. A catalogue of a thousand datasets is therefore one
+request.
 
 ## What `show` gives you
 
@@ -85,25 +86,25 @@ variables:
 }
 ```
 
-Shaped like `ncdump -h`, plus the statistics — minimum, maximum, and how many
-elements are missing — computed when each array was written. `--json` on any
-read command gives the same thing as a structure.
+The shape follows `ncdump -h`. It adds the statistics of the write: the
+minimum, the maximum, and how many elements are missing. `--json` on any read
+command gives the same content as a structure.
 
 ## Ingest
 
-`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf`, sorts
-them, and writes one dataset per file named after the stem. Coordinates and
-data variables become arrays; variable attrs become per-array attributes;
-`_FillValue` becomes the array's fill.
+`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf`. It sorts
+them, and writes one dataset per file, named after the stem. Each coordinate
+and data variable becomes an array. Each variable attribute becomes a per-array
+attribute. `_FillValue` becomes the fill of the array.
 
-Files are opened with dask chunking, so one far larger than memory streams
-block by block rather than being read whole. `--chunk-size` (default 128 MiB)
-sets the block budget and is roughly the memory ceiling per variable; those
-blocks also become the stored chunk shape.
+Each file opens with dask chunking. A file far larger than memory therefore
+streams block by block. `--chunk-size` sets the block budget, and defaults to
+128 MiB. It is about the memory ceiling per variable. Those blocks also become
+the stored chunk shape.
 
-Nothing is readable at the destination until every file is written — a failure
-part-way leaves no collection, not a partial one. `on_error="skip"`
-(`--skip-errors`) trades that for progress.
+Nothing at the destination is readable until every file lands. A failure
+part-way leaves no collection, and not a partial one. `on_error="skip"`, or
+`--skip-errors`, trades that for progress.
 
 ## dtypes
 
@@ -114,14 +115,14 @@ part-way leaves no collection, not a partial one. `on_error="skip"`
 | `timedelta64[*]` | `int64` nanoseconds, plus a unit marker |
 | `object` / `S` / `U` | `string` |
 
-`bool`, `binary`, and the list types work as *attribute* values but are not yet
-available as array element types.
+`bool`, `binary`, and the list types work as an *attribute* value. No one of
+them works yet as an array element type.
 
 ## Documentation
 
-Full docs at **<https://maris-development.github.io/atlas/>** — the
-[command reference], plus guides for [creating], [inspecting], [removing],
-[dtypes], [reading data], and [cloud storage].
+The full docs sit at **<https://maris-development.github.io/atlas/>**. They
+hold the [command reference], and guides for [creating], [inspecting],
+[removing], [dtypes], [reading data], and [cloud storage].
 
 The format itself is documented in
 [`docs/`](https://github.com/maris-development/atlas/tree/main/docs).

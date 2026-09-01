@@ -1,11 +1,11 @@
-//! Reading a collection from Python: metadata only.
+//! How Python reads a collection. Metadata only.
 //!
-//! Python can list datasets, inspect schemas, read attributes, and delete
-//! datasets. It cannot read array data — that is what the Rust API is for. The
-//! split is deliberate: a collection is written from Python and then served,
-//! and serving does not need to pull array bytes through the GIL.
+//! Python lists datasets, inspects schemas, reads attributes, and deletes
+//! datasets. It does not read array data. The Rust API does that. The split is
+//! deliberate. Python writes a collection and then serves it, and to serve it
+//! needs no array bytes through the GIL.
 
-use atlas::{Atlas, DatasetView, FillValue, StatValue};
+use atlas::{ArrayStats, Atlas, DatasetView, FillValue, StatValue};
 use object_store::path::Path as ObjStorePath;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
@@ -25,9 +25,9 @@ pub struct PyAtlas {
 impl PyAtlas {
     /// Open a collection.
     ///
-    /// `source` is a local filesystem path (`str` / `os.PathLike`) or an
-    /// obstore store handle. Opening reads the container footer and the
-    /// deletion mask, and nothing else.
+    /// `source` is a local filesystem path (`str` / `os.PathLike`), or an
+    /// obstore store handle. The open reads the container footer and the
+    /// deletion mask. Nothing else.
     #[staticmethod]
     fn open(py: Python<'_>, source: AtlasSource) -> PyResult<Self> {
         let inner = match source {
@@ -53,6 +53,46 @@ impl PyAtlas {
         self.inner.list_arrays()
     }
 
+    /// `{"min", "max", "null_count", "row_count"}` for `array`, over every
+    /// live dataset that holds it. `None` if no live dataset does.
+    ///
+    /// The counts add up. Each bound takes the wider of the two. A dataset
+    /// that declares the name with another dtype stays out, because two dtypes
+    /// do not compare.
+    ///
+    /// Use `DatasetView.array_stats` for one dataset on its own.
+    fn array_stats<'py>(
+        &self,
+        py: Python<'py>,
+        array: &str,
+    ) -> PyResult<Option<Bound<'py, PyDict>>> {
+        self.inner
+            .array_stats(array)
+            .map(|stats| stats_to_py(py, &stats))
+            .transpose()
+    }
+
+    /// `{dataset: {"min", "max", "null_count", "row_count"}}` for `array`,
+    /// over every live dataset that holds statistics for it, in write order.
+    ///
+    /// The deletion mask applies, so a hidden dataset never appears. A dataset
+    /// that does not declare the array does not appear either.
+    ///
+    /// Unlike `array_stats`, this keeps a dataset that declares the name with
+    /// another dtype. Nothing merges here, so two dtypes never have to
+    /// compare.
+    fn array_stats_by_dataset<'py>(
+        &self,
+        py: Python<'py>,
+        array: &str,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        for (name, stats) in self.inner.array_stats_by_dataset(array) {
+            dict.set_item(name, stats_to_py(py, &stats)?)?;
+        }
+        Ok(dict)
+    }
+
     /// Whether a live dataset of this name exists.
     fn dataset_exists(&self, name: &str) -> bool {
         self.inner.dataset_exists(name)
@@ -69,9 +109,9 @@ impl PyAtlas {
         self.inner.created_unix_ms()
     }
 
-    /// Everything the collection knows about itself: format version, creation
-    /// time, codec, container size, dataset counts, and how many distinct
-    /// schemas its datasets share.
+    /// Everything the collection knows about itself. The format version, the
+    /// creation time, the codec, the container size, the dataset counts, and
+    /// how many distinct schemas its datasets share.
     fn summary<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         dict.set_item("format_version", self.inner.format_version())?;
@@ -83,8 +123,8 @@ impl PyAtlas {
         Ok(dict)
     }
 
-    /// A metadata view of one dataset. Raises `KeyError` if it is absent or
-    /// deleted.
+    /// A metadata view of one dataset. Raises `KeyError` when the dataset is
+    /// absent or deleted.
     fn dataset(&self, name: &str) -> PyResult<PyDatasetView> {
         let inner = self.inner.dataset(name).map_err(to_py_err)?;
         Ok(PyDatasetView { inner })
@@ -92,10 +132,22 @@ impl PyAtlas {
 
     /// Hide a dataset by adding it to the deletion mask.
     ///
-    /// The container is not touched, so this reclaims no space and shifts no
-    /// ordinals. Rewrite the collection to reclaim the bytes.
+    /// The container does not change. This reclaims no space, and moves no
+    /// ordinal. Rewrite the collection to reclaim the bytes.
     fn delete_dataset(&self, py: Python<'_>, name: &str) -> PyResult<()> {
         py.detach(|| runtime().block_on(self.inner.delete_dataset(name)))
+            .map_err(to_py_err)
+    }
+
+    /// Hide many datasets in one pass. Returns how many the mask gained.
+    ///
+    /// The cost is two requests, whatever the number of names: one read of the
+    /// mask, and one write of it.
+    ///
+    /// A repeated name counts once. Every name must be live, so an absent or
+    /// already deleted one raises `KeyError` and writes nothing.
+    fn delete_datasets(&self, py: Python<'_>, names: Vec<String>) -> PyResult<usize> {
+        py.detach(|| runtime().block_on(self.inner.delete_datasets(&names)))
             .map_err(to_py_err)
     }
 
@@ -129,15 +181,15 @@ impl PyDatasetView {
         self.inner.name()
     }
 
-    /// The dataset's position in the collection. Stable for the life of the
-    /// container.
+    /// The dataset's position in the collection. It is stable for the life of
+    /// the container.
     #[getter]
     fn ordinal(&self) -> u32 {
         self.inner.ordinal()
     }
 
-    /// `(start, end)` byte offsets of this dataset's segment in `data.atlas`.
-    /// Those bytes are a complete array-format file.
+    /// The `(start, end)` byte offsets of this dataset's segment in
+    /// `data.atlas`. Those bytes are a complete array-format file.
     #[getter]
     fn segment_range(&self) -> (u64, u64) {
         let r = self.inner.segment_range();
@@ -149,8 +201,8 @@ impl PyDatasetView {
         self.inner.list_arrays()
     }
 
-    /// `{"dtype", "shape", "chunk_shape", "dimension_names", "fill_value"}` for
-    /// `array`, or `None` if this dataset does not declare it.
+    /// `{"dtype", "shape", "chunk_shape", "dimension_names", "fill_value"}`
+    /// for `array`. `None` if this dataset does not declare it.
     fn array_meta<'py>(
         &self,
         py: Python<'py>,
@@ -171,13 +223,13 @@ impl PyDatasetView {
         Ok(Some(dict))
     }
 
-    /// The value a read returns for elements that were never written, or
-    /// `None` if the array has no fill value.
+    /// The value a read returns for every element nobody wrote. `None` when
+    /// the array has no fill value.
     fn array_fill_value(&self, py: Python<'_>, array: &str) -> PyResult<Py<PyAny>> {
         fill_value_to_py(py, self.inner.array_fill_value(array).as_ref())
     }
 
-    /// Dataset-level attributes, in the order they were set.
+    /// Dataset-level attributes, in the order somebody set them.
     fn attributes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         for (k, v) in &self.inner.attributes() {
@@ -194,7 +246,7 @@ impl PyDatasetView {
             .transpose()
     }
 
-    /// The attributes of one array, in the order they were set.
+    /// The attributes of one array, in the order somebody set them.
     fn array_attributes<'py>(&self, py: Python<'py>, array: &str) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
         for (k, v) in &self.inner.array_attributes(array) {
@@ -216,27 +268,21 @@ impl PyDatasetView {
             .transpose()
     }
 
-    /// `{"min", "max", "null_count", "row_count"}` for `array`, as recorded
-    /// when the collection was written, or `None` if this dataset does not
-    /// declare it.
+    /// `{"min", "max", "null_count", "row_count"}` for `array`, as the write
+    /// recorded them. `None` if this dataset does not declare the array.
     ///
-    /// `null_count` counts elements equal to the fill value, which is how a
-    /// never-written cell is stored. `min` and `max` are `None` for a dtype
-    /// with no ordering, and raw `bytes` for strings.
+    /// `null_count` counts the elements equal to the fill value. That is how
+    /// the format stores a cell nobody wrote. `min` and `max` are `None` for a
+    /// dtype with no order, and raw `bytes` for a string.
     fn array_stats<'py>(
         &self,
         py: Python<'py>,
         array: &str,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let Some(stats) = self.inner.array_stats(array) else {
-            return Ok(None);
-        };
-        let dict = PyDict::new(py);
-        dict.set_item("min", stat_value_to_py(py, stats.min.as_ref())?)?;
-        dict.set_item("max", stat_value_to_py(py, stats.max.as_ref())?)?;
-        dict.set_item("null_count", stats.null_count)?;
-        dict.set_item("row_count", stats.row_count)?;
-        Ok(Some(dict))
+        self.inner
+            .array_stats(array)
+            .map(|stats| stats_to_py(py, &stats))
+            .transpose()
     }
 
     fn __contains__(&self, array: &str) -> bool {
@@ -264,9 +310,18 @@ fn codec_name(codec: atlas::Codec) -> &'static str {
     }
 }
 
-/// Convert a statistic to a Python scalar. Strings and binary come back as
-/// `bytes` rather than a list of integers, because a min/max is a value you
-/// compare against.
+/// Convert one set of statistics to a Python dictionary.
+fn stats_to_py<'py>(py: Python<'py>, stats: &ArrayStats) -> PyResult<Bound<'py, PyDict>> {
+    let dict = PyDict::new(py);
+    dict.set_item("min", stat_value_to_py(py, stats.min.as_ref())?)?;
+    dict.set_item("max", stat_value_to_py(py, stats.max.as_ref())?)?;
+    dict.set_item("null_count", stats.null_count)?;
+    dict.set_item("row_count", stats.row_count)?;
+    Ok(dict)
+}
+
+/// Converts a statistic to a Python scalar. A string and a binary value come
+/// back as `bytes`, not as a list of integers. A bound is a value to compare.
 fn stat_value_to_py(py: Python<'_>, val: Option<&StatValue>) -> PyResult<Py<PyAny>> {
     use pyo3::IntoPyObjectExt;
     let Some(val) = val else { return Ok(py.None()) };

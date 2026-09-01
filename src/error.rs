@@ -17,8 +17,8 @@ pub enum Error {
     /// An array of this name was already defined in the dataset being written.
     #[error("array already exists: {0}")]
     ArrayAlreadyExists(String),
-    /// A dataset or array name failed validation. Names must be non-empty, and
-    /// must not contain `/`, equal `.` or `..`, or start with `_`.
+    /// A dataset or array name failed validation. A name must not be empty.
+    /// It must not hold `/`, equal `.` or `..`, or start with `_`.
     #[error("invalid name '{0}': must be non-empty, no '/', no '..', no leading '_'")]
     InvalidName(String),
     /// The object at `data.atlas` is not an atlas container. `hint` says what
@@ -39,9 +39,8 @@ pub enum Error {
         /// Version this build expects.
         expected: u32,
     },
-    /// The container framing is intact but its footer does not describe a
-    /// usable collection, for example a dataset referencing a schema that is
-    /// not in the pool.
+    /// The container framing is intact, but the footer describes no usable
+    /// collection. One example: a dataset points at a schema the pool lacks.
     #[error("corrupt collection: {0}")]
     CorruptCollection(String),
     /// The object at `deleted.mask` is not a deletion mask. Ordinals that name

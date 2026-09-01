@@ -1,6 +1,6 @@
 """The `atlas` command.
 
-Six subcommands, one per operation:
+Five subcommands, one per operation:
 
     atlas create <netcdf-dir> <collection>   build a collection
     atlas rm     <collection> <name>...      remove datasets
@@ -8,8 +8,8 @@ Six subcommands, one per operation:
     atlas show   <collection> <name>         one dataset, ncdump style
     atlas info   <collection>                the whole collection
 
-Every one of them takes a local path or a URL (`s3://`, `gs://`, `az://`,
-`https://`) for the collection, so the same command works against a bucket.
+Every one takes a local path or a URL (`s3://`, `gs://`, `az://`, `https://`)
+for the collection. The same command therefore works against a bucket.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ def _human_bytes(n: int) -> str:
 
 
 def _format_value(value: Any) -> str:
-    """Render an attribute or statistic the way ncdump would."""
+    """Renders an attribute or a statistic the way ncdump does."""
     if value is None:
         return "-"
     if isinstance(value, bytes):
@@ -96,7 +96,7 @@ def _json_default(value: Any) -> Any:
 
 
 def _store_options(args: argparse.Namespace) -> dict[str, Any]:
-    """Backend settings shared by every subcommand."""
+    """Backend settings every subcommand shares."""
     options: dict[str, Any] = {}
     if getattr(args, "region", None):
         options["region"] = args.region
@@ -122,7 +122,7 @@ def _add_store_flags(parser: argparse.ArgumentParser) -> None:
 
 
 def _parse_open_chunks(value: str) -> Any:
-    """`--open-chunks` accepts a mode name or a JSON dict."""
+    """`--open-chunks` takes a mode name or a JSON dict."""
     if value in ("auto", "native"):
         return value
     if value == "none":
@@ -205,7 +205,7 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 
 def _render_dataset(d: dict[str, Any]) -> None:
-    """ncdump-style, because that is what people already know how to read."""
+    """Prints in ncdump style, because people already read that format."""
     print(f"dataset {d['name']} {{")
 
     if d["dimensions"]:
@@ -262,8 +262,11 @@ def cmd_info(args: argparse.Namespace) -> int:
         print(f"  interned schemas  {s['interned_schemas']}")
         arrays = s["distinct_arrays"]
         print(f"  distinct arrays   {len(arrays)}")
+        width = max((len(name) for name in arrays), default=0)
         for name in arrays:
-            print(f"      {name}")
+            # Statistics for the whole collection, not for one dataset.
+            stats = _format_stats(s["array_stats"].get(name))
+            print(f"      {name:<{width}}  {stats}".rstrip())
 
     _emit(summary, args.json, render)
     return 0
@@ -294,8 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="build a collection from a directory of NetCDF files",
         description=(
             "Each NetCDF file becomes one dataset, named after the file stem. "
-            "Nothing is readable at the destination until every file is "
-            "written, so a failure leaves no half-built collection."
+            "Nothing at the destination is readable until every file lands. A "
+            "failure therefore leaves no half-built collection."
         ),
     )
     p.add_argument("directory", help="directory holding the NetCDF files")
@@ -317,11 +320,11 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="MODE",
         default="auto",
         help=(
-            "how source files are read: 'auto' (default, dask picks blocks to "
-            "hit --chunk-size), 'native' (the file's own chunking), 'none' "
-            "(read each variable whole), or a JSON dict of per-dimension "
-            "sizes. Also sets the stored chunk shape unless --chunks says "
-            "otherwise"
+            "how to read the source files: 'auto' (the default, dask sizes "
+            "blocks to --chunk-size), 'native' (the file's own chunking), "
+            "'none' (read each variable whole), or a JSON dict of "
+            "per-dimension sizes. This also sets the stored chunk shape, "
+            "unless --chunks says otherwise"
         ),
     )
     p.add_argument(
@@ -329,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SIZE",
         default=_ops.DEFAULT_CHUNK_SIZE,
         help=(
-            f"block size 'auto' aims for, and roughly the memory ceiling per "
+            f"block size 'auto' aims at. It is about the memory ceiling per "
             f"variable (default: {_ops.DEFAULT_CHUNK_SIZE})"
         ),
     )
@@ -346,9 +349,9 @@ def build_parser() -> argparse.ArgumentParser:
         "rm",
         help="remove datasets from a collection",
         description=(
-            "Updates the deletion mask beside the container in one call. The "
-            "container is untouched, so no space is reclaimed and no ordinal "
-            "moves. Names may be given as dataset names or NetCDF paths."
+            "Updates the deletion mask beside the container, in one call. The "
+            "container does not change, so this reclaims no space and moves no "
+            "ordinal. A name is a dataset name or a NetCDF path."
         ),
     )
     p.add_argument("collection")
@@ -372,8 +375,8 @@ def build_parser() -> argparse.ArgumentParser:
         "show",
         help="show one dataset in ncdump style",
         description=(
-            "Dimensions, every array's type, shape, chunking, fill value and "
-            "attributes, and the statistics recorded when it was written."
+            "Dimensions, and for every array its type, shape, chunking, fill "
+            "value, attributes, and the statistics the write recorded."
         ),
     )
     p.add_argument("collection")
@@ -384,7 +387,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = subs.add_parser(
         "info",
         help="summarise the whole collection",
-        description="Dataset counts, size, codec, and the distinct array names.",
+        description=(
+            "Dataset counts, size, codec, and one set of statistics per "
+            "distinct array, over the whole collection."
+        ),
     )
     p.add_argument("collection")
     p.set_defaults(func=cmd_info)

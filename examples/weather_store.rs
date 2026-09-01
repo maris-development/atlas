@@ -1,12 +1,12 @@
 //! A realistic collection on an object store, read lazily.
 //!
-//! Monthly weather grids plus a station table, written to an in-memory
-//! `ObjectStore` under a prefix. Swap `InMemory` for `AmazonS3` and nothing
-//! else changes: the reader only ever issues range reads.
+//! Monthly weather grids and a station table. They go to an in-memory
+//! `ObjectStore` under a prefix. Replace `InMemory` with `AmazonS3`, and
+//! nothing else changes. The reader issues range reads only.
 //!
-//! The point of the example is what is *not* fetched. Opening reads the footer.
-//! Listing, schemas, and attributes come from that. A window out of one grid
-//! fetches the chunks it overlaps and nothing else.
+//! The example is about what it does *not* fetch. An open reads the footer.
+//! The dataset list, the schemas, and the attributes all come from that. A
+//! window out of one grid fetches the chunks it overlaps, and no more.
 //!
 //! Run with: `cargo run --example weather_store`
 
@@ -56,7 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(FillValue::Float(0.0)),
         )
         .await?;
-        // Only the northern band is written; the rest reads back as the fill.
+        // The write covers the northern band only. The rest reads back as the
+        // fill.
         let band = ArrayD::from_shape_fn(IxDyn(&[8, LON]), |i| (i[1] % 7) as f32);
         ds.write_array("precipitation", vec![0, 0], band.view())
             .await?;
@@ -72,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  wrote '{name}'");
     }
 
-    // A dataset with a different schema: the station table.
+    // A dataset with a different schema. This is the station table.
     {
         let mut ds = w.add_dataset("stations").await?;
         ds.define_array::<String>("name", vec!["station".into()], vec![3], None, None)
@@ -117,7 +118,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  datasets: {:?}", atlas.list_datasets());
     println!("  arrays:   {:?}", atlas.list_arrays());
 
-    // Metadata for every dataset, still without fetching a single array byte.
+    // Metadata for every dataset, and still no array byte.
     for name in atlas.list_datasets() {
         let ds = atlas.dataset(&name)?;
         let shapes: Vec<String> = ds
@@ -130,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!();
 
-    // A 2x2 window out of a 32x64 grid. One chunk is fetched, not 16.
+    // A 2x2 window out of a 32x64 grid. This fetches one chunk, not 16.
     let jan = atlas.dataset("jan")?;
     let window = jan
         .read_array::<f32>("temperature", vec![10, 20], vec![2, 2])
@@ -140,7 +141,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         window.as_slice().unwrap()
     );
 
-    // Unwritten regions come back as the fill value, with no stored bytes.
+    // A region nobody wrote comes back as the fill value. It stores no bytes.
     let dry = jan
         .read_array::<f32>("precipitation", vec![20, 0], vec![1, 4])
         .await?;

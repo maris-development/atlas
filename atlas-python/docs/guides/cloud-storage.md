@@ -1,15 +1,14 @@
 # Cloud storage (S3, GCS, Azure)
 
-Every operation accepts a URL, or an
+Every operation takes a URL, or an
 [obstore](https://github.com/developmentseed/obstore) store handle, in place of
 a filesystem path. obstore is a thin Python binding around the Rust
-[`object_store`](https://docs.rs/object_store) crate, so any backend it supports
-— S3, GCS, Azure Blob, HTTP, local — works with atlas. Atlas never sees the
-credentials.
+[`object_store`](https://docs.rs/object_store) crate. Every backend it supports
+therefore works with atlas: S3, GCS, Azure Blob, HTTP, and local. Atlas never
+sees a credential.
 
-The single-file format suits object storage particularly well. Writing is one
-multipart upload; opening is one range read of the tail, however many datasets
-the collection holds.
+The single-file format suits object storage well. A write is one multipart
+upload. An open is one range read of the tail, whatever the number of datasets.
 
 ## Install
 
@@ -17,13 +16,13 @@ the collection holds.
 pip install "atlas-python[cloud]"
 ```
 
-Equivalent to `pip install atlas-python obstore`. Without it, atlas works
-against local filesystem paths as usual.
+That equals `pip install atlas-python obstore`. Without it, atlas still works
+against a local filesystem path.
 
-## Quickstart — S3
+## Quickstart on S3
 
-The simplest form is a URL. Credentials come from the usual environment
-variables or `~/.aws/credentials`:
+A URL is the simplest form. The credentials come from the usual environment
+variables, or from `~/.aws/credentials`:
 
 ```bash
 atlas create /data/nc s3://my-bucket/collections/2024 --region eu-west-1
@@ -38,8 +37,8 @@ atlas.create("/data/nc", "s3://my-bucket/collections/2024", region="eu-west-1")
 atlas.list_datasets("s3://my-bucket/collections/2024", region="eu-west-1")
 ```
 
-For anything the URL cannot express — a custom credential provider, a retry
-policy — build the handle yourself and pass it in:
+Build the handle yourself for anything a URL cannot say, such as a custom
+credential provider or a retry policy. Then pass it in:
 
 ```python
 import obstore as obs
@@ -85,36 +84,36 @@ Nothing else in your code changes.
 | `create` | 1 multipart upload |
 | Reading one array region (Rust) | 2 to open the segment, then 1 per chunk touched |
 
-Opening scales with nothing: a collection of ten datasets and one of a million
-both cost a single request, because the footer is one object range.
+An open scales with nothing. Ten datasets and a million cost one request each,
+because the footer is one object range.
 
 ## Writing
 
-Output streams through a buffered writer that becomes a multipart upload once it
-outgrows its buffer. Footer-at-end is what makes this a single forward pass —
-nothing is ever rewritten.
+The output streams through a buffered writer. That writer becomes a multipart
+upload once the data passes its buffer. The footer sits at the end, which makes
+this one forward pass. Nothing needs a rewrite.
 
-Nothing at the target is readable until the writer finishes. If the process dies
-mid-write, no trailer is written and the path does not open as a collection; an
-incomplete multipart upload is cleaned up by the bucket's lifecycle rule, as
-usual.
+Nothing at the target is readable until the writer finishes. A process that
+dies during a write leaves no trailer, and the path then opens as no
+collection. The lifecycle rule of the bucket clears an incomplete multipart
+upload, as usual.
 
 ## Removing
 
-`remove` re-reads the mask before writing it, so two processes removing
-different datasets both survive. Two removals that interleave between the read
-and the write still lose one — object stores have no compare-and-swap here.
-Serialize removals against a collection if that matters.
+`remove` reads the mask again before it writes. Two processes that remove
+different datasets therefore both survive. Two removes that interleave between
+the read and the write still lose one. An object store has no compare-and-swap
+here. Serialize the removes against one collection if that matters.
 
 ## HTTP and read-only backends
 
 A read-only store serves `ls`, `show`, and `info`. `create` and `rm` need a
-PUT and will fail.
+PUT, so they fail.
 
 ## Version note
 
-The obstore handle crosses into atlas either directly, when the two were built
-against the same `pyo3-object_store`, or by being reconstructed from its
-configuration when they were not. Reconstruction emits a `RuntimeWarning` about
-connection pooling and works for any store with a URL or path to rebuild from.
-A `MemoryStore` has nothing to reconstruct, so it needs matching builds.
+An obstore handle reaches atlas in one of two ways. It passes straight through
+when both sides build against the same `pyo3-object_store`. Otherwise atlas
+rebuilds it from its configuration. A rebuild raises a `RuntimeWarning` about
+connection pooling. It works for any store with a URL or a path to rebuild
+from. A `MemoryStore` has nothing to rebuild, so it needs two matching builds.

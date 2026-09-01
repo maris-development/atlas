@@ -21,12 +21,12 @@
 //! end - 4     b"ATLS"                      4 B  ┘
 //! ```
 //!
-//! Each segment is a complete, self-describing `array-format` file. You can cut
-//! one out with `dd` and open it directly. The container footer records the byte
-//! range of each segment, so a reader finds a dataset without a scan.
+//! Each segment is a complete `array-format` file that describes itself. Cut
+//! one out with `dd`, and it opens on its own. The container footer records the
+//! byte range of each segment. A reader therefore finds a dataset with no scan.
 //!
 //! The container never changes after [`AtlasWriter::finish`](crate::AtlasWriter::finish).
-//! Dataset deletion writes the mask sidecar instead; see [`mask`].
+//! A delete writes the mask sidecar instead. See [`mask`].
 
 pub(crate) mod footer;
 pub(crate) mod mask;
@@ -35,8 +35,8 @@ pub(crate) mod segment_store;
 /// Magic at the first four bytes of the container, and at its last four.
 pub(crate) const MAGIC: [u8; 4] = *b"ATLS";
 
-/// Version of the container framing and of the footer schema. They move
-/// together: a footer field change is a format change.
+/// Version of the container framing and of the footer schema. The two move
+/// together. A change to one footer field is a format change.
 pub(crate) const FORMAT_VERSION: u32 = 1;
 
 /// Bytes before the first segment: magic + version.
@@ -45,8 +45,8 @@ pub(crate) const HEADER_SIZE: u64 = 8;
 /// Bytes after the footer: footer size + version + magic.
 pub(crate) const TRAILER_SIZE: u64 = 16;
 
-/// `array-format` footer version embedded in every segment. Recorded in the
-/// container footer so a future reader can dispatch on it.
+/// `array-format` footer version inside every segment. The container footer
+/// records it, so a future reader can dispatch on it.
 pub(crate) const SEGMENT_FORMAT: u32 = 5;
 
 /// Container object name under the collection prefix.
@@ -55,13 +55,13 @@ pub(crate) const DATA_FILE: &str = "data.atlas";
 /// Deletion-mask object name under the collection prefix.
 pub(crate) const MASK_FILE: &str = "deleted.mask";
 
-/// How many trailing bytes to read speculatively when opening. Sized so the
-/// footer of a small or medium collection arrives in the same request as the
-/// trailer.
+/// How many trailing bytes an open reads on speculation. The size suits a
+/// small or medium collection. Its footer then arrives with the trailer, in
+/// one request.
 pub(crate) const TAIL_PROBE_SIZE: u64 = 64 * 1024;
 
-/// Joins a collection prefix and an object name. An empty prefix, which is what
-/// a local-directory store uses, yields the bare name.
+/// Joins a collection prefix and an object name. An empty prefix gives the bare
+/// name. A local-directory store uses an empty prefix.
 pub(crate) fn child(prefix: &object_store::path::Path, name: &str) -> object_store::path::Path {
     if prefix.as_ref().is_empty() {
         object_store::path::Path::from(name)
@@ -89,8 +89,8 @@ pub(crate) fn encode_trailer(footer_size: u64) -> [u8; 16] {
 
 /// Reads the trailer from the last [`TRAILER_SIZE`] bytes of a container.
 ///
-/// Returns the footer size. Rejects a foreign file on the magic, and a
-/// container written by another format version on the version.
+/// Returns the footer size. The magic rejects a foreign file. The version
+/// rejects a container from another format version.
 pub(crate) fn decode_trailer(bytes: &[u8]) -> crate::Result<u64> {
     if bytes.len() < TRAILER_SIZE as usize {
         return Err(crate::Error::NotAnAtlasCollection {
@@ -116,9 +116,9 @@ pub(crate) fn decode_trailer(bytes: &[u8]) -> crate::Result<u64> {
     Ok(u64::from_le_bytes(t[..8].try_into().expect("8 bytes")))
 }
 
-/// Checks the 8-byte container header. Called once per open, on bytes the
-/// reader already holds when the whole container fits in the tail probe;
-/// otherwise it is a separate small read.
+/// Checks the 8-byte container header. One open calls this once. The bytes are
+/// already in hand when the whole container fits in the tail probe. Otherwise
+/// they cost one more small read.
 pub(crate) fn check_header(bytes: &[u8]) -> crate::Result<()> {
     if bytes.len() < HEADER_SIZE as usize || bytes[..4] != MAGIC {
         return Err(crate::Error::NotAnAtlasCollection {

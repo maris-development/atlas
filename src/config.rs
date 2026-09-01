@@ -1,25 +1,25 @@
-//! Write-time configuration. Reading needs none: every block records the codec
-//! that produced it, and the container framing is fixed.
+//! Write-time configuration. Reading needs none. Every block records its own
+//! codec, and the container framing is fixed.
 
 /// Compression codec applied to array blocks as the collection is written.
 ///
-/// The choice affects the write path only. Each block stores its own codec, so
-/// a reader decodes whatever it finds without being told.
+/// The choice affects the write path only. Each block stores its own codec.
+/// A reader decodes what it finds, and needs no argument.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
 )]
 pub enum Codec {
-    /// Zstd. The default: best ratio at moderate speed.
+    /// Zstd. The default. It gives the best ratio at moderate speed.
     #[default]
     Zstd,
     /// LZ4. Faster than Zstd, larger output.
     Lz4,
-    /// No compression. Fastest write path, no size reduction.
+    /// No compression. The fastest write path. It makes the file no smaller.
     Uncompressed,
 }
 
-/// Block size `array-format` targets when it packs chunks. Chunks smaller than
-/// this share a block; a larger chunk gets its own.
+/// Block size `array-format` aims at when it packs chunks. Chunks below this
+/// size share a block. A larger chunk gets a block of its own.
 pub(crate) const DEFAULT_BLOCK_TARGET_SIZE: usize = 8 * 1024 * 1024;
 
 /// Decompressed-block cache shared by every segment a reader opens.

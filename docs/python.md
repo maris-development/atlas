@@ -12,12 +12,12 @@ Five operations, exposed as a library and as the `atlas` command:
 | `describe` | `atlas show` | One dataset in detail, `ncdump` style |
 | `info` | `atlas info` | The collection as a whole |
 
-Every one of them takes a local path, a URL (`s3://`, `gs://`, `az://`,
-`https://`), or an obstore handle, so the same call works against a bucket.
+Every one takes a local path, a URL (`s3://`, `gs://`, `az://`, `https://`), or
+an obstore handle. The same call therefore works against a bucket.
 
-There is nothing else. No writer object, no `define_array`, no `read_array`.
-NetCDF is the only way data goes in, and array values come back out through the
-Rust API.
+There is nothing else. No writer object, no `define_array`, and no
+`read_array`. NetCDF is the one way data goes in. Array values come back out
+through the Rust API.
 
 ## The layers
 
@@ -26,12 +26,12 @@ Rust API.
 | `atlas` | `atlas-python/python/atlas/` | The five operations, the CLI, the xarray mapping |
 | `atlas._atlas` | `atlas-python/src/*.rs` | PyO3: numpy ⇄ ndarray, Python ⇄ `Attr`, error mapping |
 
-`_atlas` is private. It still exposes writer classes, because the ingest path
-needs them, but they are not part of the package's surface and nothing outside
+`_atlas` is private. It still exposes the writer classes, because the ingest
+path needs them. They are no part of the package surface, and nothing outside
 `atlas._ops` touches them.
 
-**The format is Rust only.** `atlas-python` holds no format knowledge — grep it
-for `ATLS` and you get nothing.
+**The format is Rust only.** `atlas-python` holds no format knowledge. Grep it
+for `ATLS`, and you get nothing.
 
 ## Modules
 
@@ -46,17 +46,17 @@ for `ATLS` and you get nothing.
 
 ## Ingest
 
-`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf` files,
-sorts them, and writes one dataset per file named after the file stem. Sorting
-is what makes ordinals reproducible: build the same directory twice and every
+`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf` files. It
+sorts them, and writes one dataset per file, named after the file stem. The
+sort makes the ordinals reproducible. Build the same directory twice, and every
 dataset lands at the same position.
 
-Everything happens inside one writer, so nothing at the destination is readable
-until the last file is written and the footer lands. A failure part-way leaves
-no collection at all, which is the behaviour you want when a job dies at 3 a.m.
+One writer does all of it. Nothing at the destination is readable until the
+last file lands, with the footer. A failure part-way leaves no collection. That
+is the behaviour a job needs when it dies overnight.
 
-`on_error="skip"` trades that for progress: a file that fails is recorded in
-the result and the rest carry on.
+`on_error="skip"` trades that for progress. The result records each file that
+fails, and the rest continue.
 
 ### The mapping
 
@@ -71,8 +71,8 @@ the result and the rest carry on.
 | `_FillValue` | the array's fill value, not an attribute |
 | which variables were coords | the `_pyatlas_coords` marker |
 
-Coordinates are written first, then data variables, so the on-disk order is
-predictable.
+The coordinates land first, then the data variables. The on-disk order is
+therefore predictable.
 
 ### dtypes
 
@@ -83,66 +83,73 @@ Integer widths and `float32`/`float64` map straight through. Beyond that:
 | `datetime64[ns]` | `timestamp_nanoseconds` | only `[ns]` |
 | `timedelta64[*]` | `int64` | normalized to ns, tagged `_pyatlas_timedelta` |
 | `object` / `S` / `U` | `string` | variable length |
-| anything else | — | `NotImplementedError` |
+| anything else | none | `NotImplementedError` |
 
-Atlas has no duration type, so a timedelta becomes int64 nanoseconds plus a
-marker naming the unit. Surrogate-escaped strings — common from netCDF backends
-— are sanitised on the way in.
+Atlas has no duration type. A timedelta therefore becomes int64 nanoseconds,
+with a marker that names the unit. A surrogate-escaped string is common from a
+netCDF backend. Atlas cleans one on the way in.
 
 ### Fill values
 
-Reading a NetCDF file with `mask_and_scale=True`, xarray's default, leaves `NaN`
-and `NaT` where data is missing and moves `_FillValue` into `var.encoding`.
-Atlas records those cells as never-written by defaulting each array to a
-sentinel: `NaN` for floats, `NaT` for datetimes, `""` for strings, and none for
-integers.
+xarray defaults to `mask_and_scale=True`. A read of a NetCDF file then leaves
+`NaN` and `NaT` where data is missing, and moves `_FillValue` into
+`var.encoding`. Atlas records those cells as never written. Each array takes a
+default sentinel: `NaN` for a float, `NaT` for a datetime, `""` for a string,
+and none for an integer.
 
-Missing *string* cells are the one lossy case — atlas cannot store a null
-string, so they are replaced with the fill and a warning names the count.
+A missing *string* cell is the one lossy case. Atlas cannot store a null
+string. Each one takes the fill instead, and a warning names the count.
 
 ### Streaming
 
-Files are opened with dask chunking — `chunks="auto"` by default — so every
-variable arrives as blocks rather than whole. Blocks are written one at a time,
-prefetched on a background thread so NetCDF reads overlap atlas writes.
+Each file opens with dask chunking, under `chunks="auto"` by default. Every
+variable therefore arrives as blocks, and not whole. The blocks land one at a
+time. A background thread prefetches them, so NetCDF reads overlap atlas
+writes.
 
-The prefetch batch is sized by **bytes**, not by block count. Batching by count
-is right for the many-small-chunks case, where it amortises dask's scheduler
-overhead; it is ruinous for large blocks, where eight 128 MiB blocks per batch
-and two batches in flight would be 2 GiB resident. `_batch_size_for` computes
-the count from the block size against a 64 MiB budget, so a variable chunked at
-128 MiB holds two blocks in flight rather than sixteen.
+**Bytes** size the prefetch batch, not the block count. A batch sized by count
+suits the many-small-chunks case, where it covers the dask scheduler overhead.
+It ruins the large-block case. Eight 128 MiB blocks per batch, with two batches
+in flight, holds 2 GiB in memory. `_batch_size_for` computes the count from the
+block size against a 64 MiB budget. A variable chunked at 128 MiB therefore
+holds two blocks in flight, not sixteen.
 
-Measured on a 500 MiB variable, peak RSS drops from about 1.6 GiB reading whole
-to about 500 MiB with a 16 MiB block budget, and tracks the budget rather than
-the file.
+On a 500 MiB variable, peak RSS falls from about 1.6 GiB for a whole read to
+about 500 MiB under a 16 MiB block budget. It tracks the budget, not the file.
 
-The blocks a file is read in also become its stored chunk shape, unless
-`chunks=` overrides it — one decision, not two. `open_chunks` picks the
-strategy: `"auto"` (dask sizes blocks to `chunk_size`), `"native"` (the file's
-own encoding), `None` (whole), or an explicit per-dimension dict.
+The blocks a read uses also become the stored chunk shape, unless `chunks=`
+overrides it. That is one decision, not two. `open_chunks` picks the strategy.
+`"auto"` lets dask size the blocks to `chunk_size`. `"native"` uses the
+encoding of the file. `None` reads each variable whole. A dict sets an explicit
+size per dimension.
 
 ## Conventions Rust does not know about
 
 Three things the Python layer writes as ordinary attributes:
 
-- `_pyatlas_coords` — a JSON list of which variables were coordinates
-- `_pyatlas_timedelta` — the unit marker described above
-- a `json:` prefix on any attribute value too complex to store natively
-  (nested dicts, ragged lists), JSON-encoded behind it
+- `_pyatlas_coords`. A JSON list of the variables that were coordinates.
+- `_pyatlas_timedelta`. The unit marker above.
+- A `json:` prefix on any attribute value atlas cannot store as it is, such as
+  a nested dict or a ragged list. The JSON sits behind the prefix.
 
-A Rust reader sees these as plain string attributes; only Python interprets
-them. They are conventions layered on the format, not part of it —
-`tests/cross_fixture.rs` asserts exactly that by reading them as raw strings.
+A Rust reader sees these as plain string attributes. Only Python reads their
+meaning. They sit on top of the format, and are no part of it.
+`tests/cross_fixture.rs` asserts that, and reads them as raw strings.
 
 `describe` and `info` decode them and hide the markers.
 
 ## Reading array data
 
-Not from Python. `describe` gives you every array's type, shape, chunking, fill
-value, attributes, and the statistics recorded when it was written — enough to
-catalogue a collection or validate an ingest, all from the footer that opening
-already read.
+Not from Python. `describe` gives the type, the shape, the chunking, the fill
+value, the attributes, and the write statistics of every array. That is enough
+to catalogue a collection, or to check an ingest. It all comes from the footer
+the open already read.
+
+`info` answers the same question for the whole collection. Its `array_stats`
+maps each array name to one set of statistics. The counts add up over every
+live dataset that holds the array. The minimum is the smallest of the minimums.
+The maximum is the largest of the maximums. A dataset that declares the same
+name with a different dtype stays out, because two dtypes do not compare.
 
 Array *values* come from the Rust API. See [read-path.md](read-path.md).
 
@@ -155,7 +162,7 @@ Array *values* come from the Rust API. See [read-path.md](read-path.md).
 | `Io` | `OSError` |
 | `CorruptCollection`, `CorruptMask`, `ObjectStore` | `RuntimeError` |
 
-The operations raise `AtlasError` for anything they can explain themselves — an
-empty directory, a duplicate stem, a dataset that is not there — and
-`SourceError` when a URL cannot be resolved. The CLI turns both into a one-line
+An operation raises `AtlasError` for anything it can explain itself. An empty
+directory, a duplicate stem, or a dataset that is absent. It raises
+`SourceError` when a URL does not resolve. The CLI turns both into a one-line
 message and exit code 1.

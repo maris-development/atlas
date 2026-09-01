@@ -5,11 +5,11 @@ Every operation takes a URL as readily as a path:
     s3://bucket/prefix      gs://bucket/prefix
     az://container/prefix   https://host/path
 
-or an already-constructed obstore handle, when you need to set credentials or
-options yourself. Atlas never sees the credentials — obstore does.
+It also takes an obstore handle you built yourself, to set credentials or other
+options. Atlas never sees a credential. obstore does.
 
-The single-file format suits object storage: writing is one multipart upload,
-and opening is one range read of the tail however many datasets there are.
+The single-file format suits object storage. A write is one multipart upload.
+An open is one range read of the tail, whatever the number of datasets.
 
 Install (once):
 
@@ -77,7 +77,7 @@ def main() -> None:
         removed = atlas.remove(store, ["2024-02"])
         print(f"rm       {removed['removed']}, {removed['remaining']} remain")
 
-        # Credentials and endpoints are passed straight through to obstore:
+        # Credentials and endpoints pass straight through to obstore:
         #   atlas.list_datasets("s3://bucket/prefix", region="eu-west-1")
         #   atlas.list_datasets("s3://public-bucket/x", skip_signature=True)
         #

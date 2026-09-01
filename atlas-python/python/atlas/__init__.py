@@ -1,6 +1,6 @@
-"""atlas — thousands of NetCDF datasets in one immutable file.
+"""atlas. Thousands of NetCDF datasets in one immutable file.
 
-Five operations, no more:
+Five operations, and no more:
 
     create          build a collection from a directory of NetCDF files
     remove          remove datasets from one, in a single call
@@ -8,13 +8,13 @@ Five operations, no more:
     describe        one dataset in detail, like ncdump
     info            the collection as a whole
 
-Every one of them takes a local path or a URL (``s3://``, ``gs://``, ``az://``,
-``https://``), so the same call works against a bucket.
+Every one takes a local path or a URL (``s3://``, ``gs://``, ``az://``,
+``https://``). The same call therefore works against a bucket.
 
 The same operations are on the command line as ``atlas create``, ``atlas rm``,
 ``atlas ls``, ``atlas show``, and ``atlas info``.
 
-Array *data* is read through the Rust API, not from here. See the Reading data
+The Rust API reads array *data*. This package does not. See the Reading data
 guide.
 """
 

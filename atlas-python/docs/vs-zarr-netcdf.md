@@ -1,10 +1,10 @@
 # vs Zarr / netCDF
 
-Atlas lives in the same neighbourhood as [Zarr v3](https://zarr.dev/) and
-[netCDF4](https://www.unidata.ucar.edu/software/netcdf/): all three store
-labelled N-D arrays with chunking and compression, and all three are reachable
-from xarray. They differ in **layout**, and that is what makes atlas suited to
-one class of workload and not others.
+Atlas sits near [Zarr v3](https://zarr.dev/) and
+[netCDF4](https://www.unidata.ucar.edu/software/netcdf/). All three store
+labelled N-D arrays with chunking and compression, and xarray reaches all
+three. They differ in **layout**. That difference suits atlas to one class of
+work, and not to others.
 
 ## What each one is, in one line
 
@@ -14,14 +14,14 @@ one class of workload and not others.
 | **Zarr v3** | One directory of chunk files per array | N stores, or one store with N groups |
 | **atlas** | One immutable file holding **N** datasets | N datasets in one file, by construction |
 
-Atlas is the only one whose natural unit is *a fleet of related datasets*, which
-is where the comparison gets interesting.
+Atlas is the one format whose natural unit is *a fleet of related datasets*.
+That is where the comparison matters.
 
-## The difference that matters: cataloguing
+## The difference that matters is the catalogue
 
-A collection's entire metadata — every dataset name, every array's dtype, shape,
-chunking, and every attribute — lives in one footer at the end of one file.
-Opening reads it in a single range request.
+One footer at the end of one file holds the whole metadata of a collection.
+That is every dataset name, the dtype, shape, and chunking of every array, and
+every attribute. An open reads it in one range request.
 
 ```bash
 $ atlas info s3://bucket/collections/2024      # 1 request
@@ -29,54 +29,54 @@ $ atlas ls   s3://bucket/collections/2024      # 1 request
 $ atlas show s3://bucket/collections/2024 jan  # 1 request
 ```
 
-Each of those reads the footer and answers everything from it — dataset names,
-every array's type and shape, every attribute, and the statistics recorded when
-each array was written.
+Each of those reads the footer, and answers from it alone. The dataset names,
+the type and shape of every array, every attribute, and the statistics of each
+array write.
 
-The same catalogue over N netCDF files means opening N files; over N Zarr stores
-or groups it means fetching N sets of `zarr.json`. On object storage, where each
-of those is a round trip, that is the whole cost of the operation.
+The same catalogue over N netCDF files means N file opens. Over N Zarr stores
+or groups it means N fetches of `zarr.json`. On object storage each of those is
+a round trip, and those trips are the whole cost.
 
-This is what atlas is for: you have thousands of similar datasets, you need to
-know what is in them, and you need that answer quickly and often.
+This is what atlas is for. You hold thousands of similar datasets. You need to
+know what is in them, and you need that answer fast and often.
 
 ## Where atlas is a poor fit
 
-Worth being blunt, because the constraint is real:
+State this plainly, because each constraint is real:
 
-**You need to modify data.** Atlas collections are immutable. Zarr is designed
-for incremental and concurrent writes — regions updated in place, arrays resized,
-new variables appended. If your workflow appends daily to a growing store, use
-Zarr.
+**You must change data.** An atlas collection is immutable. Zarr serves an
+incremental and concurrent write. It updates a region in place, resizes an
+array, and appends a new variable. Use Zarr when your workflow appends to a
+store every day.
 
-**You have one big dataset, not many.** A single 10 TB array in one collection
-gets nothing from the format. Zarr's chunk-per-object layout parallelises writes
-across workers in a way atlas's single-stream writer does not.
+**You hold one large dataset, not many.** One 10 TB array in one collection
+gains nothing from this format. The chunk-per-object layout of Zarr spreads a
+write across workers. The single-stream writer of atlas does not.
 
-**You need the data back in Python.** Atlas reads array values from Rust only.
-Zarr and netCDF hand you numpy and dask directly. If the analysis is in Python
-and the storage layer needs to feed it, that is a real cost.
+**You need the data back in Python.** Atlas reads an array value from Rust
+only. Zarr and netCDF hand you numpy and dask. That is a real cost when the
+analysis runs in Python, and the storage layer must feed it.
 
-**Your data is not in NetCDF.** NetCDF is the only ingest route atlas offers
-from Python. Zarr will take anything you can put in a numpy array.
+**Your data is not NetCDF.** NetCDF is the one ingest route atlas offers from
+Python. Zarr takes anything a numpy array can hold.
 
-**You need an ecosystem.** Zarr and netCDF have decades of tooling, viewers,
-converters, and institutional familiarity. Atlas has this documentation.
+**You need an ecosystem.** Zarr and netCDF hold decades of tools, viewers,
+converters, and shared knowledge. Atlas holds this documentation.
 
 ## Where it fits well
 
-**A published, versioned archive.** Immutability is a feature when the data is
-final: one file to copy, checksum, or mirror, with no partially-written state to
-detect.
+**A published, versioned archive.** Immutability helps when the data is final.
+There is one file to copy, to checksum, or to mirror, and no half-written state
+to find.
 
-**A catalogue served over the network.** Metadata for a whole collection in one
-request is hard to beat when the alternative is N round trips.
+**A catalogue over the network.** The metadata of a whole collection in one
+request beats N round trips.
 
 **Ingest from many source files.** One pass over a directory of NetCDF files
-produces one artefact, with dask streaming keeping memory flat.
+makes one artefact. The dask stream keeps the memory flat.
 
-**Cold object storage.** One object per collection rather than thousands means
-fewer requests, no listing costs, and no small-object overhead.
+**Cold object storage.** One object per collection, instead of thousands, means
+fewer requests, no listing cost, and no small-object overhead.
 
 ## Layout, concretely
 
@@ -93,15 +93,15 @@ mar_2024.nc                  temperature/                deleted.mask
                            many objects each
 ```
 
-Atlas's one file is not a compressed archive — it is randomly addressable. A
-segment is a complete, self-describing `array-format` file at a known byte
-offset, so reading one dataset's chunk touches only that range.
+The one atlas file is no compressed archive. It addresses at random. A segment
+is a complete `array-format` file that describes itself, at a known byte
+offset. A read of one chunk of one dataset therefore touches that range alone.
 
 ## Compression
 
-All three compress per chunk or per block, with similar codecs (zstd, lz4).
-Expect comparable ratios on the same data; the difference between the formats
-is layout and access cost, not bytes saved.
+All three compress per chunk or per block, with the same kind of codec, such as
+zstd or lz4. Expect a similar ratio on the same data. The formats differ in
+layout and access cost, not in bytes saved.
 
 ## Reading atlas data from Rust
 
@@ -111,5 +111,5 @@ let ds = atlas.dataset("2024-01")?;
 let window = ds.read_array::<f32>("temperature", vec![1, 3], vec![2, 2]).await?;
 ```
 
-Only the chunks the window overlaps are fetched — the same partial-read
-behaviour Zarr gives you, at the same granularity.
+This fetches the chunks the window overlaps, and no more. Zarr gives the same
+partial read, at the same size.

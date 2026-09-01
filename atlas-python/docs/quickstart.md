@@ -16,16 +16,15 @@ Writing /data/collection
 3 dataset(s) written to /data/collection
 ```
 
-Each file became one dataset, named after its stem. The result is a single
-file:
+Each file becomes one dataset, named after its stem. The result is one file:
 
 ```bash
 $ ls /data/collection
 data.atlas
 ```
 
-Nothing was readable there until the last file was written — a failure part-way
-would have left no collection at all, rather than a partial one.
+Nothing there was readable until the last file landed. A failure part-way
+leaves no collection, and not a partial one.
 
 From Python:
 
@@ -54,17 +53,21 @@ collection /data/collection
   datasets          3
   interned schemas  1
   distinct arrays   4
-      lat
-      lon
-      station
-      temperature
+      lat          count=12  min=0.0  max=3.0
+      lon          count=18  min=0.0  max=5.0
+      station      count=12  min="a"  max="d"
+      temperature  count=72  min=1.0  max=26.0
 ```
 
-Both come from one range read of the container's tail — the same cost whether
-the collection holds three datasets or a million.
+Both come from one range read of the container tail. Three datasets and a
+million cost the same.
 
 `interned schemas 1` means all three months declare the same arrays, so that
 schema is stored once.
+
+The statistics cover the whole collection. Each month holds 24 temperature
+elements, so the three months together hold 72. The minimum comes from January.
+The maximum comes from March. Removed datasets do not count.
 
 ## Inspect one dataset
 
@@ -94,8 +97,8 @@ variables:
 }
 ```
 
-Shaped like `ncdump -h`, with the statistics that were computed when each array
-was written. Those are in the footer too, so printing them cost nothing extra.
+The shape follows `ncdump -h`. It adds the statistics of each array write. The
+footer holds those too, so to print them costs nothing extra.
 
 From Python, the same thing as a structure:
 
@@ -114,9 +117,9 @@ removed 1: 2024-02
 2 dataset(s) remain
 ```
 
-That wrote a small `deleted.mask` beside the container. The container itself is
-untouched, so nothing was reclaimed and no ordinal moved. Rebuild the
-collection to get the space back.
+That writes a small `deleted.mask` beside the container. The container does not
+change, so this reclaims nothing and moves no ordinal. Rebuild the collection
+to get the space back.
 
 ## Against a bucket
 
@@ -127,12 +130,12 @@ atlas create /data/nc s3://my-bucket/collections/2024 --region eu-west-1
 atlas ls s3://my-bucket/collections/2024 --region eu-west-1
 ```
 
-Needs `pip install "atlas-python[cloud]"`. See
+This needs `pip install "atlas-python[cloud]"`. See
 [Cloud storage](guides/cloud-storage.md).
 
 ## Reading the data
 
-Not from Python — array values are read through the Rust API:
+Not from Python. The Rust API reads array values:
 
 ```rust
 let atlas = Atlas::open_path("/data/collection").await?;
@@ -140,12 +143,12 @@ let ds = atlas.dataset("2024-01")?;
 let window = ds.read_array::<f32>("temperature", vec![0, 0], vec![2, 3]).await?;
 ```
 
-See [Reading data](guides/reading-data.md) for why, and what to do if you need
-values in Python.
+See [Reading data](guides/reading-data.md) for the reason, and for what to do
+when you need values in Python.
 
 ## Next
 
-- [**The `atlas` command**](cli.md) — every flag
-- [**Creating a collection**](guides/creating.md) — chunking, errors, memory
-- [**Inspecting a collection**](guides/inspecting.md) — what the metadata holds
-- [**Removing datasets**](guides/removing.md) — the mask, and what it costs
+- [**The `atlas` command**](cli.md). Every flag
+- [**Creating a collection**](guides/creating.md). Chunking, errors, memory
+- [**Inspecting a collection**](guides/inspecting.md). What the metadata holds
+- [**Removing datasets**](guides/removing.md). The mask, and what it costs

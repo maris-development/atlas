@@ -1,22 +1,22 @@
 //! End-to-end tests for the single-file immutable format.
 //!
-//! The lifecycle under test is short by design: build a collection, finish it,
-//! open it, read from it, delete a dataset, reopen. There is no mutation path
-//! to exercise because the format has none.
+//! The lifecycle under test is short by design. Build a collection, finish
+//! it, open it, read from it, delete a dataset, reopen. There is no mutation
+//! path to test, because the format has none.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use atlas::{Atlas, AtlasWriter, Attr, Codec, Error, FillValue, WriterConfig};
+use atlas::{Atlas, AtlasWriter, Attr, Codec, Error, FillValue, StatValue, WriterConfig};
 use ndarray::{Array1, Array2, ArrayD};
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStore, ObjectStoreExt};
 
 // ── helpers ──────────────────────────────────────────────────────────
 
-/// Builds a collection with three datasets covering the cases that matter:
-/// several dtypes, a chunked array, an array that is defined but never
-/// written, fill values, and attributes at both levels.
+/// Builds a collection of three datasets. They cover the cases that matter.
+/// Several dtypes, a chunked array, an array nobody writes, fill values, and
+/// attributes at both levels.
 async fn build_fixture(path: &std::path::Path) {
     let w = AtlasWriter::create_path(path, WriterConfig::default())
         .await
@@ -33,7 +33,7 @@ async fn build_fixture(path: &std::path::Path) {
         )
         .await
         .unwrap();
-        // Four chunks, written as one slab that spans all of them.
+        // Four chunks. One slab spans all of them.
         let data =
             ArrayD::from_shape_fn(ndarray::IxDyn(&[4, 8]), |i| (i[0] * 8 + i[1]) as f32).into_dyn();
         ds.write_array("temperature", vec![0, 0], data.view())
@@ -74,13 +74,13 @@ async fn build_fixture(path: &std::path::Path) {
         ds.define_array::<i64>("counts", vec!["lat".into()], vec![4], None, None)
             .await
             .unwrap();
-        // counts is declared but never written: it must read back as fill.
+        // counts is declared and never written. It must read back as fill.
         ds.set_attribute("month", Attr::Int64(2));
         ds.finish().await.unwrap();
     }
 
     {
-        // A different schema, and the dtypes the xarray layer leans on.
+        // A different schema, and the dtypes the xarray layer needs.
         let mut ds = w.add_dataset("stations").await.unwrap();
         ds.define_array::<String>("name", vec!["station".into()], vec![3], None, None)
             .await
@@ -121,9 +121,9 @@ async fn build_fixture(path: &std::path::Path) {
     w.finish().await.unwrap();
 }
 
-/// Builds `datasets` datasets of one `len`-element array each, uncompressed so
-/// the container is genuinely large. Used where a fixture has to exceed the
-/// reader's tail probe.
+/// Builds `datasets` datasets. Each holds one array of `len` elements, with no
+/// compression, so the container is truly large. Use it when a fixture must
+/// exceed the reader's tail probe.
 async fn build_bulky_fixture(path: &std::path::Path, datasets: usize, len: usize) {
     let w = AtlasWriter::create_path(
         path,
@@ -147,12 +147,13 @@ async fn build_bulky_fixture(path: &std::path::Path, datasets: usize, len: usize
     w.finish().await.unwrap();
 }
 
-/// An `ObjectStore` that counts requests, so laziness can be asserted rather
-/// than assumed.
+/// An `ObjectStore` that counts requests. It turns an assumption about lazy
+/// reads into an assertion.
 #[derive(Debug)]
 struct CountingStore {
     inner: Arc<dyn ObjectStore>,
     gets: AtomicUsize,
+    puts: AtomicUsize,
     bytes: AtomicUsize,
 }
 
@@ -161,17 +162,22 @@ impl CountingStore {
         Arc::new(Self {
             inner,
             gets: AtomicUsize::new(0),
+            puts: AtomicUsize::new(0),
             bytes: AtomicUsize::new(0),
         })
     }
     fn gets(&self) -> usize {
         self.gets.load(Ordering::SeqCst)
     }
+    fn puts(&self) -> usize {
+        self.puts.load(Ordering::SeqCst)
+    }
     fn bytes(&self) -> usize {
         self.bytes.load(Ordering::SeqCst)
     }
     fn reset(&self) {
         self.gets.store(0, Ordering::SeqCst);
+        self.puts.store(0, Ordering::SeqCst);
         self.bytes.store(0, Ordering::SeqCst);
     }
 }
@@ -190,6 +196,7 @@ impl ObjectStore for CountingStore {
         payload: object_store::PutPayload,
         opts: object_store::PutOptions,
     ) -> object_store::Result<object_store::PutResult> {
+        self.puts.fetch_add(1, Ordering::SeqCst);
         self.inner.put_opts(location, payload, opts).await
     }
     async fn put_multipart_opts(
@@ -204,7 +211,7 @@ impl ObjectStore for CountingStore {
         location: &OsPath,
         options: object_store::GetOptions,
     ) -> object_store::Result<object_store::GetResult> {
-        // A head request transfers no body, so it counts as neither.
+        // A head request moves no body, so it counts as neither.
         let head = options.head;
         if !head {
             self.gets.fetch_add(1, Ordering::SeqCst);
@@ -292,6 +299,106 @@ async fn a_finished_collection_reopens_with_all_its_metadata() {
 }
 
 #[tokio::test]
+async fn collection_stats_fold_every_dataset_that_holds_the_array() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    // jan_2024 holds 0.0..=31.0 and feb_2024 holds -1.5, over 32 elements each.
+    let temperature = atlas.array_stats("temperature").unwrap();
+    assert_eq!(temperature.name, "temperature");
+    assert_eq!(temperature.min, Some(StatValue::Float(-1.5)));
+    assert_eq!(temperature.max, Some(StatValue::Float(31.0)));
+    assert_eq!(temperature.row_count, 64);
+    assert_eq!(temperature.null_count, 0);
+
+    // feb_2024 declares counts and never writes it. It therefore adds
+    // elements and nulls, but no bounds. The bounds come from jan_2024 alone.
+    let counts = atlas.array_stats("counts").unwrap();
+    assert_eq!(counts.min, Some(StatValue::Int(10)));
+    assert_eq!(counts.max, Some(StatValue::Int(40)));
+    assert_eq!(counts.row_count, 8);
+    assert_eq!(counts.null_count, 4);
+
+    // One dataset holds name, so the result matches that dataset alone.
+    let stations = atlas.dataset("stations").unwrap();
+    assert_eq!(atlas.array_stats("name"), stations.array_stats("name"));
+
+    // No dataset declares this name.
+    assert!(atlas.array_stats("missing").is_none());
+}
+
+#[tokio::test]
+async fn per_dataset_stats_list_every_live_dataset_in_write_order() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    let per = atlas.array_stats_by_dataset("temperature");
+    let names: Vec<&str> = per.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["jan_2024", "feb_2024"]);
+    assert_eq!(per[0].1.max, Some(StatValue::Float(31.0)));
+    assert_eq!(per[1].1.max, Some(StatValue::Float(-1.5)));
+
+    // Each entry equals what that dataset reports on its own.
+    for (name, stats) in &per {
+        let view = atlas.dataset(name).unwrap();
+        assert_eq!(view.array_stats("temperature").as_ref(), Some(stats));
+    }
+
+    // stations declares neither, so it stays out of both lists.
+    let per_name = atlas.array_stats_by_dataset("name");
+    assert_eq!(per_name.len(), 1);
+    assert_eq!(per_name[0].0, "stations");
+
+    // A name no dataset declares gives an empty list.
+    assert!(atlas.array_stats_by_dataset("missing").is_empty());
+}
+
+#[tokio::test]
+async fn the_mask_hides_a_dataset_from_the_per_dataset_stats() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+    assert_eq!(atlas.array_stats_by_dataset("temperature").len(), 2);
+
+    atlas.delete_dataset("jan_2024").await.unwrap();
+    let per = atlas.array_stats_by_dataset("temperature");
+    assert_eq!(per.len(), 1);
+    assert_eq!(per[0].0, "feb_2024");
+
+    // The mask on disk hides it for a fresh handle too.
+    let reopened = Atlas::open_path(tmp.path()).await.unwrap();
+    assert_eq!(reopened.array_stats_by_dataset("temperature").len(), 1);
+
+    // Hide the last holder, and nothing remains to report.
+    atlas.delete_dataset("feb_2024").await.unwrap();
+    assert!(atlas.array_stats_by_dataset("temperature").is_empty());
+    assert!(atlas.array_stats("temperature").is_none());
+}
+
+#[tokio::test]
+async fn a_deleted_dataset_drops_out_of_the_collection_stats() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+    atlas.delete_dataset("feb_2024").await.unwrap();
+
+    // Only jan_2024 remains to contribute.
+    let temperature = atlas.array_stats("temperature").unwrap();
+    assert_eq!(temperature.min, Some(StatValue::Float(0.0)));
+    assert_eq!(temperature.max, Some(StatValue::Float(31.0)));
+    assert_eq!(temperature.row_count, 32);
+
+    let jan = atlas.dataset("jan_2024").unwrap();
+    assert_eq!(atlas.array_stats("counts"), jan.array_stats("counts"));
+
+    // Delete the only dataset that holds an array, and nothing remains.
+    atlas.delete_dataset("stations").await.unwrap();
+    assert!(atlas.array_stats("name").is_none());
+}
+
+#[tokio::test]
 async fn arrays_read_back_the_values_that_were_written() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
@@ -332,7 +439,7 @@ async fn a_partial_read_spanning_chunks_returns_the_right_window() {
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
     let jan = atlas.dataset("jan_2024").unwrap();
 
-    // Chunks are 2x4, so 1..3 x 3..5 straddles all four of them.
+    // Chunks are 2x4, so 1..3 x 3..5 covers part of all four.
     let window = jan
         .read_array::<f32>("temperature", vec![1, 3], vec![2, 2])
         .await
@@ -351,7 +458,8 @@ async fn an_array_that_was_never_written_reads_as_its_fill_value() {
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
 
     let feb = atlas.dataset("feb_2024").unwrap();
-    // Declared, never written, and no explicit fill: zero for an integer.
+    // Declared, never written, and with no explicit fill. An integer gives
+    // zero.
     let counts = feb
         .read_array::<i64>("counts", vec![], vec![])
         .await
@@ -366,8 +474,8 @@ async fn identical_schemas_are_stored_once() {
     build_fixture(tmp.path()).await;
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
 
-    // jan and feb declare the same arrays and differ only in attributes, which
-    // do not live in the schema. They must share one interned entry.
+    // jan and feb declare the same arrays. They differ only in attributes,
+    // which the schema excludes. They must share one interned entry.
     let jan = atlas.dataset("jan_2024").unwrap();
     let feb = atlas.dataset("feb_2024").unwrap();
     assert_eq!(jan.schema(), feb.schema());
@@ -415,7 +523,7 @@ async fn deleting_a_dataset_hides_it_here_and_after_a_reopen() {
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
     atlas.delete_dataset("feb_2024").await.unwrap();
 
-    // Visible immediately on the handle that deleted it.
+    // Visible at once on the handle that deleted it.
     assert_eq!(atlas.list_datasets(), vec!["jan_2024", "stations"]);
     assert!(!atlas.dataset_exists("feb_2024"));
     assert!(matches!(
@@ -426,7 +534,7 @@ async fn deleting_a_dataset_hides_it_here_and_after_a_reopen() {
     // And after a reopen.
     let reopened = Atlas::open_path(tmp.path()).await.unwrap();
     assert_eq!(reopened.list_datasets(), vec!["jan_2024", "stations"]);
-    // The deleted dataset's arrays are gone from the union too.
+    // The arrays of the deleted dataset leave the union too.
     assert_eq!(
         reopened.list_arrays(),
         vec!["counts", "name", "observed", "temperature"]
@@ -449,7 +557,7 @@ async fn ordinals_do_not_shift_when_a_dataset_is_deleted() {
 
     atlas.delete_dataset("jan_2024").await.unwrap();
     let reopened = Atlas::open_path(tmp.path()).await.unwrap();
-    // Still 2. Nothing was renumbered, so a stored ordinal stays valid.
+    // Still 2. Nothing renumbers, so a stored ordinal stays valid.
     assert_eq!(reopened.dataset("stations").unwrap().ordinal(), 2);
     assert!(
         reopened
@@ -462,12 +570,86 @@ async fn ordinals_do_not_shift_when_a_dataset_is_deleted() {
 }
 
 #[tokio::test]
+async fn deleting_many_datasets_costs_one_mask_write() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_bulky_fixture(tmp.path(), 40, 64).await;
+
+    let store = CountingStore::new(Arc::new(
+        object_store::local::LocalFileSystem::new_with_prefix(tmp.path()).unwrap(),
+    ));
+    let atlas = Atlas::open(
+        Arc::clone(&store) as Arc<dyn ObjectStore>,
+        OsPath::default(),
+    )
+    .await
+    .unwrap();
+    store.reset();
+
+    let names: Vec<String> = (0..30).map(|d| format!("ds{d}")).collect();
+    assert_eq!(atlas.delete_datasets(&names).await.unwrap(), 30);
+
+    // One read of the mask, and one write of it. Thirty names cost what one
+    // name costs, which is the point of the call.
+    assert_eq!(store.gets(), 1, "one mask read");
+    assert_eq!(store.puts(), 1, "one mask write");
+
+    let reopened = Atlas::open_path(tmp.path()).await.unwrap();
+    assert_eq!(reopened.dataset_count(), 10);
+    assert!(!reopened.dataset_exists("ds0"));
+    assert!(reopened.dataset_exists("ds30"));
+}
+
+#[tokio::test]
+async fn a_batch_delete_with_an_unknown_name_writes_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    assert!(matches!(
+        atlas.delete_datasets(["jan_2024", "nope"]).await,
+        Err(Error::DatasetNotFound(_))
+    ));
+
+    // The whole batch stands or falls together, so jan_2024 survives.
+    assert_eq!(atlas.dataset_count(), 3);
+    assert!(!tmp.path().join("deleted.mask").exists());
+}
+
+#[tokio::test]
+async fn a_repeated_name_in_a_batch_counts_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    let hidden = atlas
+        .delete_datasets(["jan_2024", "jan_2024", "stations"])
+        .await
+        .unwrap();
+    assert_eq!(hidden, 2);
+    assert_eq!(atlas.list_datasets(), vec!["feb_2024"]);
+}
+
+#[tokio::test]
+async fn an_empty_batch_delete_does_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    assert_eq!(
+        atlas.delete_datasets(Vec::<String>::new()).await.unwrap(),
+        0
+    );
+    assert_eq!(atlas.dataset_count(), 3);
+    assert!(!tmp.path().join("deleted.mask").exists());
+}
+
+#[tokio::test]
 async fn deletions_accumulate_in_one_mask() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
 
-    // Separate handles, so the second must merge with what the first wrote
-    // rather than overwrite it.
+    // Two separate handles. The second must merge with what the first wrote,
+    // and must not overwrite it.
     Atlas::open_path(tmp.path())
         .await
         .unwrap()
@@ -501,8 +683,8 @@ async fn deleting_twice_reports_the_dataset_as_missing() {
 async fn a_mask_naming_an_unknown_dataset_is_ignored_not_fatal() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
-    // A mask left over from a larger collection: magic, version, count, then
-    // ordinals 0 and 99.
+    // A mask from a larger collection. Magic, version, count, then ordinals 0
+    // and 99.
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"ATLM");
     bytes.extend_from_slice(&1u32.to_le_bytes());
@@ -531,8 +713,8 @@ async fn a_foreign_file_at_the_mask_path_is_an_error() {
 #[tokio::test]
 async fn opening_reads_only_the_tail_of_the_container() {
     let tmp = tempfile::tempdir().unwrap();
-    // Comfortably larger than the 64 KiB tail probe, so "read the tail" and
-    // "read the file" are different outcomes.
+    // Well past the 64 KiB tail probe. "Read the tail" and "read the file"
+    // then give different results.
     build_bulky_fixture(tmp.path(), 8, 4096).await;
     let container_len = std::fs::metadata(tmp.path().join("data.atlas"))
         .unwrap()
@@ -549,8 +731,8 @@ async fn opening_reads_only_the_tail_of_the_container() {
     let atlas = Atlas::open(counting.clone(), OsPath::default())
         .await
         .unwrap();
-    // One tail read covering trailer and footer, plus a miss on the absent
-    // mask.
+    // One tail read covers the trailer and the footer. One more miss on the
+    // absent mask.
     assert!(
         counting.gets() <= 2,
         "opening issued {} reads, expected at most 2",
@@ -590,7 +772,7 @@ async fn reading_one_dataset_touches_only_its_own_segment() {
         .await
         .unwrap();
 
-    // Ranges the reader is allowed to touch: the tail, and jan's segment.
+    // The ranges the reader may touch. The tail, and the segment of jan.
     let bare = Atlas::open_path(tmp.path()).await.unwrap();
     let jan_ordinal = bare.dataset("jan_2024").unwrap().ordinal();
     assert_eq!(jan_ordinal, 0);
@@ -605,8 +787,8 @@ async fn reading_one_dataset_touches_only_its_own_segment() {
     let first = counting.gets();
     assert!(first > 0, "a data read must fetch something");
 
-    // The segment is already open, so a second array from the same dataset
-    // costs strictly fewer reads than the first.
+    // The segment is open now. A second array from the same dataset therefore
+    // costs fewer reads than the first.
     counting.reset();
     let _ = ds
         .read_array::<f32>("temperature", vec![], vec![])
@@ -675,7 +857,7 @@ async fn a_dataset_dropped_without_finish_never_enters_the_container() {
                 .unwrap();
             let data = Array1::from_vec(vec![1.0f32, 2.0, 3.0, 4.0]).into_dyn();
             ds.write_array("x", vec![0], data.view()).await.unwrap();
-            // No finish: dropped here.
+            // No finish. The writer drops here.
         }
         let mut ds = w.add_dataset("kept").await.unwrap();
         ds.define_array::<f32>("x", vec!["i".into()], vec![2], None, None)
@@ -700,7 +882,7 @@ async fn a_writer_dropped_without_finish_leaves_nothing_readable() {
             .await
             .unwrap();
         ds.finish().await.unwrap();
-        // No w.finish(): no trailer is ever written.
+        // No w.finish(), so no trailer ever lands.
     }
     assert!(Atlas::open_path(tmp.path()).await.is_err());
 }
@@ -714,8 +896,8 @@ async fn datasets_staged_concurrently_land_intact() {
                 .await
                 .unwrap(),
         );
-        // Stage all four at once. They finish in whatever order they finish;
-        // the writer's lock is what keeps their segments from interleaving.
+        // Stage all four at once. They finish in any order. The writer's lock
+        // keeps their segments apart.
         let mut tasks = Vec::new();
         for d in 0..4usize {
             let w = Arc::clone(&w);
@@ -751,7 +933,7 @@ async fn datasets_staged_concurrently_land_intact() {
         );
         assert_eq!(got[[255]], (d * 1000 + 255) as i32);
     }
-    // Segments still tile the container without gaps or overlap.
+    // The segments still tile the container, with no gap and no overlap.
     let mut ranges: Vec<_> = (0..4)
         .map(|d| atlas.dataset(&format!("ds{d}")).unwrap().segment_range())
         .collect();
@@ -845,8 +1027,7 @@ async fn every_codec_produces_a_readable_collection() {
             ds.finish().await.unwrap();
             w.finish().await.unwrap();
         }
-        // The reader is told nothing about the codec: blocks describe
-        // themselves.
+        // Nothing tells the reader the codec. Each block describes itself.
         let atlas = Atlas::open_path(tmp.path()).await.unwrap();
         let got = atlas
             .dataset("d")
@@ -865,7 +1046,7 @@ async fn every_codec_produces_a_readable_collection() {
 #[tokio::test]
 async fn a_dataset_larger_than_one_block_round_trips() {
     let tmp = tempfile::tempdir().unwrap();
-    // A small block target forces several blocks, exercising the streaming
+    // A small block target forces several blocks. That tests the streamed
     // copy of a staged segment into the container.
     let rows = 64;
     let cols = 256;
@@ -904,7 +1085,7 @@ async fn a_dataset_larger_than_one_block_round_trips() {
         got[[rows - 1, cols - 1]],
         ((rows - 1) * cols + cols - 1) as f64
     );
-    // And a window from the middle, which must not fetch the whole array.
+    // Now a window from the middle. It must not fetch the whole array.
     let window = ds
         .read_array::<f64>("x", vec![30, 100], vec![2, 2])
         .await
@@ -923,7 +1104,7 @@ async fn many_slabs_into_one_array_assemble_correctly() {
         ds.define_array::<i32>("x", vec!["i".into()], vec![8], Some(vec![3]), None)
             .await
             .unwrap();
-        // Slabs that are neither chunk-aligned nor the same size.
+        // Slabs with no chunk alignment and no common size.
         for (start, values) in [
             (0usize, vec![0i32, 1]),
             (2, vec![2, 3, 4, 5]),
@@ -967,7 +1148,7 @@ async fn a_collection_round_trips_on_an_in_memory_store_under_a_prefix() {
         w.finish().await.unwrap();
     }
 
-    // The objects landed under the prefix, not at the root.
+    // The objects land under the prefix, not at the root.
     assert!(
         store
             .head(&OsPath::from("collections/2024/data.atlas"))
@@ -1030,14 +1211,14 @@ async fn a_truncated_container_is_rejected() {
     let path = tmp.path().join("data.atlas");
     let full = std::fs::read(&path).unwrap();
 
-    // Losing the trailer loses the magic.
+    // A lost trailer loses the magic with it.
     std::fs::write(&path, &full[..full.len() - 4]).unwrap();
     assert!(matches!(
         Atlas::open_path(tmp.path()).await,
         Err(Error::NotAnAtlasCollection { .. })
     ));
 
-    // A trailer that survives while the footer it points at does not.
+    // The trailer survives. The footer it points at does not.
     let mut cut = full[..full.len() / 2].to_vec();
     cut.extend_from_slice(&full[full.len() - 16..]);
     std::fs::write(&path, &cut).unwrap();
@@ -1086,14 +1267,15 @@ async fn the_container_carries_the_documented_framing() {
     let footer_size = u64::from_le_bytes(bytes[len - 16..len - 8].try_into().unwrap()) as usize;
     assert!(footer_size > 0 && footer_size < len - 24);
 
-    // Segments are packed back to back, starting right after the header, and
-    // the first one ends where the second begins.
+    // The segments pack back to back, from just after the header. The first
+    // one ends where the second starts.
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
     let first = atlas.dataset("jan_2024").unwrap().segment_range();
     let second = atlas.dataset("feb_2024").unwrap().segment_range();
     assert_eq!(first.start, 8);
     assert_eq!(first.end, second.start);
-    // array-format is footer-addressed, so each segment ends in its own magic.
+    // array-format addresses from the footer, so each segment ends in its own
+    // magic.
     assert_eq!(&bytes[first.end as usize - 4..first.end as usize], b"ARRF");
     // The last segment ends where the container footer starts.
     let last = atlas.dataset("stations").unwrap().segment_range();
@@ -1113,8 +1295,8 @@ async fn a_segment_cut_out_of_the_container_opens_on_its_own() {
         .await
         .unwrap();
 
-    // Carve the segment out the way `dd` would, and hand it to array-format
-    // with no atlas involved.
+    // Carve the segment out as `dd` would. Then hand it to array-format, with
+    // no atlas in the way.
     let range = jan.segment_range();
     let carved = &bytes[range.start as usize..range.end as usize];
 

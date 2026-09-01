@@ -1,8 +1,8 @@
-//! The whole life of a collection: build it, read it, delete from it.
+//! The whole life of a collection. Build it, read it, delete from it.
 //!
-//! There is no mutation phase, because the format has none. A collection is
-//! written once. The only thing that changes afterwards is the deletion mask,
-//! and that hides datasets rather than removing their bytes.
+//! There is no mutation phase, because the format has none. One write builds a
+//! collection. Only the deletion mask changes after that, and it hides a
+//! dataset instead of removing its bytes.
 //!
 //! Run with: `cargo run --example lifecycle`
 
@@ -41,12 +41,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ds.set_attribute("region", Attr::String(name.to_string()));
         ds.set_array_attribute("grid", "units", Attr::String("celsius".into()))?;
 
-        // Until this line, nothing about the dataset has entered the file.
+        // Before this line, no part of the dataset reaches the file.
         ds.finish().await?;
         println!("  wrote dataset '{name}'");
     }
 
-    // And until this line, nothing at all is readable.
+    // Before this line, nothing at all is readable.
     w.finish().await?;
     let size = std::fs::metadata(tmp.path().join("data.atlas"))?.len();
     println!("  data.atlas is {size} bytes\n");
@@ -54,7 +54,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── Read ─────────────────────────────────────────────────────────
 
     println!("=== Reading ===");
-    // Opening touches the footer only, however large the collection is.
+    // An open touches the footer only, whatever the size of the collection.
     let atlas = Atlas::open_path(tmp.path()).await?;
     println!("  datasets: {:?}", atlas.list_datasets());
     println!("  arrays:   {:?}", atlas.list_arrays());
@@ -75,8 +75,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         north.segment_range()
     );
 
-    // The first call that needs data opens the segment. This one reads a
-    // single chunk, not the whole array.
+    // The first call that needs data opens the segment. This call reads one
+    // chunk, not the whole array.
     let corner = north
         .read_array::<f32>("grid", vec![0, 0], vec![2, 2])
         .await?;
@@ -94,12 +94,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reopened = Atlas::open_path(tmp.path()).await?;
     println!("  after reopen: {:?}", reopened.list_datasets());
 
-    // The container did not move. Only a small mask file was written.
+    // The container does not move. Only a small mask file lands.
     let size_after = std::fs::metadata(tmp.path().join("data.atlas"))?.len();
     let mask = std::fs::metadata(tmp.path().join("deleted.mask"))?.len();
     println!("  data.atlas is still {size_after} bytes; deleted.mask is {mask}");
 
-    // Ordinals never shift, so 'east' is where it always was.
+    // No ordinal moves, so 'east' stays where it was.
     println!(
         "  'east' is still ordinal {}",
         reopened.dataset("east")?.ordinal()

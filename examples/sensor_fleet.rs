@@ -1,11 +1,11 @@
 //! Many small datasets in one file.
 //!
-//! A fleet of sensors, one dataset each. In a directory-per-dataset layout this
-//! would be hundreds of small objects; here it is a single `data.atlas`, and
-//! listing the fleet costs one range read no matter how many sensors there are.
+//! A fleet of sensors, with one dataset each. A directory-per-dataset layout
+//! gives hundreds of small objects. This gives one `data.atlas`. To list the
+//! fleet costs one range read, whatever the number of sensors.
 //!
-//! The example also shows what interning buys: every sensor declares the same
-//! two arrays, so the footer stores that schema once and each dataset just
+//! The example also shows what interning buys. Every sensor declares the same
+//! two arrays. The footer therefore stores that schema once, and each dataset
 //! points at it.
 //!
 //! Run with: `cargo run --example sensor_fleet`
@@ -20,9 +20,9 @@ const N_READINGS: usize = 24; // one per hour
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
 
-    // LZ4 decompresses faster than Zstd at the cost of larger files, which
-    // suits a read-heavy collection. Blocks record the codec, so a reader is
-    // never told which was used.
+    // LZ4 decompresses faster than Zstd, and gives larger files. That suits a
+    // read-heavy collection. Each block records its codec, so nothing tells
+    // the reader which one the write used.
     let w = AtlasWriter::create_path(
         tmp.path(),
         WriterConfig {
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             None,
         )
         .await?;
-        // A rough daily curve, offset per sensor.
+        // A rough daily curve, with one offset per sensor.
         let readings = Array1::from_shape_fn(N_READINGS, |h| {
             20.0 + (h as f64 / 4.0).sin() * 5.0 + sensor as f64 * 0.1
         })
@@ -85,7 +85,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  datasets: {}", atlas.dataset_count());
     println!("  distinct arrays: {:?}", atlas.list_arrays());
 
-    // Attributes come from the footer, so filtering the fleet by site is free.
+    // Attributes come from the footer. To filter the fleet by site is
+    // therefore free.
     let mut north = Vec::new();
     for name in atlas.list_datasets() {
         let ds = atlas.dataset(&name)?;
@@ -111,7 +112,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let peak = readings.iter().cloned().fold(f64::MIN, f64::max);
     println!("  sensor-007 peak reading: {peak:.2}");
 
-    // Only the last six hours, which is a sub-region of the array.
+    // Only the last six hours. That is a sub-region of the array.
     let tail = ds
         .read_array::<f64>("readings", vec![N_READINGS - 6], vec![6])
         .await?;

@@ -1,24 +1,25 @@
 //! An [`ObjectStore`] view of one segment inside the container.
 //!
-//! `array-format` opens a file through an [`ObjectStore`] and a path. Its
-//! segments are embedded in a larger file, so this adapter presents the byte
-//! range `container[offset .. offset + len]` as a single standalone object
-//! named [`segment_path`]. Range requests are translated and forwarded; nothing
-//! is buffered on the way through.
+//! `array-format` opens a file through an [`ObjectStore`] and a path. A
+//! segment sits inside a larger file. This adapter therefore presents the byte
+//! range `container[offset .. offset + len]` as one standalone object named
+//! [`segment_path`]. It translates each range request and forwards it. It
+//! buffers nothing.
 //!
 //! Two behaviours matter as much as the translation:
 //!
-//! - `list` returns nothing, so sidecar discovery finds no delta layers. A
-//!   segment is always a single compacted base.
-//! - any other path is [`NotFound`](object_store::Error::NotFound), so the
-//!   statistics probe for `seg<n>.stats` comes back empty instead of erroring.
+//! - `list` returns nothing. Sidecar discovery therefore finds no delta layers.
+//!   A segment is always one compacted base.
+//! - Any other path is [`NotFound`](object_store::Error::NotFound). The
+//!   statistics probe for `seg<n>.stats` therefore comes back empty, and does
+//!   not fail.
 //!
 //! Every write method is [`NotSupported`](object_store::Error::NotSupported).
-//! A collection is immutable; nothing should ever try.
+//! A collection is immutable, so nothing must try.
 //!
-//! The virtual name carries the segment's ordinal. Block caches key on
-//! `(path, block_id)`, so a name shared between segments would let one
-//! dataset's blocks answer another's reads.
+//! The virtual name carries the segment's ordinal. A block cache keys on
+//! `(path, block_id)`. One name across two segments would let the blocks of one
+//! dataset answer the reads of another.
 
 use std::fmt;
 use std::ops::Range;
@@ -35,7 +36,7 @@ use object_store::{
 };
 
 /// The name `array-format` sees for the segment at `ordinal`. It must end in
-/// `.af`: that is what `ArrayFile::open` expects.
+/// `.af`, because `ArrayFile::open` expects that suffix.
 pub(crate) fn segment_path(ordinal: u32) -> OsPath {
     OsPath::from(format!("seg{ordinal}.af"))
 }
@@ -75,8 +76,8 @@ impl SegmentStore {
     }
 
     /// Resolves a requested range against the segment, in segment-local
-    /// coordinates. Mirrors what a real object store does: an end past the
-    /// object is clamped, a start past it is an error.
+    /// coordinates. A real object store behaves the same way. An end past the
+    /// object clamps. A start past the object is an error.
     fn resolve(&self, range: Option<GetRange>) -> object_store::Result<Range<u64>> {
         let local = match range {
             None => 0..self.len,
@@ -100,8 +101,8 @@ impl SegmentStore {
     fn meta(&self) -> ObjectMeta {
         ObjectMeta {
             location: self.name.clone(),
-            // The container carries no per-segment timestamp, and nothing reads
-            // this: `array-format` uses the size only.
+            // The container holds no per-segment timestamp. `array-format`
+            // uses the size only.
             last_modified: chrono::DateTime::UNIX_EPOCH,
             size: self.len,
             e_tag: None,
@@ -179,8 +180,8 @@ impl ObjectStore for SegmentStore {
         })
     }
 
-    /// Always empty. This is what tells `array-format` the segment has no
-    /// sidecar layers.
+    /// Always empty. This tells `array-format` the segment has no sidecar
+    /// layers.
     fn list(
         &self,
         _prefix: Option<&OsPath>,
@@ -286,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn an_end_past_the_segment_is_clamped_not_leaked() {
         let s = fixture().await;
-        // Without clamping this would read into the next segment.
+        // Without the clamp, this read reaches into the next segment.
         let got = read(&s, Some(GetRange::Bounded(98..500))).await;
         assert_eq!(got, [148, 149]);
     }
@@ -309,7 +310,7 @@ mod tests {
     #[tokio::test]
     async fn any_other_path_is_not_found() {
         let s = fixture().await;
-        // This is the stats probe. It must not error out of the open.
+        // This is the stats probe. It must not fail the open.
         let r = s.head(&OsPath::from("seg0.stats")).await;
         assert!(matches!(r, Err(object_store::Error::NotFound { .. })));
     }

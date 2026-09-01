@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize};
 
 /// Schema for one named array within a dataset.
 ///
-/// This describes the array, not where its bytes are: chunk addresses live in
-/// the dataset's segment. A reader answers `array_meta` from here without
-/// touching the segment at all.
+/// This describes the array, not where its bytes are. Chunk addresses live in
+/// the dataset's segment. A reader answers `array_meta` from here, and never
+/// opens the segment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArraySchema {
     /// Element type.
@@ -41,9 +41,9 @@ pub enum FillValueS {
     TimestampNs(i64),
 }
 
-/// Matches [`array_format::FillValue`]: floats compare by bit pattern, so a
-/// NaN fill equals a NaN fill. Without that, two datasets that declare the same
-/// NaN-filled array would never share an interned schema.
+/// Floats compare by bit pattern, as in [`array_format::FillValue`]. One NaN
+/// fill therefore equals another. Otherwise two datasets with the same
+/// NaN-filled array never share an interned schema.
 impl PartialEq for FillValueS {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {

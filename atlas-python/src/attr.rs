@@ -34,9 +34,9 @@ pub fn py_to_attr(value: &Bound<'_, PyAny>, dtype_hint: Option<&str>) -> PyResul
 
 /// A list or tuple of one scalar type, or `None` if `value` is neither.
 ///
-/// The element type comes from the first item, and the whole sequence must
-/// match it: an atlas list attribute is homogeneous. An empty sequence has no
-/// type to infer, so it is stored as an empty string list.
+/// The first item gives the element type, and the whole sequence must match
+/// it. An atlas list attribute holds one type. An empty sequence gives no type
+/// to infer, so it stores as an empty string list.
 fn py_to_attr_list(value: &Bound<'_, PyAny>) -> PyResult<Option<Attr>> {
     if value.cast::<PyList>().is_err() && value.cast::<PyTuple>().is_err() {
         return Ok(None);
@@ -46,7 +46,7 @@ fn py_to_attr_list(value: &Bound<'_, PyAny>) -> PyResult<Option<Attr>> {
         return Ok(Some(Attr::StringList(vec![])));
     };
 
-    // PyBool before PyInt: `isinstance(True, int)` is True in Python.
+    // Test PyBool before PyInt. In Python, `isinstance(True, int)` is True.
     let mismatch = |want: &str| -> PyErr {
         PyValueError::new_err(format!(
             "attribute list must hold one type; expected {want} throughout"
@@ -75,7 +75,7 @@ fn py_to_attr_list(value: &Bound<'_, PyAny>) -> PyResult<Option<Attr>> {
     if first.cast::<PyFloat>().is_ok() {
         let mut out = Vec::with_capacity(items.len());
         for item in &items {
-            // An int among floats is a harmless widening, unlike the reverse.
+            // An int among floats widens without loss. The reverse does not.
             if item.cast::<PyFloat>().is_err() && item.cast::<PyInt>().is_err() {
                 return Err(mismatch("float"));
             }
@@ -112,9 +112,9 @@ fn py_to_attr_list(value: &Bound<'_, PyAny>) -> PyResult<Option<Attr>> {
 fn py_to_attr_typed(value: &Bound<'_, PyAny>, dtype: &str) -> PyResult<Attr> {
     Ok(match dtype.to_ascii_lowercase().as_str() {
         "bool" => Attr::Bool(value.extract()?),
-        // Width-precise integer hints so the on-disk attribute keeps its type.
-        // Python `int.extract::<T>()` raises OverflowError on overflow, which
-        // surfaces as a PyErr.
+        // Exact integer widths keep the on-disk attribute type. Python
+        // `int.extract::<T>()` raises OverflowError, which reaches the caller
+        // as a PyErr.
         "i8" | "int8" => Attr::Int8(value.extract()?),
         "i16" | "int16" => Attr::Int16(value.extract()?),
         "i32" | "int32" => Attr::Int32(value.extract()?),

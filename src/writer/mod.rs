@@ -1,10 +1,11 @@
-//! Building a collection. The only code in this crate that writes array data.
+//! How a collection is built. This is the only code here that writes array
+//! data.
 //!
 //! # How a container is assembled
 //!
-//! [`AtlasWriter`] streams one object. Each dataset is staged as a complete
-//! `array-format` file in a local scratch directory, then copied verbatim into
-//! the stream:
+//! [`AtlasWriter`] streams one object. Each dataset stages as a complete
+//! `array-format` file in a local scratch directory. The writer then copies
+//! that file into the stream, byte for byte:
 //!
 //! ```text
 //! add_dataset("jan")  -> scratch/1/data.af   (define, write, define, write, ...)
@@ -14,28 +15,28 @@
 //! AtlasWriter::finish -> footer, trailer, done
 //! ```
 //!
-//! Staging on local disk keeps memory bounded whatever the dataset size:
-//! `array-format` spills compressed chunks to a temporary file as they arrive,
-//! and the copy into the container streams in fixed-size pieces.
+//! Local staging bounds the memory, whatever the dataset size. `array-format`
+//! spills each compressed chunk to a temporary file on arrival. The copy into
+//! the container streams in fixed-size pieces.
 //!
-//! `flush` then `compact` is deliberate, and the order matters. `flush` commits
-//! buffered writes into a sidecar layer; `compact` merges every layer into one
-//! base file. Compacting without flushing first would leave the buffered writes
-//! behind. The result is a single self-contained file, which is what a segment
-//! has to be.
+//! The order of `flush` then `compact` matters. `flush` commits the buffered
+//! writes into a sidecar layer. `compact` merges every layer into one base
+//! file. A `compact` without a `flush` first leaves the buffered writes behind.
+//! The result is one self-contained file, which is what a segment must be.
 //!
 //! # Staging several datasets at once
 //!
-//! A [`DatasetWriter`] touches the container only in [`DatasetWriter::finish`],
-//! which takes the writer's lock for the whole append. So several datasets may
-//! be staged concurrently — useful when ingesting many files — and they land in
-//! the container in whatever order they finish, never interleaved.
+//! A [`DatasetWriter`] touches the container only in
+//! [`DatasetWriter::finish`], which takes the writer's lock for the whole
+//! append. Several datasets can therefore stage at once, which helps with many
+//! input files. They land in the container in finish order, and never
+//! interleave.
 //!
 //! # Failure
 //!
-//! Nothing is readable until [`AtlasWriter::finish`] writes the trailer. Drop a
-//! [`DatasetWriter`] without finishing it and that dataset never enters the
-//! container; drop the [`AtlasWriter`] and no valid collection appears at all.
+//! Nothing is readable until [`AtlasWriter::finish`] writes the trailer. Drop
+//! a [`DatasetWriter`] before you finish it, and that dataset never enters the
+//! container. Drop the [`AtlasWriter`], and no valid collection appears.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -58,16 +59,16 @@ use crate::format::{self, DATA_FILE, child};
 use crate::schema::{ArraySchema, Attr, DatasetSchema};
 use crate::{Error, Result, validate_name};
 
-/// Bytes moved per turn when copying a staged segment into the container.
+/// Bytes the copy moves per turn, from a staged segment into the container.
 const COPY_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
-/// The half of a writer that datasets share: the output stream, the footer
-/// being built, and the scratch area.
+/// The half of a writer the datasets share. The output stream, the footer
+/// under construction, and the scratch area.
 struct WriterState {
     out: Option<BufWriter>,
     prefix: OsPath,
     config: WriterConfig,
-    /// Bytes written so far, and therefore the offset of the next segment.
+    /// Bytes written so far. This is also the offset of the next segment.
     offset: u64,
     interner: Interner,
     entries: Vec<DatasetEntry>,
@@ -77,9 +78,9 @@ struct WriterState {
 }
 
 impl WriterState {
-    /// Appends a staged segment file to the container and returns its byte
-    /// range. Streams in [`COPY_CHUNK_SIZE`] pieces so a large dataset never
-    /// has to fit in memory.
+    /// Appends a staged segment file to the container, and returns its byte
+    /// range. It streams in [`COPY_CHUNK_SIZE`] pieces, so a large dataset
+    /// never needs to fit in memory.
     async fn append_segment(&mut self, file: &std::path::Path) -> Result<(u64, u64)> {
         let out = self.out.as_mut().ok_or(Error::WriterFinished)?;
         let mut src = tokio::fs::File::open(file).await?;
@@ -105,8 +106,8 @@ impl WriterState {
     }
 }
 
-/// Builds one collection, then finishes. There is no reopening a collection to
-/// add to it; rewrite it instead.
+/// Builds one collection, then finishes. A collection never reopens for more
+/// data. Rewrite it instead.
 ///
 /// ```no_run
 /// use atlas::{AtlasWriter, WriterConfig};
@@ -133,7 +134,7 @@ pub struct AtlasWriter {
 impl AtlasWriter {
     /// Starts a collection under `prefix` in `store`.
     ///
-    /// Writing begins at once, but nothing at `prefix` reads as a collection
+    /// The write starts at once. Nothing at `prefix` reads as a collection
     /// until [`finish`](Self::finish).
     pub async fn create(
         store: Arc<dyn ObjectStore>,
@@ -158,8 +159,8 @@ impl AtlasWriter {
         })
     }
 
-    /// Starts a collection in a local directory, creating the directory if
-    /// needed.
+    /// Starts a collection in a local directory. Creates the directory if it
+    /// is absent.
     pub async fn create_path(
         path: impl AsRef<std::path::Path>,
         config: WriterConfig,
@@ -197,15 +198,16 @@ impl AtlasWriter {
         })
     }
 
-    /// How many datasets have been committed so far.
+    /// How many datasets the writer has committed so far.
     pub async fn dataset_count(&self) -> usize {
         self.state.lock().await.entries.len()
     }
 
     /// Writes the footer and trailer, and completes the upload.
     ///
-    /// After this the collection is readable and permanently fixed. Any
-    /// [`DatasetWriter`] still open fails with [`Error::WriterFinished`].
+    /// After this the collection is readable, and fixed for good. A
+    /// [`DatasetWriter`] that is still open fails with
+    /// [`Error::WriterFinished`].
     pub async fn finish(self) -> Result<()> {
         let mut state = self.state.lock().await;
         let mut out = state.out.take().ok_or(Error::WriterFinished)?;
@@ -236,9 +238,9 @@ impl AtlasWriter {
 impl Drop for WriterState {
     fn drop(&mut self) {
         if self.out.is_some() {
-            // No trailer was written, so nothing at the target can open as a
-            // collection. Whether a partial object lingers is up to the
-            // backend; say so rather than leave it silent.
+            // The trailer never landed, so nothing at the target opens as a
+            // collection. The backend decides whether a partial object stays.
+            // Report that instead of a silent exit.
             tracing::warn!(
                 prefix = %self.prefix,
                 "atlas writer dropped without finish; no collection was written"
@@ -249,9 +251,9 @@ impl Drop for WriterState {
 
 /// Builds one dataset inside a collection.
 ///
-/// Declare arrays with [`define_array`](Self::define_array) and fill them with
-/// [`write_array`](Self::write_array), in any order and any number of slabs.
-/// Nothing reaches the container until [`finish`](Self::finish).
+/// Declare an array with [`define_array`](Self::define_array). Fill it with
+/// [`write_array`](Self::write_array), in any order and in any number of
+/// slabs. Nothing reaches the container until [`finish`](Self::finish).
 pub struct DatasetWriter {
     state: Arc<Mutex<WriterState>>,
     name: String,
@@ -269,18 +271,18 @@ impl DatasetWriter {
         &self.name
     }
 
-    /// Names of the arrays declared so far, in definition order.
+    /// Names of the arrays this dataset declares, in definition order.
     pub fn list_arrays(&self) -> Vec<String> {
         self.arrays.keys().cloned().collect()
     }
 
-    /// The schema of an array declared so far.
+    /// The schema of one declared array.
     pub fn array_meta(&self, array: &str) -> Option<&ArraySchema> {
         self.arrays.get(array)
     }
 
-    /// Opens the staging file on first use, so a dataset that is declared and
-    /// then abandoned costs no I/O.
+    /// Opens the staging file on first use. A dataset somebody declares and
+    /// then abandons therefore costs no I/O.
     async fn staging(&mut self) -> Result<&mut ArrayFile> {
         if self.file.is_none() {
             self.file = Some(create_staging_file(&self.dir, &self.config).await?);
@@ -290,8 +292,8 @@ impl DatasetWriter {
 
     /// Declares an array.
     ///
-    /// `chunk_shape` defaults to `shape`, storing the array as a single chunk.
-    /// `fill_value` is what a read returns for elements that are never written.
+    /// `chunk_shape` defaults to `shape`, which stores the array as one chunk.
+    /// A read returns `fill_value` for every element nobody writes.
     pub async fn define_array<T: ArrayElement>(
         &mut self,
         array: &str,
@@ -307,7 +309,7 @@ impl DatasetWriter {
         let ndim = shape.len();
         let chunk = chunk_shape.unwrap_or_else(|| shape.clone());
         // array-format substitutes dim0, dim1, ... when the count is wrong.
-        // Record what it will actually store, not what was asked for.
+        // Record what it stores, not what the caller asked for.
         let dims = if dimension_names.len() == ndim {
             dimension_names.clone()
         } else {
@@ -333,8 +335,8 @@ impl DatasetWriter {
 
     /// Writes `data` into `array` with its origin at `start`.
     ///
-    /// The region may span chunks and need not be chunk-aligned. `T` must match
-    /// the array's declared type.
+    /// The region can span chunks, and needs no chunk alignment. `T` must
+    /// match the array's declared type.
     pub async fn write_array<T: ArrayElement>(
         &mut self,
         array: &str,
@@ -351,13 +353,13 @@ impl DatasetWriter {
         Ok(())
     }
 
-    /// Attaches a dataset-level attribute. A repeated key replaces the earlier
-    /// value.
+    /// Attaches a dataset-level attribute. A repeated key replaces the value
+    /// before it.
     pub fn set_attribute(&mut self, key: &str, value: Attr) {
         upsert(&mut self.global_attrs, key, value);
     }
 
-    /// Attaches an attribute to one array, which must already be defined.
+    /// Attaches an attribute to one array. Define the array first.
     pub fn set_array_attribute(&mut self, array: &str, key: &str, value: Attr) -> Result<()> {
         if !self.arrays.contains_key(array) {
             return Err(Error::ArrayNotFound(array.to_string()));
@@ -372,26 +374,26 @@ impl DatasetWriter {
 
     /// Commits the dataset into the container.
     ///
-    /// Flushes and compacts the staged file into one segment, appends it, and
-    /// records the dataset in the footer being built.
+    /// Flushes and compacts the staged file into one segment. Appends that
+    /// segment. Then records the dataset in the footer.
     pub async fn finish(mut self) -> Result<()> {
         match self.file.as_mut() {
             Some(file) => {
-                // flush first: compact merges committed layers, so pending
-                // writes have to be committed before it runs.
+                // Flush first. compact merges committed layers only, so a
+                // pending write must commit before it runs.
                 file.flush().await?;
                 file.compact().await?;
             }
             None => {
-                // A dataset with no arrays still needs a segment, so every
-                // ordinal maps to real bytes.
+                // A dataset with no arrays still needs a segment. Every
+                // ordinal must map to real bytes.
                 let mut file = create_staging_file(&self.dir, &self.config).await?;
                 file.flush().await?;
             }
         }
-        // Harvest the statistics array-format computed during the flush, while
+        // Take the statistics array-format computed during the flush, while
         // the file is still open. They go into the footer, so a reader gets
-        // them without touching the segment.
+        // them without the segment.
         let array_stats: Vec<(u32, ArrayStatsS)> = match self.file.as_ref() {
             Some(file) => self
                 .arrays
@@ -405,8 +407,8 @@ impl DatasetWriter {
             None => Vec::new(),
         };
 
-        // Release the file before reading it back: array-format holds an open
-        // handle and a cache that are no longer wanted.
+        // Release the file before the read-back. array-format holds an open
+        // handle and a cache that nothing needs now.
         self.file = None;
 
         let arrays = std::mem::take(&mut self.arrays);
@@ -417,8 +419,8 @@ impl DatasetWriter {
             .collect();
 
         let segment = self.dir.join("data.af");
-        // One lock for the whole append plus the footer entry, so concurrent
-        // datasets cannot interleave their bytes or their ordinals.
+        // One lock covers the append and the footer entry. Concurrent
+        // datasets therefore interleave neither bytes nor ordinals.
         let mut state = self.state.lock().await;
         let (seg_offset, seg_len) = state.append_segment(&segment).await?;
         debug!(
@@ -452,7 +454,7 @@ impl DatasetWriter {
             array_stats,
         });
         drop(state);
-        // Staging is large; reclaim it now rather than at the end of the write.
+        // The staging area is large. Reclaim it now, not at the end.
         let _ = std::fs::remove_dir_all(&self.dir);
         Ok(())
     }
@@ -489,8 +491,8 @@ fn staging_config<C: array_format::CompressionCodec>(
     FileConfig {
         codec,
         block_target_size,
-        // Staging is written once and read once, by compact. A large cache
-        // would only duplicate the page cache.
+        // One write and one read, by compact, cover the staging file. A large
+        // cache would only duplicate the page cache.
         cache_capacity: 16 * 1024 * 1024,
         io_cache_capacity: 8 * 1024 * 1024,
         cache: None,

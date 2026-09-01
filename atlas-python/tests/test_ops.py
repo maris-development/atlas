@@ -1,7 +1,7 @@
 """The five operations, as a library.
 
-Array *values* are not checked here — Python cannot read them. The Rust suite
-verifies the bytes these tests write; see ``tests/cross_fixture.rs``.
+These tests check no array *value*, because Python cannot read one. The Rust
+suite checks the bytes these tests write. See ``tests/cross_fixture.rs``.
 """
 
 import numpy as np
@@ -23,7 +23,7 @@ def test_create_makes_one_dataset_per_netcdf_file(netcdf_dir, tmp_path):
     assert result["dataset_count"] == 3
     assert result["written"] == ["2024-01", "2024-02", "2024-03"]
     assert result["skipped"] == []
-    # One file, plus a mask only once something is removed.
+    # One file. A mask appears only after a remove.
     assert sorted(p.name for p in dest.iterdir()) == ["data.atlas"]
 
 
@@ -37,7 +37,7 @@ def test_datasets_are_named_after_the_file_stem(netcdf_dir, tmp_path):
 
 
 def test_create_is_ordered_by_filename(netcdf_dir, tmp_path):
-    """Ordinals are handed out in write order, so the order must be stable."""
+    """An ordinal comes from the write order, so that order must be stable."""
     atlas.create(netcdf_dir, str(tmp_path / "a"))
     atlas.create(netcdf_dir, str(tmp_path / "b"))
     for name in atlas.list_datasets(str(tmp_path / "a")):
@@ -87,14 +87,14 @@ def test_a_bad_file_abandons_the_collection_by_default(tmp_path):
     src = tmp_path / "nc"
     src.mkdir()
     make_dataset(1).to_netcdf(src / "good.nc")
-    # bool is not a supported array dtype.
+    # bool is no supported array dtype.
     xr.Dataset({"flag": xr.DataArray(np.array([True, False]), dims=["x"])}).to_netcdf(
         src / "bad.nc"
     )
 
     with pytest.raises(atlas.AtlasError):
         atlas.create(src, str(tmp_path / "c"))
-    # No trailer was written, so nothing opens.
+    # No trailer landed, so nothing opens.
     with pytest.raises((ValueError, atlas.AtlasError)):
         atlas.list_datasets(str(tmp_path / "c"))
 
@@ -132,12 +132,12 @@ def test_every_codec_round_trips(netcdf_dir, tmp_path, codec):
 
 
 def test_a_large_variable_streams_in_blocks(tmp_path, monkeypatch):
-    """A file bigger than the block budget is written block by block."""
+    """A file above the block budget lands block by block."""
     from atlas._atlas import DatasetWriter
 
     src = tmp_path / "nc"
     src.mkdir()
-    # 8 MiB of float64, ingested with a 1 MiB block budget.
+    # 8 MiB of float64, under a 1 MiB block budget.
     rows, cols = 1024, 1024
     xr.Dataset(
         {"big": (("y", "x"), np.zeros((rows, cols), dtype=np.float64))}
@@ -177,14 +177,14 @@ def test_chunk_size_controls_the_stored_chunk_shape(tmp_path):
     small = chunk_shape(tmp_path / "small", chunk_size="1MiB")
     large = chunk_shape(tmp_path / "large", chunk_size="64MiB")
 
-    # A bigger budget means bigger blocks, so fewer of them.
+    # A larger budget gives larger blocks, and fewer of them.
     assert np.prod(small) < np.prod(large)
     # The larger budget covers the whole 8 MiB array in one block.
     assert large == [1024, 1024]
 
 
 def test_small_files_still_land_as_a_single_chunk(netcdf_dir, tmp_path):
-    """Auto chunking must not fragment arrays that comfortably fit."""
+    """Auto chunking must not split an array that fits with room to spare."""
     atlas.create(netcdf_dir, str(tmp_path / "c"))
     for array in atlas.describe(str(tmp_path / "c"), "2024-01")["arrays"]:
         assert array["chunk_shape"] == array["shape"], array["name"]
@@ -217,7 +217,7 @@ def test_open_chunks_none_reads_each_variable_whole(tmp_path, monkeypatch):
 def test_open_chunks_native_uses_the_files_own_chunking(tmp_path):
     src = tmp_path / "nc"
     src.mkdir()
-    # Ask netCDF4 for a specific on-disk chunking.
+    # Ask netCDF4 for one exact on-disk chunking.
     xr.Dataset(
         {"big": (("y", "x"), np.zeros((512, 512), dtype=np.float64))}
     ).to_netcdf(
@@ -289,6 +289,32 @@ def test_removals_accumulate_across_calls(collection):
     assert atlas.list_datasets(str(collection)) == ["2024-02"]
 
 
+def test_removing_many_datasets_is_one_call(collection, monkeypatch):
+    from atlas import _atlas
+
+    # One mask write covers the batch, so a big removal costs what one costs.
+    calls = []
+    original = _atlas.Atlas.delete_datasets
+
+    def spy(self, names):
+        calls.append(list(names))
+        return original(self, names)
+
+    monkeypatch.setattr(_atlas.Atlas, "delete_datasets", spy)
+    result = atlas.remove(str(collection), ["2024-01", "2024-03"])
+
+    assert calls == [["2024-01", "2024-03"]]
+    assert result["removed"] == ["2024-01", "2024-03"]
+    assert result["remaining"] == 1
+    assert atlas.list_datasets(str(collection)) == ["2024-02"]
+
+
+def test_a_repeated_target_counts_once(collection):
+    result = atlas.remove(str(collection), ["2024-01", "2024-01"])
+    assert result["removed"] == ["2024-01"]
+    assert result["remaining"] == 2
+
+
 def test_removing_something_absent_is_an_error(collection):
     with pytest.raises(atlas.AtlasError, match="not in the collection"):
         atlas.remove(str(collection), ["nope"])
@@ -337,7 +363,7 @@ def test_describe_reports_the_whole_dataset(collection):
     assert d["dimensions"] == {"lat": 4, "lon": 6}
     assert sorted(d["coordinates"]) == ["lat", "lon", "time"]
     assert d["attributes"] == {"month": 1, "source": "test", "bounds": [1.0, 2.0]}
-    # The coordinate marker is atlas bookkeeping, not a user attribute.
+    # The coordinate marker is internal to atlas, and no user attribute.
     assert "_pyatlas_coords" not in d["attributes"]
 
     start, end = d["segment_range"]
@@ -367,7 +393,7 @@ def test_describe_reports_each_array(collection):
 def test_describe_reports_the_statistics_recorded_at_write_time(collection):
     arrays = {a["name"]: a for a in atlas.describe(str(collection), "2024-01")["arrays"]}
 
-    # temperature is arange(24) + 1, so 1..24 with nothing missing.
+    # temperature is arange(24) + 1. That gives 1..24, with nothing missing.
     temp = arrays["temperature"]["stats"]
     assert temp["row_count"] == 24
     assert temp["null_count"] == 0
@@ -377,7 +403,7 @@ def test_describe_reports_the_statistics_recorded_at_write_time(collection):
     assert arrays["counts"]["stats"]["min"] == 10
     assert arrays["counts"]["stats"]["max"] == 40
 
-    # Strings compare lexicographically, and come back as bytes.
+    # A string compares lexicographically, and comes back as bytes.
     station = arrays["station"]["stats"]
     assert station["min"] == b"a"
     assert station["max"] == b"d"
@@ -387,7 +413,7 @@ def test_describe_reports_the_statistics_recorded_at_write_time(collection):
 def test_describe_accepts_a_netcdf_path(collection, netcdf_dir):
     by_name = atlas.describe(str(collection), "2024-01")
     by_path = atlas.describe(str(collection), netcdf_dir / "2024-01.nc")
-    # NaN fill values never compare equal, so compare everything else.
+    # Two NaN fill values never compare equal. Compare everything else.
     for key in ("name", "ordinal", "segment_range", "dimensions", "coordinates",
                 "attributes"):
         assert by_name[key] == by_path[key], key
@@ -430,6 +456,41 @@ def test_info_summarises_the_collection(collection):
     ]
     # All three months declare the same arrays, so one schema is stored.
     assert i["interned_schemas"] == 1
+
+
+def test_info_folds_array_stats_over_the_collection(collection):
+    i = atlas.info(str(collection))
+    stats = i["array_stats"]
+
+    # Every distinct array gets an entry.
+    assert set(stats) == set(i["distinct_arrays"])
+
+    # Three months of a 4x6 grid. Each month adds its own number. The result
+    # runs from month 1 (min 1.0) to month 3 (max 26.0), over 72 elements.
+    assert stats["temperature"] == {
+        "min": 1.0,
+        "max": 26.0,
+        "null_count": 0,
+        "row_count": 72,
+    }
+    # One dataset holds a third of that.
+    one = atlas.describe(str(collection), "2024-01")
+    temperature = next(a for a in one["arrays"] if a["name"] == "temperature")
+    assert temperature["stats"]["row_count"] == 24
+    assert temperature["stats"]["max"] == 24.0
+
+    # Strings compare as raw bytes.
+    assert stats["station"]["min"] == b"a"
+    assert stats["station"]["max"] == b"d"
+    assert stats["station"]["row_count"] == 12
+
+
+def test_info_stats_leave_out_a_removed_dataset(collection):
+    atlas.remove(str(collection), ["2024-01"])
+    stats = atlas.info(str(collection))["array_stats"]
+    # January held the lowest temperature, so the minimum rises.
+    assert stats["temperature"]["min"] == 2.0
+    assert stats["temperature"]["row_count"] == 48
 
 
 def test_info_counts_removals_separately(collection):

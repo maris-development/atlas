@@ -14,14 +14,16 @@ ds.finish().await?;          // the dataset enters the container here
 w.finish().await?;           // the collection becomes readable here
 ```
 
-Two commit points, and nothing is visible before them. A `DatasetWriter` dropped
-without `finish()` never enters the container. An `AtlasWriter` dropped without
-`finish()` leaves no trailer, so nothing at the target opens as a collection.
+There are two commit points, and nothing is visible before them. A
+`DatasetWriter` you drop without `finish()` never enters the container. An
+`AtlasWriter` you drop without `finish()` leaves no trailer. Nothing at the
+target then opens as a collection.
 
 ## Staging
 
-Each dataset is built as a complete `array-format` file in a local scratch
-directory, then copied verbatim into the output stream:
+Each dataset builds as a complete `array-format` file, in a local scratch
+directory. The writer then copies that file into the output stream, byte for
+byte:
 
 ```text
 add_dataset("jan")  ──▶ scratch/1/data.af      define, write, define, write, …
@@ -33,48 +35,49 @@ add_dataset("feb")  ──▶ scratch/2/data.af
 AtlasWriter::finish ──▶ footer, trailer, done
 ```
 
-Staging on local disk is what keeps memory bounded. `array-format` spills
-compressed chunks to a temporary file as they arrive, and the copy into the
-container streams in 8 MiB pieces, so a dataset far larger than RAM writes
-without trouble. The scratch directory is removed as soon as its segment is
-appended.
+Local staging bounds the memory. `array-format` spills each compressed chunk to
+a temporary file on arrival. The copy into the container streams in 8 MiB
+pieces. A dataset far larger than RAM therefore writes without trouble. The
+scratch directory goes as soon as its segment lands.
 
 ### flush, then compact
 
-Both, in that order, and the order matters.
+Run both, in that order. The order matters.
 
-`flush()` commits buffered writes into a sidecar layer. `compact()` merges every
-layer into a single base file. Compacting without flushing first would leave the
-buffered writes behind, and — because `compact` builds its attribute dictionary
-from committed layers only — could produce dangling attribute indices.
+`flush()` commits the buffered writes into a sidecar layer. `compact()` merges
+every layer into one base file. A `compact()` without a `flush()` first leaves
+the buffered writes behind. It can also produce a dangling attribute index,
+because `compact` builds its attribute dictionary from committed layers only.
 
-The result is one self-contained file, which is what a segment has to be.
+The result is one self-contained file, which is what a segment must be.
 
-The flush also computes each array's minimum, maximum, and null count. Those
-are harvested into the footer entry before the staged file is closed, so a
-reader gets them without opening the segment — see
+The flush also computes the minimum, the maximum, and the null count of each
+array. Those reach the footer entry before the staged file closes. A reader
+therefore gets them without the segment. See
 [format.md](format.md#statistics-live-here-too).
 
-> **Cost.** This pass re-reads, decompresses, and recompresses every chunk, and
-> computes statistics twice, all on local scratch. Ingest therefore pays roughly
-> double the compression CPU of a hypothetical one-shot builder. It is isolated
-> in `create_staging_file` / `DatasetWriter::finish`, so an `array-format` API
-> that writes a base directly would be a drop-in replacement.
+> **Cost.** This pass reads, decompresses, and compresses every chunk again. It
+> also computes the statistics twice. All of it happens on local scratch.
+> Ingest therefore spends about twice the compression CPU of a one-shot
+> builder. The work sits in `create_staging_file` and `DatasetWriter::finish`.
+> An `array-format` API that writes a base directly would replace it as it
+> stands.
 
 ## Streaming to the container
 
-Output goes through `object_store::buffered::BufWriter`, which buffers small
-collections into a single atomic PUT and switches to a multipart upload once it
-outgrows its capacity. Footer-at-end is what makes this a single forward pass:
-nothing has to be rewritten once written.
+The output goes through `object_store::buffered::BufWriter`. It holds a small
+collection in one atomic PUT. It moves to a multipart upload once the data
+passes its capacity. The footer sits at the end, which makes this one forward
+pass. Nothing needs a rewrite.
 
-The writer tracks a running byte offset. Each appended segment records
-`(seg_offset, seg_len)` in its footer entry — which is why segments need no
-alignment, padding, or separator.
+The writer keeps a running byte offset. Each segment records
+`(seg_offset, seg_len)` in its footer entry. A segment therefore needs no
+alignment, no padding, and no separator.
 
 ## Concurrent datasets
 
-`add_dataset` returns an owned `DatasetWriter`, so several may be open at once:
+`add_dataset` returns an owned `DatasetWriter`. Several can therefore stay open
+at once:
 
 ```rust
 let w = Arc::new(AtlasWriter::create_path(dir, cfg).await?);
@@ -88,36 +91,36 @@ for path in files {
 }
 ```
 
-Staging is fully parallel; only the append is serialized. A `DatasetWriter`
-takes the writer's lock once, in `finish()`, for the duration of its append and
-footer entry — so concurrent datasets land in finish order and can never
-interleave their bytes. `tests/integration.rs` asserts that segments still tile
-the container contiguously under concurrent staging.
+Staging is parallel. Only the append serializes. A `DatasetWriter` takes the
+writer's lock once, in `finish()`, for its append and its footer entry.
+Concurrent datasets therefore land in finish order, and never interleave their
+bytes. `tests/integration.rs` asserts that the segments still tile the
+container without a gap under concurrent staging.
 
 ## Failure
 
 | What happens | Result |
 |---|---|
-| `DatasetWriter` dropped or aborted | That dataset never appears. Others unaffected |
-| `define_array` / `write_array` fails | Same — abandon the dataset, keep writing others |
-| `AtlasWriter` dropped without `finish` | No trailer. Nothing at the target opens |
-| Process dies mid-write | Same: no trailer, no collection |
+| A drop or an abort of a `DatasetWriter` | That dataset never appears. The others stay |
+| A failure in `define_array` or `write_array` | The same. Abandon that dataset, and keep the others |
+| A drop of the `AtlasWriter` before `finish` | No trailer. Nothing at the target opens |
+| A dead process during a write | The same. No trailer, and no collection |
 
-There is no half-written collection to detect or clean up, because a container
-without a trailer is not a collection. The Python layer leans on this: a failed
-`add_xarray_dataset` aborts its `DatasetWriter` and the collection carries on.
+There is no half-written collection to find, and none to clean up. A container
+without a trailer is no collection. The Python layer depends on this. A failed
+`add_xarray_dataset` aborts its `DatasetWriter`, and the collection continues.
 
-Whether a partial object lingers on the backend after a dropped writer is the
-backend's business — an S3 multipart upload left incomplete is cleaned by a
-lifecycle rule. It is a hygiene concern, not a correctness one.
+The backend decides whether a partial object stays after a dropped writer. A
+lifecycle rule clears an incomplete S3 multipart upload. This is a question of
+hygiene, not of correctness.
 
 ## Interning as you write
 
-The writer holds an `Interner`. Each finished dataset hands it a `DatasetSchema`
-and gets back a `u32`; identical schemas collide onto one pool entry, resolved
-by content hash with a `PartialEq` fallback for hash collisions. Attribute keys
-intern the same way.
+The writer holds an `Interner`. Each finished dataset hands it a
+`DatasetSchema`, and gets back a `u32`. Two equal schemas land on one pool
+entry. A content hash resolves them, and `PartialEq` settles a hash collision.
+Attribute keys intern the same way.
 
-One subtlety: `FillValueS` compares floats by bit pattern, so a NaN fill equals
-a NaN fill. Without that, every float array with the default NaN fill would get
-its own pool entry and interning would never fire on the most common case.
+One detail matters. `FillValueS` compares floats by bit pattern, so one NaN
+fill equals another. Without that, every float array with the default NaN fill
+takes its own pool entry, and interning never fires on the common case.

@@ -1,8 +1,7 @@
 """The `atlas` command.
 
-Each subcommand is driven through `main()` with an argv list, so the tests
-exercise argument parsing and output formatting rather than just the functions
-underneath.
+Each subcommand runs through `main()` with an argv list. These tests therefore
+cover the argument parsing and the output format, not the functions alone.
 """
 
 import json
@@ -13,7 +12,7 @@ from atlas import _cli
 
 
 def run(capsys, *argv):
-    """Run the CLI and return `(exit_code, stdout, stderr)`."""
+    """Runs the CLI. Returns `(exit_code, stdout, stderr)`."""
     code = _cli.main(list(argv))
     captured = capsys.readouterr()
     return code, captured.out, captured.err
@@ -28,7 +27,7 @@ def test_create_reports_what_it_wrote(capsys, netcdf_dir, tmp_path):
 
     assert code == 0
     assert "3 dataset(s) written" in out
-    # Progress goes to stderr, so stdout stays pipeable.
+    # Progress goes to stderr, so a pipe still reads stdout.
     assert "2024-01" in err
     assert (dest / "data.atlas").exists()
 
@@ -209,7 +208,7 @@ def test_show_json_carries_the_full_structure(capsys, collection):
     assert d["dimensions"] == {"lat": 4, "lon": 6}
     arrays = {a["name"]: a for a in d["arrays"]}
     assert arrays["temperature"]["stats"]["row_count"] == 24
-    # bytes are decoded for JSON, so the output is valid.
+    # The bytes decode for JSON, so the output stays valid.
     assert arrays["station"]["stats"]["min"] == "a"
 
 
@@ -230,6 +229,14 @@ def test_info_summarises(capsys, collection):
     assert "datasets          3" in out
     assert "interned schemas  1" in out
     assert "temperature" in out
+
+
+def test_info_shows_collection_wide_stats(capsys, collection):
+    code, out, _ = run(capsys, "info", str(collection))
+    assert code == 0
+    # Three months of a 4x6 grid, in one row count.
+    assert "temperature  count=72  min=1.0  max=26.0" in out
+    assert 'station      count=12  min="a"  max="d"' in out
 
 
 def test_info_reports_removals(capsys, collection):
@@ -265,7 +272,7 @@ def test_version_flag(capsys):
 
 @pytest.mark.parametrize("command", ["create", "rm", "ls", "show", "info"])
 def test_every_command_offers_json_and_store_flags(command):
-    """The remote flags have to be on every subcommand, not just the read ones."""
+    """Every subcommand needs the remote flags, not the read ones alone."""
     parser = _cli.build_parser()
     sub = parser._subparsers._group_actions[0].choices[command]
     flags = {action.option_strings[0] for action in sub._actions if action.option_strings}

@@ -61,7 +61,7 @@ fn strip_prefix_suffix<'a>(s: &'a str, prefix: &str, suffix: &str) -> Option<&'a
     s.strip_prefix(prefix)?.strip_suffix(suffix)
 }
 
-/// Render a `DType` as a stable string (matches the parser input vocabulary).
+/// Renders a `DType` as a stable string. It matches the parser vocabulary.
 pub fn dtype_to_string(dtype: &DType) -> String {
     match dtype {
         DType::Bool => "bool".into(),
@@ -85,8 +85,9 @@ pub fn dtype_to_string(dtype: &DType) -> String {
     }
 }
 
-/// Expands `$cb!(Variant, RustType, "numpy_dtype_name")` for every numeric variant.
-/// Used in read/write paths to generate a match expression over `atlas::DType`.
+/// Expands `$cb!(Variant, RustType, "numpy_dtype_name")` for every numeric
+/// variant. The read and write paths use it to build a match over
+/// `atlas::DType`.
 #[macro_export]
 macro_rules! for_each_numeric_dtype {
     ($cb:ident) => {

@@ -26,9 +26,9 @@ end - 8      format_version u32 LE = 1   4 B  ├ trailer
 end - 4      b"ATLS"                     4 B  ┘
 ```
 
-The magic appears twice on purpose. The trailing copy is what a reader checks —
-it arrives with the footer in the same range read. The leading copy is there so
-`file`, `libmagic`, and a human with `xxd` can identify the file from its first
+The magic appears twice on purpose. A reader checks the trailing copy, which
+arrives with the footer in one range read. The leading copy serves `file`,
+`libmagic`, and a person with `xxd`. They all name the file from its first
 bytes.
 
 ### Opening
@@ -36,32 +36,33 @@ bytes.
 1. Read the last `min(file_size, 64 KiB)`.
 2. Validate the trailer: magic, then version. A mismatch is
    `NotAnAtlasCollection` or `UnsupportedVersion`.
-3. If `footer_size + 16` fits in what was read, the footer is already in hand —
-   one request total. Otherwise issue a second range read for it.
+3. The footer is already in hand when `footer_size + 16` fits in that read.
+   One request then covers it. Otherwise issue a second range read.
 4. Read `deleted.mask`, if present.
 
-So opening any collection costs one or two requests, whatever its size. The
-leading magic is checked only when the probe happened to cover it (a small
-container); spending a round trip to re-verify what the trailer already proved
-would be waste.
+An open of any collection therefore costs one or two requests, whatever its
+size. The check on the leading magic runs only when the probe already covered
+it, which happens for a small container. A round trip to prove again what the
+trailer proved is waste.
 
 ### Segments
 
 One per dataset, in write order, packed with no alignment or padding. Byte
 ranges come from the footer, so nothing has to be scanned.
 
-Each segment is a complete `array-format` file — a data region of compressed
-blocks followed by its own rkyv footer and `ARRF` trailer. It is standalone:
+Each segment is a complete `array-format` file. That is a data region of
+compressed blocks, then its own rkyv footer and `ARRF` trailer. It stands
+alone:
 
 ```bash
 # byte offsets from DatasetView::segment_range()
 dd if=data.atlas of=one_dataset.af bs=1 skip=8 count=1438
 ```
 
-and `array-format` opens the result directly. Inside a segment, each array is
-keyed by its real name (`temperature`, `lat`), and blocks record their own
-codec — which is why a reader never needs to be told how a collection was
-compressed.
+`array-format` then opens the result directly. Inside a segment, each array
+keys on its real name, such as `temperature` or `lat`. Each block records its
+own codec. Nothing therefore needs to tell a reader how a collection
+compresses.
 
 ## Footer
 
@@ -73,7 +74,7 @@ a format change.
 struct CollectionFooter {
     version: u32,                    // = 1, re-checked after decode
     segment_format: u32,             // = 5, the array-format footer version
-    codec: Codec,                    // informational; blocks are self-describing
+    codec: Codec,                    // for information. Each block names its own
     created_unix_ms: i64,
     schema_pool: Vec<DatasetSchema>, // interned by content hash
     attr_key_pool: Vec<String>,      // interned attribute keys
@@ -106,10 +107,10 @@ value.
 
 Two pools keep the footer small when a collection holds many similar datasets.
 
-**Schemas** are interned by content hash. A fleet of a thousand sensors that all
-declare the same two arrays stores that schema once; each entry is a `u32`
-pointing at it. Attribute *values* are deliberately not part of the schema, so
-two datasets that differ only in their annotations still share one.
+**Schemas** intern by content hash. A fleet of a thousand sensors that declares
+the same two arrays stores that schema once. Each entry is a `u32` that points
+at it. The schema holds no attribute *value*, and that is deliberate. Two
+datasets that differ only in their attributes therefore still share one schema.
 
 **Attribute keys** are interned as strings, so a key repeated across every
 dataset costs four bytes per use rather than its length.
@@ -117,47 +118,56 @@ dataset costs four bytes per use rather than its length.
 ### Statistics live here too
 
 `array-format` computes a minimum, a maximum, and a null count for every array
-while the dataset is being staged — it has to walk the data anyway to write it.
-Recording the result in the footer therefore costs nothing at write time, and
-makes it free at read time.
+while the dataset stages. It walks the data anyway, to write it. To record the
+result in the footer therefore costs nothing at write time, and makes it free
+at read time.
 
-`null_count` counts elements equal to the fill value, which is how a
-never-written cell is stored. An array declared and never written reports
-`row_count == null_count`: every element is a hole. `min` and `max` are `None`
-for a dtype with no ordering, and raw bytes for strings, compared
-lexicographically.
+`null_count` counts the elements equal to the fill value. That is how the
+format stores a cell nobody wrote. An array somebody declared and never wrote
+reports `row_count == null_count`. Every element is a hole. `min` and `max` are
+`None` for a dtype with no order. For a string they are raw bytes, in
+lexicographic order.
 
-This is what `atlas show` prints under each variable, and it is why doing so
-needs no more I/O than listing the datasets did.
+`atlas show` prints this under each variable. To print it needs no more I/O
+than the dataset list needed.
+
+The footer stores one entry per dataset. It stores nothing for the collection
+as a whole. `Atlas::array_stats` and `atlas info` combine the entries as they
+read them. The format needs no second copy.
+
+The deletion mask applies to those entries, as it does to everything else the
+footer holds. A hidden dataset counts toward no statistic.
+`Atlas::array_stats_by_dataset` hands back the entries one by one, with the
+same mask applied.
 
 ### Attributes live here, not in the segments
 
-Every attribute value — dataset-level and per-array — is in the footer.
-Segments carry none. That means a metadata-only open answers every attribute
-question with zero further I/O, which is exactly what the Python reader does.
+The footer holds every attribute value, both dataset-level and per-array. A
+segment carries none. A metadata-only open therefore answers every attribute
+question with no further I/O. The Python reader does exactly that.
 
-It also means timestamps keep their own tag. `AttrS` has a
-`TimestampNanoseconds` variant, so nothing has to guess at a date-shaped
-string: an RFC 3339 string is a string, and a timestamp is a timestamp.
+A timestamp also keeps its own tag. `AttrS` has a `TimestampNanoseconds`
+variant, so nothing guesses at a date-shaped string. An RFC 3339 string is a
+string, and a timestamp is a timestamp.
 
 ### Schema is recorded twice
 
-The footer describes an array; the segment addresses its chunks. Both need the
-dtype and shape, so both store them. The reader cross-checks on the first data
-read and raises `CorruptCollection` if they disagree.
+The footer describes an array. The segment addresses its chunks. Both need the
+dtype and the shape, so both store them. The reader compares the two on the
+first data read. A mismatch raises `CorruptCollection`.
 
 ### Validation on decode
 
-A decoded footer is checked before use: every dataset's schema index must
-resolve, every attribute key index must be in the pool, every annotated array
-position must exist, and no segment may be empty. Checking once here is cheaper
-than handling a dangling index at each use site, and it turns a corrupt file
-into one clear error instead of a panic deep in a read.
+A decoded footer passes a check before use. Every dataset schema index must
+resolve. Every attribute key index must sit in the pool. Every annotated array
+position must exist. No segment may be empty. One check here costs less than a
+dangling index at every use site. It also turns a corrupt file into one clear
+error, and not a panic deep inside a read.
 
 ## Deletion mask
 
-The container is write-once, so deleting a dataset cannot touch it. Instead a
-sidecar lists the ordinals of deleted datasets, and the reader hides them.
+The container is write-once, so a delete cannot touch it. A sidecar lists the
+ordinals of the deleted datasets instead, and the reader hides them.
 
 ```text
 b"ATLM"          4 B   magic
@@ -167,28 +177,28 @@ count × u32 LE         ordinals, strictly increasing
 ```
 
 - **Absent means nothing is deleted.** The writer never creates one.
-- **Deleting** reads the mask, adds an ordinal, and writes the whole file back
-  with a single atomic PUT. Object stores have no partial write, so whole-file
-  is the only option.
-- **Ordinals never move.** A dataset's position in `footer.datasets` is fixed
-  for the life of the container, so a stored ordinal stays valid and no
-  concurrent reader sees a renumbering.
-- **Space is not reclaimed.** The deleted dataset's bytes stay exactly where
-  they are. Rewrite the collection to get them back.
+- **A delete** reads the mask, adds the ordinals, and writes the whole file
+  back in one atomic PUT. An object store has no partial write, so the whole
+  file is the one option. One PUT covers a batch of any size.
+- **No ordinal ever moves.** A dataset's position in `footer.datasets` holds
+  for the life of the container. A stored ordinal therefore stays valid, and no
+  reader sees a renumbering.
+- **This reclaims no space.** The bytes of the deleted dataset stay where they
+  are. Rewrite the collection to get them back.
 
 ### Tolerance
 
-An ordinal past the end of the footer is ignored with a warning, so a mask left
-over from a different container cannot stop a collection from opening. A
-truncated body keeps whatever entries are intact. Only a wrong magic is an
-error — a foreign file at that path is a mistake worth reporting rather than
-silently treating as "nothing deleted".
+An ordinal past the end of the footer draws a warning, and the reader drops it.
+A mask from a different container therefore cannot block an open. A truncated
+body keeps every entry that survives. Only a wrong magic is an error. A foreign
+file at that path is a mistake, and deserves a report instead of a silent
+"nothing deleted".
 
 ### Concurrency
 
-Two deletions racing on the same collection are last-writer-wins: one can be
-lost. Serialize deletes if that matters. A compare-and-swap using the backend's
-etag would fix it where the backend supports one; that is not in v1.
+Two deletes that race on one collection are last-writer-wins. One can be lost.
+Serialize deletes if that matters. A compare-and-swap on the backend etag fixes
+this where a backend offers one. Version 1 does not do that.
 
 ## Constants
 

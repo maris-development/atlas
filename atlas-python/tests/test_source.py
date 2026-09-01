@@ -1,7 +1,7 @@
 """Resolving a collection location.
 
-The URL cases build a store object but never touch the network — constructing
-an obstore handle is offline.
+The URL cases build a store object, and touch no network. An obstore handle
+builds offline.
 """
 
 import pytest
@@ -15,7 +15,7 @@ from atlas import _source
     ["/tmp/collection", "relative/path", "./here", "C:/data/collection"],
 )
 def test_a_plain_path_passes_through(path):
-    """Including a Windows drive letter, which urlparse reads as a scheme."""
+    """This covers a Windows drive letter, which urlparse reads as a scheme."""
     assert _source.resolve(path) == path
 
 
@@ -50,7 +50,7 @@ def test_an_unsupported_scheme_is_rejected():
 
 
 def test_a_backend_failure_is_reported_as_a_source_error():
-    """Azure needs an account name that an `az://` URL does not carry."""
+    """Azure needs an account name. An `az://` URL does not carry one."""
     pytest.importorskip("obstore")
     with pytest.raises(atlas.SourceError, match="could not open"):
         _source.resolve("az://container/prefix")
@@ -58,13 +58,14 @@ def test_a_backend_failure_is_reported_as_a_source_error():
 
 def test_store_options_reach_the_backend():
     pytest.importorskip("obstore")
-    # An unknown option is the backend's to reject, and it surfaces as ours.
+    # The backend rejects an unknown option. That error reaches the caller as
+    # ours.
     with pytest.raises(atlas.SourceError):
         _source.resolve("s3://bucket/p", not_a_real_option="x")
 
 
 def test_every_operation_works_through_an_obstore_handle(netcdf_dir, tmp_path):
-    """The whole lifecycle, against a store handle rather than a path."""
+    """The whole lifecycle, against a store handle instead of a path."""
     obstore = pytest.importorskip("obstore")
     store = obstore.store.LocalStore(str(tmp_path / "remote"), mkdir=True)
 

@@ -1,11 +1,11 @@
-"""Turning `xarray.Dataset` objects into atlas datasets.
+"""How an `xarray.Dataset` becomes an atlas dataset.
 
-Internal: `atlas.create` is the public way in. This module holds the mapping —
-dtypes, fill values, attribute encoding, and the block-by-block streaming that
-keeps memory flat for dask-backed variables.
+This module is internal. `atlas.create` is the public entry point. Here sit the
+mappings for dtypes, fill values, and attribute encoding. Here too sits the
+block-by-block stream that keeps memory flat for a dask-backed variable.
 
-There is no read path here, deliberately. A collection opened from Python is
-metadata only; array data is read through the Rust API.
+There is no read path here, and that is deliberate. A collection opened from
+Python gives metadata only. The Rust API reads array data.
 """
 from __future__ import annotations
 
@@ -30,11 +30,10 @@ if TYPE_CHECKING:
 _COORDS_ATTR = "_pyatlas_coords"
 _JSON_PREFIX = "json:"
 
-# Per-array marker attribute for variables that were `timedelta64` on the way in.
-# Atlas has no native duration type, so a timedelta is stored as int64
-# nanoseconds (the same int64 view datetime64 uses) and tagged with this
-# attribute; its value is the unit to reconstruct on read. The read path pops
-# it so it never surfaces as a user-visible attribute.
+# Marker attribute for a variable that arrived as `timedelta64`. Atlas has no
+# duration type, so a timedelta stores as int64 nanoseconds. That is the same
+# int64 view datetime64 uses. The value of this attribute is the unit to
+# restore on read. The read path removes it, so no user ever sees it.
 _TIMEDELTA_ATTR = "_pyatlas_timedelta"
 
 _NUMPY_TO_ATLAS = {
@@ -55,12 +54,12 @@ _NUMPY_TO_ATLAS = {
 def _np_to_atlas_dtype(np_dtype: np.dtype) -> str:
     if np_dtype in _NUMPY_TO_ATLAS:
         return _NUMPY_TO_ATLAS[np_dtype]
-    # timedelta64 (any unit) has no native atlas type; it's stored as int64
-    # nanoseconds and tagged with `_TIMEDELTA_ATTR` so the read path restores
-    # the duration dtype — the datetime64 parallel.
+    # timedelta64 of any unit has no atlas type. It stores as int64
+    # nanoseconds, with a `_TIMEDELTA_ATTR` tag. The read path restores the
+    # duration dtype from that tag, as it does for datetime64.
     if np_dtype.kind == "m":
         return "int64"
-    # Object (Python str/bytes) and fixed-size byte/unicode strings all
+    # Object (Python str or bytes) and fixed-size byte or unicode strings all
     # become variable-length atlas strings.
     if np_dtype.kind in ("O", "S", "U"):
         return "string"
@@ -72,14 +71,16 @@ def _np_to_atlas_dtype(np_dtype: np.dtype) -> str:
 
 
 def _sanitize_str(s: str) -> str:
-    """Strip lone Unicode surrogates from a Python str.
+    """Removes a lone Unicode surrogate from a Python str.
 
-    NetCDF backends often surface byte attrs as Python strs that were decoded
-    with ``errors='surrogateescape'``; the resulting strs hold pseudo-codepoints
-    in U+DC80..U+DCFF which Rust's UTF-8 strs can't represent. We try to recover
-    the original bytes via surrogateescape and re-decode as UTF-8 (the common
-    case: bytes that *were* valid UTF-8 all along but were treated as Latin-1
-    upstream); if that fails we fall back to lossy replacement.
+    A NetCDF backend often gives a byte attribute as a Python str that it
+    decoded with ``errors='surrogateescape'``. That str then holds a
+    pseudo-codepoint in U+DC80..U+DCFF, which a Rust UTF-8 str cannot hold.
+
+    This first recovers the original bytes through surrogateescape, and decodes
+    them again as UTF-8. That covers the common case, where the bytes were
+    valid UTF-8 and something upstream read them as Latin-1. A failure falls
+    back to lossy replacement.
     """
     try:
         s.encode("utf-8")
@@ -94,14 +95,14 @@ def _sanitize_str(s: str) -> str:
 
 
 def _encode_attr_value(value: Any) -> Any:
-    """Coerce an xarray attr value to something atlas can store.
+    """Converts an xarray attribute value into a value atlas can store.
 
-    Primitives (bool/int/float/str) are returned as-is. Everything else is
-    JSON-encoded and prefixed with ``json:`` so it can be decoded losslessly
-    on read. Numpy scalars are unwrapped first. Numpy arrays are converted to
-    lists. Values that can't be JSON-serialised raise ``TypeError``.
+    A bool, an int, a float, and a str pass through as they are. Everything
+    else encodes as JSON behind a ``json:`` prefix, so a read decodes it back
+    without loss. A numpy scalar unwraps first. A numpy array becomes a list. A
+    value JSON cannot serialize raises ``TypeError``.
     """
-    # Unwrap numpy scalars
+    # Unwrap a numpy scalar.
     if isinstance(value, np.generic):
         value = value.item()
 
@@ -110,7 +111,7 @@ def _encode_attr_value(value: Any) -> Any:
     if isinstance(value, (bool, int, float)):
         return value
 
-    # Convert numpy arrays to nested lists
+    # Convert a numpy array to nested lists.
     if isinstance(value, np.ndarray):
         value = value.tolist()
 
@@ -124,21 +125,21 @@ def _encode_attr_value(value: Any) -> Any:
 
 
 def _decode_attr_value(value: Any) -> Any:
-    """Inverse of :func:`_encode_attr_value`."""
+    """The reverse of :func:`_encode_attr_value`."""
     if isinstance(value, str) and value.startswith(_JSON_PREFIX):
         return json.loads(value[len(_JSON_PREFIX):])
     return value
 
 
 def _normalize_fill_value(value: Any, np_dtype: np.dtype) -> Any:
-    """Coerce an xarray `_FillValue` attribute into a Python scalar matching the array dtype.
+    """Converts an xarray `_FillValue` into a Python scalar of the array dtype.
 
-    The binding's `define_array(fill_value=...)` expects a plain Python scalar
-    that is type-consistent with the array dtype. xarray often stores `_FillValue`
-    as a 0-D numpy array or numpy scalar; this unwraps that and (for datetime64
-    arrays) reinterprets the value as nanoseconds since the epoch. For
-    string-kind arrays (object/bytes/unicode), `bytes` are decoded to `str`
-    since NetCDF stores fixed-width string fill values as bytes.
+    The `define_array(fill_value=...)` binding expects a plain Python scalar
+    that matches the array dtype. xarray often holds `_FillValue` as a 0-D
+    numpy array or a numpy scalar. This unwraps that. For a datetime64 array it
+    reads the value as nanoseconds from the epoch. For a string array (object,
+    bytes, or unicode) it decodes `bytes` to `str`, because NetCDF stores a
+    fixed-width string fill value as bytes.
     """
     if value is None:
         return None
@@ -160,13 +161,14 @@ def _normalize_fill_value(value: Any, np_dtype: np.dtype) -> Any:
     return value
 
 
-# Sentinel distinguishing "the fill_value dict maps this var to None" (explicitly
-# disable the default) from "this var isn't in the dict" (fall through to default).
+# A sentinel that separates two cases. The fill_value dict maps this variable
+# to None, which turns the default off. Or the dict omits the variable, which
+# leaves the default in place.
 _UNSET = object()
 
-# The int64 bit pattern of `datetime64[ns]` NaT (== i64::MIN). Used as the default
-# fill value for timestamp arrays so that NaT (xarray's masked-datetime sentinel)
-# is recorded as null — the datetime parallel to NaN for floats.
+# The int64 bit pattern of `datetime64[ns]` NaT, which equals i64::MIN. It is
+# the default fill value for a timestamp array. NaT is the masked-datetime
+# sentinel of xarray, so this records it as null, as NaN does for a float.
 _NAT_INT64 = int(np.datetime64("NaT", "ns").view("int64"))
 
 
@@ -176,16 +178,18 @@ def _resolve_fill_value(
     attr_fill: Any,
     fill_value_arg: Any,
 ) -> Any:
-    """Decide the atlas fill value for one variable.
+    """Decides the atlas fill value for one variable.
 
-    Precedence (highest first):
-      1. The explicit ``fill_value`` kwarg. A ``{var: scalar}`` dict targets named
-         vars (an entry of ``None`` *disables* the default for that var); a bare
-         scalar applies to numeric (int/uint/float) arrays only.
-      2. The variable's CF ``_FillValue`` attribute.
-      3. Default: ``NaN`` for float arrays, ``NaT`` for datetime arrays, and ``""``
-         for string arrays (so mask_and_scale'd / masked missing cells are recorded
-         as null), else ``None``.
+    The order runs from highest to lowest:
+
+    1. The explicit ``fill_value`` argument. A ``{var: scalar}`` dict names the
+       variables. An entry of ``None`` turns the default off for that
+       variable. A bare scalar applies to a numeric array only, that is int,
+       uint, or float.
+    2. The CF ``_FillValue`` attribute of the variable.
+    3. The default. ``NaN`` for a float array, ``NaT`` for a datetime array,
+       and ``""`` for a string array. A masked cell then records as null.
+       Every other dtype gets ``None``.
     """
     override = _UNSET
     if isinstance(fill_value_arg, dict):
@@ -200,29 +204,30 @@ def _resolve_fill_value(
 
     if np_dtype.kind == "f":
         return float("nan")
-    if np_dtype.kind in ("M", "m"):  # datetime64/timedelta64 -> NaT (i64::MIN sentinel)
+    if np_dtype.kind in ("M", "m"):  # datetime64 and timedelta64 use the NaT sentinel
         return _NAT_INT64
-    if np_dtype.kind in ("O", "S", "U"):  # string -> "" sentinel for missing cells
+    if np_dtype.kind in ("O", "S", "U"):  # a string uses "" for a missing cell
         return ""
     return None
 
 
 def _is_missing_str(x: Any) -> bool:
-    """True if an object-array cell represents a missing string (None or NaN).
+    """True when an object-array cell holds a missing string, `None` or `NaN`.
 
-    Masked string variables surface missing cells as `None` or (after numpy
-    coercion) a float `NaN` inside an object array.
+    A masked string variable gives a missing cell as `None`. After numpy
+    conversion it can instead give a float `NaN` inside an object array.
     """
     return x is None or (isinstance(x, float) and math.isnan(x))
 
 
 def _fill_missing_strings(block: np.ndarray, fill: str) -> tuple[np.ndarray, int]:
-    """Replace None/NaN cells in an object-dtype string `block` with `fill`.
+    """Replaces every `None` or `NaN` cell of an object-dtype `block` with `fill`.
 
-    Atlas can't store a missing string as null (the `.af` format has no string
-    null sentinel), so masked string cells are substituted with a real string.
-    Returns ``(block, n_filled)``; non-object blocks (`\\|S` / `\\|U`, which can't
-    hold None/NaN) are returned unchanged with ``n_filled == 0``.
+    Atlas cannot store a missing string as null, because the `.af` format has
+    no string null sentinel. A masked string cell therefore takes a real
+    string. Returns ``(block, n_filled)``. A block that is not object dtype
+    (`\\|S` or `\\|U`) holds no `None` and no `NaN`, so it returns unchanged
+    with ``n_filled == 0``.
     """
     if block.dtype.kind != "O":
         return block, 0
@@ -237,7 +242,7 @@ def _fill_missing_strings(block: np.ndarray, fill: str) -> tuple[np.ndarray, int
 
 
 def _is_dask_array(arr: Any) -> bool:
-    """Return True if `arr` is a `dask.array.Array`. False if dask isn't installed."""
+    """True when `arr` is a `dask.array.Array`. False when dask is absent."""
     try:
         import dask.array as da
     except ImportError:
@@ -246,39 +251,39 @@ def _is_dask_array(arr: Any) -> bool:
 
 
 def _dask_chunk_shape(arr: Any) -> list[int]:
-    """First chunk size along each dim of a dask array — used as the atlas chunk_shape."""
+    """The first chunk size on each axis of a dask array. This is the atlas
+    chunk_shape."""
     return [c[0] for c in arr.chunks]
 
 
 def _contiguous(a: np.ndarray) -> np.ndarray:
-    # np.ascontiguousarray promotes 0-D arrays to 1-D (ndmin=1 default),
-    # which breaks scalar-array writes. Force-copy non-contiguous arrays
-    # via np.asarray + .copy(order='C') instead, which preserves rank.
+    # np.ascontiguousarray promotes a 0-D array to 1-D, because ndmin defaults
+    # to 1. That breaks a scalar-array write. Copy a non-contiguous array with
+    # np.asarray and .copy(order='C') instead, which keeps the rank.
     if a.flags["C_CONTIGUOUS"]:
         return a
     return a.copy(order="C")
 
 
-# Batching exists for the "many small NetCDF chunks" case: it collapses N dask
-# scheduler invocations into N/batch_size. But batching by *count* would be
-# ruinous for large blocks — eight 128 MiB blocks per batch, two batches in
-# flight, is 2 GiB resident. So the batch is sized by bytes instead, and the
-# count is only a ceiling.
+# A batch serves the many-small-NetCDF-chunks case. It turns N dask scheduler
+# calls into N/batch_size. A batch sized by *count* would ruin the large-block
+# case. Eight 128 MiB blocks per batch, with two batches in flight, holds 2 GiB
+# in memory. The batch is therefore sized by bytes, and the count is a ceiling.
 _MAX_BATCH_SIZE = 8
 _DEFAULT_PREFETCH_DEPTH = 2
 
-# Bytes a batch aims for. Peak resident work is roughly
-# `prefetch_depth * max(_BATCH_BYTE_BUDGET, one block)`, so a variable chunked
-# at 128 MiB costs two blocks in flight, not sixteen.
+# Bytes a batch aims at. Peak memory is about
+# `prefetch_depth * max(_BATCH_BYTE_BUDGET, one block)`. A variable chunked at
+# 128 MiB therefore holds two blocks in flight, not sixteen.
 _BATCH_BYTE_BUDGET = 64 * 1024 * 1024
 
 
 def _block_nbytes(arr: Any) -> int:
     """Bytes in the largest block of a dask array.
 
-    Object arrays (strings) report the pointer size, which understates the real
-    payload — but those arrays are small in practice, and the floor below keeps
-    the batch sane either way.
+    An object array of strings reports the pointer size, which is below the
+    real payload. Such an array is small in practice, and the floor below keeps
+    the batch reasonable.
     """
     largest = 1
     for sizes in arr.chunks:
@@ -287,10 +292,10 @@ def _block_nbytes(arr: Any) -> int:
 
 
 def _batch_size_for(arr: Any) -> int:
-    """How many blocks to compute per scheduler call.
+    """How many blocks one scheduler call computes.
 
-    Enough to amortise dask's overhead on small blocks, never enough to hold an
-    unreasonable amount of a large variable in memory.
+    The count covers the dask overhead on a small block. It never holds too
+    much of a large variable in memory.
     """
     return max(1, min(_MAX_BATCH_SIZE, _BATCH_BYTE_BUDGET // _block_nbytes(arr)))
 
@@ -301,19 +306,19 @@ def _iter_blocks(
     batch_size: Optional[int] = None,
     prefetch_depth: int = _DEFAULT_PREFETCH_DEPTH,
 ) -> Iterator[tuple[list[int], np.ndarray]]:
-    """Yield ``(start_index, block_np)`` for each chunk in `arr`.
+    """Yields ``(start_index, block_np)`` for each chunk of `arr`.
 
-    Numpy-backed inputs are yielded as one full-shape block. Dask-backed inputs
-    are prefetched: a single background thread runs ``dask.compute(*K)`` on the
-    next batch while the main thread consumes already-materialised blocks, so
-    NetCDF reads overlap atlas writes.
+    A numpy-backed input gives one full-shape block. A dask-backed input
+    prefetches. One background thread runs ``dask.compute(*K)`` on the next
+    batch, while the main thread consumes the blocks already in memory. NetCDF
+    reads therefore overlap atlas writes.
 
-    The batch is sized by bytes (see :data:`_BATCH_BYTE_BUDGET`), so peak
-    memory tracks the block size rather than the block count. Pass
-    ``batch_size`` to override.
+    Bytes size the batch. See :data:`_BATCH_BYTE_BUDGET`. Peak memory then
+    tracks the block size, not the block count. Pass ``batch_size`` to override
+    it.
 
-    Emits one ``event=dask_compute`` debug event per fulfilled batch via the
-    Rust tracing subscriber (see ``log_chunk_event``).
+    Each batch that completes emits one ``event=dask_compute`` debug event
+    through the Rust tracing subscriber. See ``log_chunk_event``.
     """
     if not _is_dask_array(arr):
         a = np.asarray(arr)
@@ -364,17 +369,17 @@ def _write_xarray_to_view(
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
 ) -> None:
-    """Populate an empty `DatasetWriter` from an xarray Dataset.
+    """Fills an empty `DatasetWriter` from an xarray Dataset.
 
-    Writes every coordinate and data variable as an atlas array, the coordinate
-    names as ``_pyatlas_coords`` (a JSON list), all dataset attrs as
-    dataset-level attributes, and each variable's attrs as attributes on that
-    variable's array.
+    Every coordinate and data variable becomes an atlas array. The coordinate
+    names become ``_pyatlas_coords``, a JSON list. Every dataset attribute
+    becomes a dataset-level attribute. The attributes of a variable become
+    attributes of that variable's array.
     """
     coord_names = [str(n) for n in ds.coords.keys()]
 
-    # Write coords first, then data_vars. Order doesn't matter to atlas but
-    # makes the on-disk file layout predictable.
+    # Write the coords first, then the data_vars. Atlas ignores the order. The
+    # order makes the on-disk layout predictable.
     for var_name in coord_names + [str(n) for n in ds.data_vars.keys()]:
         var = ds[var_name]
         np_dtype = np.dtype(var.dtype)
@@ -382,10 +387,10 @@ def _write_xarray_to_view(
         dims = [str(d) for d in var.dims]
         shape = [int(s) for s in var.shape]
 
-        # Pick the atlas chunk_shape:
-        #   1. explicit user override via the `chunks=` kwarg, else
-        #   2. the dask chunk shape if the variable is dask-backed, else
-        #   3. None (atlas defaults to a single full-shape chunk).
+        # Pick the atlas chunk_shape, in this order:
+        #   1. the explicit `chunks=` argument, else
+        #   2. the dask chunk shape, when the variable is dask-backed, else
+        #   3. None, so atlas stores one full-shape chunk.
         if chunks is not None and var_name in chunks:
             chunk_shape: Optional[list[int]] = [int(s) for s in chunks[var_name]]
         elif _is_dask_array(var.data):
@@ -393,11 +398,11 @@ def _write_xarray_to_view(
         else:
             chunk_shape = None
 
-        # Resolve the typed fill value. The CF/netCDF `_FillValue` attribute (if
-        # any) is popped so it's passed to define_array, not stored as a flattened
-        # atlas attribute; `_resolve_fill_value` layers the explicit `fill_value`
-        # override and the NaN-for-floats default on top. Copy attrs first to
-        # avoid mutating the user's Dataset.
+        # Resolve the typed fill value. Remove any CF `_FillValue` attribute,
+        # so it reaches define_array and does not store as a flat atlas
+        # attribute. `_resolve_fill_value` then applies the explicit
+        # `fill_value` override and the NaN-for-floats default. Copy the attrs
+        # first, so the user's Dataset does not change.
         var_attrs = dict(var.attrs)
         resolved_fill = _resolve_fill_value(
             var_name,
@@ -415,26 +420,27 @@ def _write_xarray_to_view(
             fill_value=resolved_fill,
         )
 
-        # Tag timedelta64 arrays (stored as int64 ns) so the read path can
-        # restore the duration dtype. Values are normalised to ns below, so
+        # Tag a timedelta64 array, which stores as int64 ns. The read path
+        # then restores the duration dtype. The values convert to ns below, so
         # the recorded unit is always "ns".
         if np_dtype.kind == "m":
             writer.set_array_attribute(var_name, _TIMEDELTA_ATTR, "ns")
 
-        # For string arrays, missing (None/NaN) cells can't be stored as null,
-        # so they're substituted with the resolved string fill (default "").
+        # A string array cannot store a missing cell as null. Every `None` and
+        # `NaN` therefore takes the resolved string fill, which defaults to "".
         str_fill = resolved_fill if isinstance(resolved_fill, str) else ""
         n_filled_strings = 0
 
-        # Stream blocks: prefetched batches for dask-backed data, a single
-        # full-shape block for numpy-backed data.
+        # Stream the blocks. Dask-backed data arrives in prefetched batches.
+        # Numpy-backed data arrives as one full-shape block.
         for start, block in _iter_blocks(var.data, var_name=var_name):
-            # TimestampNs columns: the bindings accept np.int64 only; cast the
-            # numpy datetime64 view to int64 without copying.
+            # A TimestampNs column reaches the bindings as np.int64 only. View
+            # the numpy datetime64 as int64, with no copy.
             if block.dtype.kind == "M":
                 block = block.view(np.int64)
-            # timedelta64 -> int64 nanoseconds (normalise the unit first, then
-            # a zero-copy view). Restored to a duration on read via the marker.
+            # timedelta64 becomes int64 nanoseconds. Convert the unit first,
+            # then take a view with no copy. The marker restores the duration
+            # on read.
             elif block.dtype.kind == "m":
                 block = block.astype("timedelta64[ns]").view(np.int64)
             elif atlas_dtype == "string":
@@ -452,13 +458,13 @@ def _write_xarray_to_view(
         if n_filled_strings:
             warnings.warn(
                 f"{var_name!r}: replaced {n_filled_strings} missing string "
-                f"cell(s) (None/NaN) with {str_fill!r} — atlas cannot store "
-                f"missing strings as null",
+                f"cell(s) (None/NaN) with {str_fill!r}. Atlas cannot store "
+                f"a missing string as null",
                 stacklevel=2,
             )
 
-        # Per-variable attrs become real per-array attributes in the
-        # collection footer (minus `_FillValue`, which became the fill).
+        # Each variable attribute becomes a real per-array attribute in the
+        # collection footer. `_FillValue` is the exception. It became the fill.
         for attr_key, attr_val in var_attrs.items():
             encoded = _encode_attr_value(attr_val)
             writer.set_array_attribute(var_name, _sanitize_str(str(attr_key)), encoded)
@@ -468,7 +474,7 @@ def _write_xarray_to_view(
         encoded = _encode_attr_value(attr_val)
         writer.set_attribute(_sanitize_str(str(attr_key)), encoded)
 
-    # Marker so we can faithfully restore coord/var distinction on read.
+    # A marker. A read uses it to tell a coordinate from a data variable.
     writer.set_attribute(_COORDS_ATTR, json.dumps(coord_names))
 
 
@@ -479,11 +485,11 @@ def _write_xarray_dataset(
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
 ) -> None:
-    """Write an ``xarray.Dataset`` into an open writer as ``name``.
+    """Writes an ``xarray.Dataset`` into an open writer, under ``name``.
 
-    Atomic: a dataset reaches the container only when it finishes, so a failure
-    partway through — an unsupported dtype, say — is discarded by aborting it,
-    and the collection never sees the dataset.
+    This is atomic. A dataset reaches the container only when it finishes. A
+    failure part-way, such as an unsupported dtype, aborts the dataset. The
+    collection then never sees it.
     """
     dataset_writer = writer.add_dataset(name)
     try:

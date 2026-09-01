@@ -1,7 +1,7 @@
 # atlas
 
-Thousands of NetCDF datasets in one immutable file, on local disk or object
-storage.
+Thousands of NetCDF datasets in one immutable file. It sits on local disk or on
+object storage.
 
 ```bash
 pip install atlas-python
@@ -17,9 +17,9 @@ $ atlas ls /data/collection
 
 ## The shape of it
 
-A collection is **one write-once file**. Every dataset occupies a contiguous
-byte range; a footer at the end records where each one lives, along with its
-schema, attributes, and statistics.
+A collection is **one write-once file**. Every dataset occupies one contiguous
+byte range. A footer at the end records where each one lives, with its schema,
+its attributes, and its statistics.
 
 ```text
 my_collection/
@@ -27,14 +27,14 @@ my_collection/
 └── deleted.mask    optional
 ```
 
-That buys one thing above all: **metadata is a single read.** Opening fetches
-the footer and nothing else, so listing datasets, inspecting schemas, and
-reading statistics are free — for three datasets or a million, on a local disk
-or across the Atlantic.
+That buys one thing above all. **Metadata is one read.** An open fetches the
+footer and nothing else. To list the datasets, to inspect a schema, and to read
+the statistics are then free. Three datasets and a million cost the same, on a
+local disk and across an ocean.
 
-It costs one thing: a collection **cannot be modified once written**. No append,
-no in-place update. To change a dataset you rebuild the collection. The one
-exception is removing datasets, which writes a small mask file and leaves the
+It costs one thing. A collection **cannot change after a write**. There is no
+append, and no in-place update. To change a dataset, rebuild the collection. A
+remove is the one exception. It writes a small mask file, and leaves the
 container alone.
 
 ## Five operations
@@ -47,8 +47,8 @@ container alone.
 | `atlas.describe` | `atlas show` | One dataset in detail, `ncdump` style |
 | `atlas.info` | `atlas info` | The collection as a whole |
 
-Every one takes a local path or a URL — `s3://`, `gs://`, `az://`, `https://` —
-so the same call works against a bucket.
+Every one takes a local path or a URL: `s3://`, `gs://`, `az://`, or
+`https://`. The same call therefore works against a bucket.
 
 ```python
 import atlas
@@ -77,44 +77,44 @@ variables:
 }
 ```
 
-Types, shapes, chunking, fill values, attributes, and the statistics recorded
-when each array was written — minimum, maximum, and how many elements are
-missing. All from the footer, so it needs no more I/O than `ls` did.
+Types, shapes, chunking, fill values, attributes, and the statistics of the
+write. Those statistics are the minimum, the maximum, and how many elements are
+missing. It all comes from the footer, so it needs no more I/O than `ls`.
 
-## Python writes; Rust reads data
+## Python writes. Rust reads data
 
-Array *values* are read through the Rust API, not from Python. What Python
-gives you is the structure: which datasets exist, what arrays they hold, and
-everything recorded about them.
+The Rust API reads array *values*. Python does not. Python gives the structure.
+Which datasets exist, what arrays they hold, and everything on record about
+them.
 
-That split is deliberate. Building collections from NetCDF and serving a
-catalogue of what they hold is what Python is good for here; pulling array
-bytes through the GIL never was. See [Reading data](guides/reading-data.md).
+That split is deliberate. Python builds collections from NetCDF, and serves a
+catalogue of what they hold. Array bytes through the GIL were never the fast
+path. See [Reading data](guides/reading-data.md).
 
 ## Compared to Zarr and netCDF
 
-netCDF and Zarr put one dataset in one file or one chunk directory, so N
-similar datasets become N stores — N sets of metadata to open, N objects to
-list. Atlas puts all N in one file with one footer, which is what makes "many
-small datasets, same schema" cheap to catalogue.
+netCDF and Zarr put one dataset in one file or one chunk directory. N similar
+datasets therefore become N stores. That is N sets of metadata to open, and N
+objects to list. Atlas puts all N in one file, behind one footer. Many small
+datasets of one schema are therefore cheap to catalogue.
 
-It is a poor fit when you need to modify data, when you have one big array
-rather than many small datasets, or when you need the values back in Python.
-See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the honest version.
+Atlas suits you poorly in three cases. You must change data. You have one large
+array instead of many small datasets. Or you need the values back in Python.
+See [vs Zarr / netCDF](vs-zarr-netcdf.md) for the full account.
 
 ## Next
 
 - [**Installation**](installation.md)
-- [**Quickstart**](quickstart.md) — a collection in five minutes
-- [**The `atlas` command**](cli.md) — every subcommand and flag
-- [**Guides**](guides/creating.md) — creating, inspecting, removing, cloud storage
+- [**Quickstart**](quickstart.md). A collection in five minutes
+- [**The `atlas` command**](cli.md). Every subcommand and flag
+- [**Guides**](guides/creating.md). Creating, inspecting, removing, cloud storage
 - [**API reference**](reference/api.md)
 
 ## Status
 
-- Local filesystem and any [`object_store`](https://docs.rs/object_store)
-  backend (S3 / GCS / Azure / HTTP) via the optional obstore dependency.
-- NetCDF is the only ingest route from Python.
-- Array data is read from Rust only.
-- `bool`, `binary`, and the list types are not yet available as array element
-  types. They work as attribute values.
+- The local filesystem, and any [`object_store`](https://docs.rs/object_store)
+  backend: S3, GCS, Azure, or HTTP. Those need the optional obstore package.
+- NetCDF is the one ingest route from Python.
+- Rust alone reads array data.
+- `bool`, `binary`, and the list types work as an attribute value. No one of
+  them works yet as an array element type.
