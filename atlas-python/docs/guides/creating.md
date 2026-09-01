@@ -222,19 +222,24 @@ atlas create /data/nc /data/collection --workers 4
 ```
 
 ```text
-workers=1 :  31 files/s   1.00x
-workers=2 :  53 files/s   1.71x
-workers=4 :  91 files/s   2.93x
-workers=8 :  88 files/s   2.81x   <- plateau
+workers=1 :  32 files/s   1.00x
+workers=2 :  84 files/s   2.65x
+workers=4 : 120 files/s   3.77x
+workers=8 : 118 files/s   3.72x   <- plateau
 ```
 
-The costly part of an ingest is the flush. It holds no lock and releases the
-GIL, so it overlaps. The rest, the netCDF read and the append, does not, which
-is why the curve flattens near four.
+The commit is the costly half of an ingest, about two thirds of it. It is pure
+Rust, holds no lock until its append, and releases the GIL, so it overlaps.
+The reads stay on the calling thread, and they are what flattens the curve
+near four.
 
-Nothing else changes. `add_dataset` runs on one thread in file order, so every
-ordinal matches a sequential build. The summary sorts back into file order
-too. Only `progress` reports in completion order.
+The reads have to stay there. netCDF4 sits on HDF5, which is not thread safe,
+and xarray locks an array read but not a variable open. Two threads inside
+`open_dataset` crash the process.
+
+Nothing else changes. `add_dataset` runs in file order, so every ordinal
+matches a sequential build. The summary sorts back into file order too. Only
+`progress` reports in completion order.
 
 Two more settings matter when that is still too slow:
 

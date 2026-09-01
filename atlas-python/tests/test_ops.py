@@ -219,6 +219,29 @@ def test_workers_can_skip_a_bad_file(many_netcdf_files, tmp_path):
     assert atlas.list_datasets(str(tmp_path / "c")) == sorted(result["written"])
 
 
+def test_every_netcdf_read_stays_on_one_thread(many_netcdf_files, tmp_path, monkeypatch):
+    """netCDF4 sits on HDF5, which is not thread safe.
+
+    xarray locks an array read but not a variable open, so two threads inside
+    `open_dataset` segfault. Reads therefore stay on the calling thread, and
+    only the commit goes to the pool.
+    """
+    import threading
+
+    seen: set[int] = set()
+    original = xr.open_dataset
+
+    def spy(*args, **kwargs):
+        seen.add(threading.get_ident())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(xr, "open_dataset", spy)
+    atlas.create(many_netcdf_files, str(tmp_path / "c"), workers=4)
+
+    assert len(seen) == 1, f"netCDF was read from {len(seen)} threads"
+    assert seen == {threading.get_ident()}, "a read left the calling thread"
+
+
 def test_workers_below_one_is_refused(netcdf_dir, tmp_path):
     with pytest.raises(atlas.AtlasError, match="workers must be at least 1"):
         atlas.create(netcdf_dir, str(tmp_path / "c"), workers=0)

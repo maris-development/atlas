@@ -704,7 +704,7 @@ def _write_xarray_dataset(
     )
 
 
-def fill_and_finish(
+def fill(
     dataset_writer: Any,
     ds: "xr.Dataset",
     name: str,
@@ -713,11 +713,11 @@ def fill_and_finish(
     on_unsupported: str = "stop",
     convert_calendar: bool = False,
 ) -> list[dict[str, str]]:
-    """Fills a `DatasetWriter` somebody already opened, then commits it.
+    """Writes a dataset into a `DatasetWriter` somebody already opened.
 
-    A parallel ingest calls `add_dataset` on one thread, in file order, and
-    hands the result here. The ordinal therefore follows the input, and the
-    costly part still runs on a worker.
+    This does not commit it. The caller owns that, so a parallel ingest can
+    read here and commit on a worker. A failure aborts the dataset, because a
+    half-filled one must not reach the container.
     """
     try:
         skipped = _write_xarray_to_view(
@@ -731,7 +731,29 @@ def fill_and_finish(
     except BaseException:
         dataset_writer.abort()
         raise
-    dataset_writer.finish()
     for record in skipped:
         record["dataset"] = name
+    return skipped
+
+
+def fill_and_finish(
+    dataset_writer: Any,
+    ds: "xr.Dataset",
+    name: str,
+    chunks: Optional[dict[str, Sequence[int]]] = None,
+    fill_value: Any = None,
+    on_unsupported: str = "stop",
+    convert_calendar: bool = False,
+) -> list[dict[str, str]]:
+    """Fills a `DatasetWriter` somebody already opened, then commits it."""
+    skipped = fill(
+        dataset_writer,
+        ds,
+        name,
+        chunks=chunks,
+        fill_value=fill_value,
+        on_unsupported=on_unsupported,
+        convert_calendar=convert_calendar,
+    )
+    dataset_writer.finish()
     return skipped

@@ -80,29 +80,33 @@ def _ingest_parallel(
     writer: Any,
     files: list[pathlib.Path],
     workers: int,
-    stage: Any,
+    read_into: Any,
     record: Any,
     claim: Any,
 ) -> None:
-    """Stages many files at once, and books the results in file order.
+    """Reads on this thread, and commits the datasets on a pool.
 
-    `add_dataset` runs here, on one thread, in file order. That fixes each
-    ordinal to the input, whatever order the workers finish in. Only the read
-    and the flush go to the pool, and those are the costly part.
+    The split is not a choice. netCDF4 sits on HDF5, which is not thread safe,
+    so every read stays here. `DatasetWriter.finish` is the costly half, about
+    two thirds of an ingest. It is pure Rust, holds no lock until its append,
+    and releases the GIL, so it is the half that parallelises.
 
-    At most `workers * 2` files are in flight, so a long list does not open a
-    staging directory for every file at once.
+    `add_dataset` also runs here, in file order, which fixes each ordinal to
+    the input whatever order the commits land in.
+
+    At most `workers * 2` datasets wait to commit, so a long list does not
+    leave a staging directory open for every file at once.
     """
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-    in_flight: dict[Any, tuple[int, pathlib.Path, str]] = {}
+    in_flight: dict[Any, tuple[int, pathlib.Path, str, list[dict[str, str]]]] = {}
 
     def collect(limit: int) -> None:
         while len(in_flight) > limit:
             done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
             for future in done:
-                index, path, name = in_flight.pop(future)
-                record(index, path, name, future.exception() or future.result())
+                index, path, name, left_out = in_flight.pop(future)
+                record(index, path, name, future.exception() or left_out)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         try:
@@ -110,15 +114,19 @@ def _ingest_parallel(
                 name = claim(index, path)
                 if name is None:
                     continue
-                opened = writer.add_dataset(name)
-                in_flight[pool.submit(stage, path, opened)] = (index, path, name)
+                try:
+                    opened = writer.add_dataset(name)
+                    left_out = read_into(path, opened)
+                except Exception as exc:
+                    record(index, path, name, exc)
+                    continue
+                future = pool.submit(opened.finish)
+                in_flight[future] = (index, path, name, left_out)
                 collect(workers * 2)
             collect(0)
         finally:
-            # A raise leaves futures running. Let them settle before the
+            # A raise leaves commits running. Let them settle before the
             # writer goes, so no worker touches it afterwards.
-            for future in in_flight:
-                future.cancel()
             wait(list(in_flight))
 
 
@@ -225,10 +233,11 @@ def create(
     instant, such as `360_day`, and a date outside the nanosecond range both
     raise instead.
 
-    `workers` stages that many files at once. The costly part of an ingest is
-    the flush. It holds no lock and releases the GIL, so it scales to about
-    three times on a many-core machine. Ordinals do not move: `add_dataset`
-    runs in file order whatever the workers do.
+    `workers` commits that many datasets at once. The commit is the costly
+    half of an ingest. It is pure Rust and releases the GIL, so it scales to
+    about four times on a many-core machine. Every netCDF read stays on the
+    calling thread, because HDF5 is not thread safe. Ordinals do not move:
+    `add_dataset` runs in file order whatever the workers do.
 
     `progress` takes each file name as that file lands. Under `workers` above
     one it arrives in completion order.
@@ -270,13 +279,18 @@ def create(
 
     target = _source.resolve(destination, **store_options)
 
-    def stage(path: pathlib.Path, opened: Any) -> list[dict[str, str]]:
-        """Reads one file into an open `DatasetWriter`. Runs on a worker."""
+    def read_into(path: pathlib.Path, opened: Any) -> list[dict[str, str]]:
+        """Reads one file into an open `DatasetWriter`, and does not commit it.
+
+        This always runs on the calling thread. netCDF4 sits on HDF5, which is
+        not thread safe, and xarray guards a read but not a variable open. Two
+        threads in here segfault.
+        """
         per_file = _open_kwargs_for(path, open_chunks, open_kwargs, budget)
         # The write runs inside the `with`, so every block lands before the
         # file closes.
         with xr.open_dataset(path, **per_file) as ds:
-            return _xarray.fill_and_finish(
+            return _xarray.fill(
                 opened,
                 ds,
                 dataset_name(path),
@@ -328,14 +342,16 @@ def create(
     with dask.config.set({"array.chunk-size": chunk_size}):
         with _atlas.AtlasWriter.create(target, codec) as writer:
             if workers > 1:
-                _ingest_parallel(writer, files, workers, stage, record, claim)
+                _ingest_parallel(writer, files, workers, read_into, record, claim)
             else:
                 for index, path in enumerate(files, start=1):
                     name = claim(index, path)
                     if name is None:
                         continue
                     try:
-                        outcome: Any = stage(path, writer.add_dataset(name))
+                        opened = writer.add_dataset(name)
+                        outcome: Any = read_into(path, opened)
+                        opened.finish()
                     except Exception as exc:
                         outcome = exc
                     record(index, path, name, outcome)

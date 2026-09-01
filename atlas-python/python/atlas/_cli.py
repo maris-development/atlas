@@ -386,7 +386,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=1,
         metavar="N",
         help=(
-            "stage N files at once. It scales to about three times on a "
+            "commit N datasets at once. It scales to about four times on a "
             "many-core machine. Ordinals do not move"
         ),
     )

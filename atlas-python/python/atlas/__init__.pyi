@@ -127,11 +127,12 @@ def create(
             Gregorian ``1973-03-10`` that names the same moment. A calendar
             with no real instant, such as ``360_day``, and a date outside the
             nanosecond range both raise instead.
-        workers: Stage this many files at once. The costly part of an ingest
-            is the flush. It holds no lock and releases the GIL, so it scales
-            to about three times on a many-core machine. Ordinals do
-            not move, because ``add_dataset`` runs in file order whatever the
-            workers do.
+        workers: Commit this many datasets at once. The commit is the costly
+            half of an ingest. It is pure Rust and releases the GIL, so it
+            scales to about four times on a many-core machine. Every netCDF
+            read stays on the calling thread, because HDF5 is not thread safe.
+            Ordinals do not move, because ``add_dataset`` runs in file order
+            whatever the workers do.
         on_error: ``"stop"`` is the default. It abandons the whole collection
             on the first bad file. ``"skip"`` records that file and continues.
         on_unsupported: What one array of an unsupported dtype costs.
