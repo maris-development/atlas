@@ -11,9 +11,9 @@ pip install atlas-python
 ```bash
 atlas create /data/nc /data/collection
 atlas ls     /data/collection
-atlas show   /data/collection 2024-01
+atlas show   /data/collection 2024-01.nc
 atlas info   /data/collection
-atlas rm     /data/collection 2024-02 2024-03
+atlas rm     /data/collection 2024-02.nc 2024-03.nc
 ```
 
 | Extra | Install | Adds |
@@ -30,10 +30,10 @@ The same five as a library:
 import atlas
 
 atlas.create("/data/nc", "/data/collection")   # from a directory of NetCDF files
-atlas.list_datasets("/data/collection")        # ['2024-01', '2024-02', '2024-03']
-atlas.describe("/data/collection", "2024-01")  # types, shapes, attrs, statistics
+atlas.list_datasets("/data/collection")        # ['2024-01.nc', '2024-02.nc', '2024-03.nc']
+atlas.describe("/data/collection", "2024-01.nc")  # types, shapes, attrs, statistics
 atlas.info("/data/collection")                 # counts, size, codec, statistics
-atlas.remove("/data/collection", ["2024-02"])  # updates the mask
+atlas.remove("/data/collection", ["2024-02.nc"])  # updates the mask
 ```
 
 Every one takes a local path, a URL, or an obstore handle:
@@ -66,8 +66,8 @@ request.
 ## What `show` gives you
 
 ```text
-$ atlas show /data/collection 2024-01
-dataset 2024-01 {
+$ atlas show /data/collection 2024-01.nc
+dataset 2024-01.nc {
 dimensions:
 	lat = 4 ;
 	lon = 6 ;
@@ -93,7 +93,7 @@ command gives the same content as a structure.
 ## Ingest
 
 `create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf`. It sorts
-them, and writes one dataset per file, named after the stem. Each coordinate
+them, and writes one dataset per file, named after the file. Each coordinate
 and data variable becomes an array. Each variable attribute becomes a per-array
 attribute. `_FillValue` becomes the fill of the array.
 
@@ -105,6 +105,13 @@ the stored chunk shape.
 Nothing at the destination is readable until every file lands. A failure
 part-way leaves no collection, and not a partial one. `on_error="skip"`, or
 `--skip-errors`, trades that for progress.
+
+Atlas cannot store every numpy dtype, and `bool` is the common case. One such
+variable fails the whole file by default. `on_unsupported="skip"`, or
+`--skip-unsupported`, leaves out that one array and lands the rest.
+
+`--log-file PATH`, or `atlas.log_to_file(path)`, appends every error and
+warning to a file, each with its reason and the file it came from.
 
 ## dtypes
 

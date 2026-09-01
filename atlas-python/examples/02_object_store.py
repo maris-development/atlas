@@ -69,12 +69,12 @@ def main() -> None:
         print(f"info     {summary['dataset_count']} datasets, "
               f"{summary['container_bytes']} bytes")
 
-        detail = atlas.describe(store, "2024-01")
+        detail = atlas.describe(store, "2024-01.nc")
         temperature = next(a for a in detail["arrays"] if a["name"] == "temperature")
         print(f"show     temperature {temperature['dtype']}{temperature['shape']} "
               f"stats={temperature['stats']}")
 
-        removed = atlas.remove(store, ["2024-02"])
+        removed = atlas.remove(store, ["2024-02.nc"])
         print(f"rm       {removed['removed']}, {removed['remaining']} remain")
 
         # Credentials and endpoints pass straight through to obstore:

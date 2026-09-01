@@ -160,9 +160,16 @@ first data read. A mismatch raises `CorruptCollection`.
 
 A decoded footer passes a check before use. Every dataset schema index must
 resolve. Every attribute key index must sit in the pool. Every annotated array
-position must exist. No segment may be empty. One check here costs less than a
-dangling index at every use site. It also turns a corrupt file into one clear
-error, and not a panic deep inside a read.
+position must exist. No segment may be empty. No dataset name may repeat.
+
+One check here costs less than a dangling index at every use site. It also
+turns a corrupt file into one clear error, and not a panic deep inside a read.
+
+The name check matters because a lookup by name resolves to the first dataset
+that carries it. A repeat would hide the second one, while `dataset_count`
+still counted it. The writer keeps a hash set of the names it handed out, and
+refuses a repeat. A duplicate on disk therefore means a damaged or foreign
+footer.
 
 ## Deletion mask
 

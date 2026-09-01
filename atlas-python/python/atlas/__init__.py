@@ -19,6 +19,7 @@ guide.
 """
 
 from ._atlas import __version__, init_tracing
+from ._log import log_to_file
 from ._ops import (
     AtlasError,
     create,
@@ -37,6 +38,7 @@ __all__ = [
     "describe",
     "info",
     "find_netcdf_files",
+    "log_to_file",
     "AtlasError",
     "SourceError",
     "init_tracing",

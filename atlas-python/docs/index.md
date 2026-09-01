@@ -10,9 +10,9 @@ atlas create /data/nc /data/collection
 
 ```text
 $ atlas ls /data/collection
-2024-01
-2024-02
-2024-03
+2024-01.nc
+2024-02.nc
+2024-03.nc
 ```
 
 ## The shape of it
@@ -60,8 +60,8 @@ atlas.list_datasets("s3://bucket/2024", region="eu-west-1")
 ## What `show` gives you
 
 ```text
-$ atlas show /data/collection 2024-01
-dataset 2024-01 {
+$ atlas show /data/collection 2024-01.nc
+dataset 2024-01.nc {
 dimensions:
 	lat = 4 ;
 	lon = 6 ;

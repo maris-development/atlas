@@ -72,6 +72,8 @@ struct WriterState {
     offset: u64,
     interner: Interner,
     entries: Vec<DatasetEntry>,
+    /// Every name handed to `add_dataset`. It refuses a repeat, and the hash
+    /// keeps that check flat as the collection grows.
     names: HashSet<String>,
     scratch: tempfile::TempDir,
     dataset_seq: u64,
@@ -172,6 +174,14 @@ impl AtlasWriter {
     }
 
     /// Begins a dataset. Call [`DatasetWriter::finish`] to commit it.
+    ///
+    /// A name is unique within a collection. A repeat returns
+    /// [`Error::DatasetAlreadyExists`]. The writer keeps the names in a hash
+    /// set, so the check costs the same for ten datasets and a million.
+    ///
+    /// The name holds from this call, not from
+    /// [`DatasetWriter::finish`]. An aborted dataset therefore keeps its name
+    /// reserved for the life of the writer.
     pub async fn add_dataset(&self, name: &str) -> Result<DatasetWriter> {
         validate_name(name)?;
         let mut state = self.state.lock().await;

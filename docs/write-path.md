@@ -102,6 +102,7 @@ container without a gap under concurrent staging.
 | What happens | Result |
 |---|---|
 | A drop or an abort of a `DatasetWriter` | That dataset never appears. The others stay |
+| A repeated dataset name | `DatasetAlreadyExists`. The name is reserved from `add_dataset` |
 | A failure in `define_array` or `write_array` | The same. Abandon that dataset, and keep the others |
 | A drop of the `AtlasWriter` before `finish` | No trailer. Nothing at the target opens |
 | A dead process during a write | The same. No trailer, and no collection |

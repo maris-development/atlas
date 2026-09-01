@@ -14,7 +14,7 @@
 //! form drops the field names, so [`FORMAT_VERSION`](super::FORMAT_VERSION)
 //! pins the field order. A change to any struct below is a format change.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use array_format::{ArrayStats, DType, StatValue};
 use indexmap::IndexMap;
@@ -166,8 +166,9 @@ impl CollectionFooter {
         Ok(footer)
     }
 
-    /// Rejects a footer whose indices do not resolve. One check here costs
-    /// less than a dangling index at every use site.
+    /// Rejects a footer whose indices do not resolve, or whose dataset names
+    /// repeat. One check here costs less than a dangling index at every use
+    /// site.
     fn validate(&self) -> Result<()> {
         if self.version != super::FORMAT_VERSION {
             return Err(Error::UnsupportedVersion {
@@ -175,7 +176,18 @@ impl CollectionFooter {
                 expected: super::FORMAT_VERSION,
             });
         }
+        // A name resolves to the first dataset that carries it. A repeat would
+        // therefore hide the second one from every lookup, while the counts
+        // still include it. The writer refuses a repeat, so one here means a
+        // damaged or foreign footer.
+        let mut seen: HashSet<&str> = HashSet::with_capacity(self.datasets.len());
         for (ordinal, ds) in self.datasets.iter().enumerate() {
+            if !seen.insert(ds.name.as_str()) {
+                return Err(Error::CorruptCollection(format!(
+                    "dataset name '{}' appears twice, the second time at ordinal {ordinal}",
+                    ds.name
+                )));
+            }
             let schema = self.schema_pool.get(ds.schema as usize).ok_or_else(|| {
                 Error::CorruptCollection(format!(
                     "dataset '{}' references schema {} but the pool holds {}",
@@ -669,6 +681,30 @@ mod tests {
             CollectionFooter::decode(&bytes),
             Err(Error::CorruptCollection(_))
         ));
+    }
+
+    #[test]
+    fn a_repeated_dataset_name_is_corruption() {
+        // Two datasets of one name make the second unreachable, because every
+        // lookup resolves to the first.
+        let f = footer_with(
+            vec![entry("a", 0, 8), entry("a", 0, 64)],
+            vec![schema(DType::Float32, vec![4])],
+        );
+        let bytes = f.encode().unwrap();
+        let err = CollectionFooter::decode(&bytes).unwrap_err();
+        assert!(matches!(err, Error::CorruptCollection(_)));
+        assert!(err.to_string().contains("appears twice"), "{err}");
+    }
+
+    #[test]
+    fn distinct_dataset_names_pass() {
+        let f = footer_with(
+            vec![entry("a", 0, 8), entry("b", 0, 64)],
+            vec![schema(DType::Float32, vec![4])],
+        );
+        let bytes = f.encode().unwrap();
+        assert_eq!(CollectionFooter::decode(&bytes).unwrap(), f);
     }
 
     #[test]

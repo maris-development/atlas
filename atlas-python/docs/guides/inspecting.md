@@ -7,7 +7,7 @@ fetches array data, so a catalogue of ten thousand datasets costs one request.
 
 ```python
 atlas.list_datasets("/data/collection")
-# ['2024-01', '2024-02', '2024-03']
+# ['2024-01.nc', '2024-02.nc', '2024-03.nc']
 ```
 
 ```bash
@@ -63,11 +63,11 @@ Use `describe` for the statistics of one dataset on its own.
 ## One dataset in detail: `describe` and `show`
 
 ```python
-atlas.describe("/data/collection", "2024-01")
+atlas.describe("/data/collection", "2024-01.nc")
 ```
 
 ```bash
-atlas show /data/collection 2024-01
+atlas show /data/collection 2024-01.nc
 ```
 
 The CLI prints it like `ncdump -h`. The library returns the structure. Both
@@ -78,7 +78,7 @@ attributes, the coordinate flag, and the statistics.
 `name` is a dataset name, or the NetCDF path the dataset came from:
 
 ```python
-atlas.describe(collection, "/data/nc/2024-01.nc")   # same as "2024-01"
+atlas.describe(collection, "/data/nc/2024-01.nc")   # same as "2024-01.nc"
 ```
 
 ### Statistics
@@ -117,7 +117,7 @@ The ingest records which variables were xarray coordinates, and reports them
 back:
 
 ```python
-detail = atlas.describe(collection, "2024-01")
+detail = atlas.describe(collection, "2024-01.nc")
 detail["coordinates"]              # ['lat', 'lon']
 [a["name"] for a in detail["arrays"] if a["is_coordinate"]]
 ```

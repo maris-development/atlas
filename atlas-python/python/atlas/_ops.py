@@ -13,6 +13,9 @@ from typing import Any, Iterable, Optional, Sequence
 from . import _atlas
 from . import _source
 from . import xarray as _xarray
+from ._log import describe_exception, get_logger
+
+_LOG = get_logger("ops")
 
 # Suffixes `create` treats as NetCDF. It scans a directory for these.
 NETCDF_SUFFIXES = (".nc", ".nc4", ".cdf", ".netcdf")
@@ -40,13 +43,16 @@ class AtlasError(RuntimeError):
 
 
 def dataset_name(path: "pathlib.Path | str") -> str:
-    """The dataset name of a NetCDF file. That is its stem.
+    """The dataset name of a NetCDF file. That is its file name, with suffix.
 
-    `/data/2024/jan.nc` becomes `jan`. This also takes a bare name, so a path
-    and a name give the same answer.
+    `/data/2024/jan.nc` becomes `jan.nc`. This also takes a bare name, so a
+    path and a name give the same answer.
+
+    The suffix stays because it tells two files apart. `jan.nc` and `jan.nc4`
+    are two datasets, not one duplicate.
     """
-    stem = pathlib.PurePath(str(path)).stem
-    return stem or str(path)
+    name = pathlib.PurePath(str(path)).name
+    return name or str(path)
 
 
 def find_netcdf_files(
@@ -96,28 +102,42 @@ def create(
     open_chunks: Any = "auto",
     chunk_size: str = DEFAULT_CHUNK_SIZE,
     on_error: str = "stop",
+    on_unsupported: str = "stop",
     progress: Optional[Any] = None,
     **store_options: Any,
 ) -> dict[str, Any]:
     """Builds a collection at `destination` from the NetCDF files in `directory`.
 
-    Each file becomes one dataset, named after the file stem. Nothing at
-    `destination` is readable until every file lands, with the footer. A
-    failure therefore leaves no half-built collection.
+    Each file becomes one dataset, named after the file. `2024-01.nc` becomes
+    `2024-01.nc`, suffix and all. Nothing at `destination` is readable until
+    every file lands, with the footer. A failure therefore leaves no half-built
+    collection.
 
     Each file opens with dask chunking, under `open_chunks="auto"` by default.
     A file far larger than memory then streams block by block. Those blocks
     also become the stored chunk shape of the arrays, unless `chunks` names
     one.
 
-    `on_error` is `"stop"` or `"skip"`. `"stop"` is the default, and abandons
-    the whole collection. `"skip"` records the failure and continues.
+    Two settings decide what a failure costs. Both default to `"stop"`.
+
+    `on_error` covers a whole file. `"stop"` abandons the collection. `"skip"`
+    records the failure and continues with the next file.
+
+    `on_unsupported` covers one array. `"stop"` fails the file, which
+    `on_error` then handles. `"skip"` leaves that array out, and the rest of
+    the dataset still lands.
+
     `progress` takes each file name as that file lands.
 
-    Returns a summary. How many datasets landed, and what the run skipped.
+    Returns a summary. How many datasets landed, which files the run skipped,
+    and which arrays it left out.
     """
     if on_error not in ("stop", "skip"):
         raise AtlasError(f"on_error must be 'stop' or 'skip', got {on_error!r}")
+    if on_unsupported not in ("stop", "skip"):
+        raise AtlasError(
+            f"on_unsupported must be 'stop' or 'skip', got {on_unsupported!r}"
+        )
 
     open_kwargs = _open_kwargs(open_chunks)
 
@@ -131,6 +151,8 @@ def create(
     names: set[str] = set()
     written: list[str] = []
     skipped: list[dict[str, str]] = []
+    skipped_arrays: list[dict[str, str]] = []
+    _LOG.info("ingesting %d file(s) into %s", len(files), _source.describe(destination))
 
     target = _source.resolve(destination, **store_options)
     # "auto" sizes its blocks against `array.chunk-size`. That value therefore
@@ -142,7 +164,9 @@ def create(
                 if name in names:
                     message = f"duplicate dataset name {name!r} from {path}"
                     if on_error == "stop":
+                        _LOG.error("%s", message)
                         raise AtlasError(message)
+                    _LOG.warning("skipping %s: %s", path, message)
                     skipped.append({"file": str(path), "error": message})
                     continue
 
@@ -150,10 +174,25 @@ def create(
                     # The write runs inside the `with`, so every block lands
                     # before the file closes.
                     with xr.open_dataset(path, **open_kwargs) as ds:
-                        _xarray._write_xarray_dataset(writer, ds, name, chunks, None)
+                        left_out = _xarray._write_xarray_dataset(
+                            writer, ds, name, chunks, None, on_unsupported
+                        )
+                    for item in left_out:
+                        _LOG.warning(
+                            "%s: skipped array %r of dtype %s: %s",
+                            path,
+                            item["array"],
+                            item["dtype"],
+                            item["error"],
+                        )
+                    skipped_arrays.extend(left_out)
                 except Exception as exc:
                     if on_error == "stop":
+                        _LOG.error("%s: %s", path, describe_exception(exc))
                         raise AtlasError(f"{path}: {exc}") from exc
+                    _LOG.warning(
+                        "skipping %s: %s", path, describe_exception(exc)
+                    )
                     skipped.append({"file": str(path), "error": str(exc)})
                     continue
 
@@ -162,10 +201,17 @@ def create(
                 if progress is not None:
                     progress(name)
 
+    _LOG.info(
+        "wrote %d dataset(s); skipped %d file(s) and %d array(s)",
+        len(written),
+        len(skipped),
+        len(skipped_arrays),
+    )
     return {
         "destination": _source.describe(destination),
         "written": written,
         "skipped": skipped,
+        "skipped_arrays": skipped_arrays,
         "dataset_count": len(written),
     }
 
@@ -183,8 +229,8 @@ def remove(
     """Removes datasets from a collection, in one call.
 
     Each entry of `targets` is a dataset name or a NetCDF file path. A path
-    reduces to its stem. The list that built the collection can therefore tear
-    part of it down.
+    reduces to its file name. The list that built the collection can therefore
+    tear part of it down.
 
     This updates the deletion mask beside the container. The container does not
     change, so this reclaims no space and moves no ordinal. Rewrite the

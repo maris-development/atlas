@@ -19,8 +19,8 @@ python atlas-python/examples/01_library.py
 atlas create /data/nc /data/collection
 atlas ls     /data/collection
 atlas info   /data/collection
-atlas show   /data/collection 2024-01
-atlas rm     /data/collection 2024-02 2024-03
+atlas show   /data/collection 2024-01.nc
+atlas rm     /data/collection 2024-02.nc 2024-03.nc
 ```
 
 See [The `atlas` command](cli.md).

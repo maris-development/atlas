@@ -47,9 +47,9 @@ for `ATLS`, and you get nothing.
 ## Ingest
 
 `create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf` files. It
-sorts them, and writes one dataset per file, named after the file stem. The
-sort makes the ordinals reproducible. Build the same directory twice, and every
-dataset lands at the same position.
+sorts them, and writes one dataset per file, named after the file. `2024-01.nc`
+becomes `2024-01.nc`, suffix and all. The sort makes the ordinals reproducible.
+Build the same directory twice, and every dataset lands at the same position.
 
 One writer does all of it. Nothing at the destination is readable until the
 last file lands, with the footer. A failure part-way leaves no collection. That
@@ -57,6 +57,31 @@ is the behaviour a job needs when it dies overnight.
 
 `on_error="skip"` trades that for progress. The result records each file that
 fails, and the rest continue.
+
+`on_unsupported` works one level down, at the array. Atlas stores no `bool`
+array, so a NetCDF file with one fails by default. `on_unsupported="skip"`
+leaves that array out of the schema and lands the rest of the dataset. Atlas
+resolves every dtype before it defines the first array, so a skip never leaves
+a half-written array behind. The result lists each one under
+`skipped_arrays`.
+
+## Logging
+
+Every module logs to the `atlas` logger, and the package attaches no handler of
+its own. A library user therefore sees nothing until they add one.
+
+`atlas.log_to_file(path)` attaches a file handler and returns it. The `atlas`
+command does the same for `--log-file PATH`. The file records each skipped
+file, each skipped array, and every error, with the reason and the source file
+name. It opens in append mode.
+
+`log_to_file` also captures Python warnings, such as the one about missing
+string cells. That moves them off stderr, because `logging.captureWarnings` is
+process-wide. A second call for a path that is already attached returns the
+handler it already has, so no line lands twice.
+
+The Rust core logs through `tracing`, which is separate. `init_tracing` sends
+that stream to stderr.
 
 ### The mapping
 
@@ -163,6 +188,6 @@ Array *values* come from the Rust API. See [read-path.md](read-path.md).
 | `CorruptCollection`, `CorruptMask`, `ObjectStore` | `RuntimeError` |
 
 An operation raises `AtlasError` for anything it can explain itself. An empty
-directory, a duplicate stem, or a dataset that is absent. It raises
+directory, a duplicate name, or a dataset that is absent. It raises
 `SourceError` when a URL does not resolve. The CLI turns both into a one-line
 message and exit code 1.

@@ -10,13 +10,13 @@ atlas create /data/nc /data/collection
 
 ```text
 Writing /data/collection
-  2024-01
-  2024-02
-  2024-03
+  2024-01.nc
+  2024-02.nc
+  2024-03.nc
 3 dataset(s) written to /data/collection
 ```
 
-Each file becomes one dataset, named after its stem. The result is one file:
+Each file becomes one dataset, named after the file. The result is one file:
 
 ```bash
 $ ls /data/collection
@@ -38,9 +38,9 @@ atlas.create("/data/nc", "/data/collection")
 
 ```bash
 $ atlas ls /data/collection
-2024-01
-2024-02
-2024-03
+2024-01.nc
+2024-02.nc
+2024-03.nc
 ```
 
 ```bash
@@ -72,8 +72,8 @@ The maximum comes from March. Removed datasets do not count.
 ## Inspect one dataset
 
 ```bash
-$ atlas show /data/collection 2024-01
-dataset 2024-01 {
+$ atlas show /data/collection 2024-01.nc
+dataset 2024-01.nc {
 dimensions:
 	lat = 4 ;
 	lon = 6 ;
@@ -103,7 +103,7 @@ footer holds those too, so to print them costs nothing extra.
 From Python, the same thing as a structure:
 
 ```python
-detail = atlas.describe("/data/collection", "2024-01")
+detail = atlas.describe("/data/collection", "2024-01.nc")
 detail["dimensions"]                                    # {'lat': 4, 'lon': 6}
 detail["coordinates"]                                   # ['lat', 'lon']
 {a["name"]: a["stats"] for a in detail["arrays"]}
@@ -112,8 +112,8 @@ detail["coordinates"]                                   # ['lat', 'lon']
 ## Remove
 
 ```bash
-$ atlas rm /data/collection 2024-02
-removed 1: 2024-02
+$ atlas rm /data/collection 2024-02.nc
+removed 1: 2024-02.nc
 2 dataset(s) remain
 ```
 
@@ -139,7 +139,7 @@ Not from Python. The Rust API reads array values:
 
 ```rust
 let atlas = Atlas::open_path("/data/collection").await?;
-let ds = atlas.dataset("2024-01")?;
+let ds = atlas.dataset("2024-01.nc")?;
 let window = ds.read_array::<f32>("temperature", vec![0, 0], vec![2, 3]).await?;
 ```
 

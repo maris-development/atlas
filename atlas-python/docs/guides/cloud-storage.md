@@ -51,8 +51,8 @@ store = obs.store.S3Store(
 
 atlas.create("/data/nc", store)
 atlas.list_datasets(store)
-atlas.describe(store, "2024-01")
-atlas.remove(store, ["2024-02"])
+atlas.describe(store, "2024-01.nc")
+atlas.remove(store, ["2024-02.nc"])
 atlas.info(store)
 ```
 

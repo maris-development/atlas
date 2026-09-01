@@ -20,6 +20,9 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional, Sequence
 import numpy as np
 
 from ._atlas import log_chunk_event as _log_chunk_event
+from ._log import get_logger as _get_logger
+
+_LOG = _get_logger("xarray")
 
 if TYPE_CHECKING:
     import xarray as xr
@@ -368,22 +371,56 @@ def _write_xarray_to_view(
     ds: "xr.Dataset",
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
-) -> None:
+    on_unsupported: str = "stop",
+) -> list[dict[str, str]]:
     """Fills an empty `DatasetWriter` from an xarray Dataset.
 
     Every coordinate and data variable becomes an atlas array. The coordinate
     names become ``_pyatlas_coords``, a JSON list. Every dataset attribute
     becomes a dataset-level attribute. The attributes of a variable become
     attributes of that variable's array.
+
+    Under `on_unsupported="skip"`, a variable of a dtype atlas cannot store
+    leaves the dataset instead of failing it. Returns one record per variable
+    it left out.
     """
+    if on_unsupported not in ("stop", "skip"):
+        raise ValueError(
+            f"on_unsupported must be 'stop' or 'skip', got {on_unsupported!r}"
+        )
+
     coord_names = [str(n) for n in ds.coords.keys()]
+    order = coord_names + [str(n) for n in ds.data_vars.keys()]
+
+    # Resolve every dtype before the first `define_array`. An array that is
+    # already defined cannot leave the schema, so a mid-write skip would store
+    # a half-written array. This settles the whole dataset up front.
+    dtypes: dict[str, str] = {}
+    skipped: list[dict[str, str]] = []
+    for var_name in order:
+        try:
+            dtypes[var_name] = _np_to_atlas_dtype(np.dtype(ds[var_name].dtype))
+        except NotImplementedError as exc:
+            if on_unsupported == "stop":
+                raise
+            # The caller logs this. It knows the file the dataset came from.
+            skipped.append(
+                {
+                    "array": var_name,
+                    "dtype": str(ds[var_name].dtype),
+                    "error": str(exc),
+                }
+            )
+
+    order = [n for n in order if n in dtypes]
+    coord_names = [n for n in coord_names if n in dtypes]
 
     # Write the coords first, then the data_vars. Atlas ignores the order. The
     # order makes the on-disk layout predictable.
-    for var_name in coord_names + [str(n) for n in ds.data_vars.keys()]:
+    for var_name in order:
         var = ds[var_name]
         np_dtype = np.dtype(var.dtype)
-        atlas_dtype = _np_to_atlas_dtype(np_dtype)
+        atlas_dtype = dtypes[var_name]
         dims = [str(d) for d in var.dims]
         shape = [int(s) for s in var.shape]
 
@@ -456,12 +493,13 @@ def _write_xarray_to_view(
             )
 
         if n_filled_strings:
-            warnings.warn(
+            message = (
                 f"{var_name!r}: replaced {n_filled_strings} missing string "
                 f"cell(s) (None/NaN) with {str_fill!r}. Atlas cannot store "
-                f"a missing string as null",
-                stacklevel=2,
+                f"a missing string as null"
             )
+            _LOG.warning("%s", message)
+            warnings.warn(message, stacklevel=2)
 
         # Each variable attribute becomes a real per-array attribute in the
         # collection footer. `_FillValue` is the exception. It became the fill.
@@ -474,8 +512,10 @@ def _write_xarray_to_view(
         encoded = _encode_attr_value(attr_val)
         writer.set_attribute(_sanitize_str(str(attr_key)), encoded)
 
-    # A marker. A read uses it to tell a coordinate from a data variable.
+    # A marker. A read uses it to tell a coordinate from a data variable. A
+    # skipped coordinate is not in the list, because it is not in the dataset.
     writer.set_attribute(_COORDS_ATTR, json.dumps(coord_names))
+    return skipped
 
 
 def _write_xarray_dataset(
@@ -484,17 +524,30 @@ def _write_xarray_dataset(
     name: str,
     chunks: Optional[dict[str, Sequence[int]]] = None,
     fill_value: Any = None,
-) -> None:
+    on_unsupported: str = "stop",
+) -> list[dict[str, str]]:
     """Writes an ``xarray.Dataset`` into an open writer, under ``name``.
 
     This is atomic. A dataset reaches the container only when it finishes. A
-    failure part-way, such as an unsupported dtype, aborts the dataset. The
-    collection then never sees it.
+    failure part-way aborts the dataset, and the collection never sees it.
+
+    Under `on_unsupported="skip"`, a variable of a dtype atlas cannot store
+    leaves the dataset, and the rest of it still lands. Returns one record per
+    variable it left out, each tagged with the dataset name.
     """
     dataset_writer = writer.add_dataset(name)
     try:
-        _write_xarray_to_view(dataset_writer, ds, chunks=chunks, fill_value=fill_value)
+        skipped = _write_xarray_to_view(
+            dataset_writer,
+            ds,
+            chunks=chunks,
+            fill_value=fill_value,
+            on_unsupported=on_unsupported,
+        )
     except BaseException:
         dataset_writer.abort()
         raise
     dataset_writer.finish()
+    for record in skipped:
+        record["dataset"] = name
+    return skipped

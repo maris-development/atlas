@@ -12,6 +12,7 @@ The same operations are on the command line: ``atlas create``, ``atlas rm``,
 ``atlas ls``, ``atlas show``, ``atlas info``.
 """
 
+import logging
 import os
 import pathlib
 from typing import Any, Callable, Iterable, Optional, Sequence, Union
@@ -25,6 +26,7 @@ __all__ = [
     "describe",
     "info",
     "find_netcdf_files",
+    "log_to_file",
     "AtlasError",
     "SourceError",
     "init_tracing",
@@ -61,14 +63,16 @@ def create(
     open_chunks: Union[str, dict[str, int], None] = "auto",
     chunk_size: str = "128MiB",
     on_error: str = "stop",
+    on_unsupported: str = "stop",
     progress: Optional[Callable[[str], None]] = None,
     **store_options: Any,
 ) -> dict[str, Any]:
     """Builds a collection at ``destination`` from the NetCDF files in ``directory``.
 
-    Each file becomes one dataset, named after its stem. ``jan_2024.nc``
-    becomes ``jan_2024``. The files land in sorted order, which fixes the
-    ordinals of the collection.
+    Each file becomes one dataset, named after the file. ``jan_2024.nc``
+    becomes ``jan_2024.nc``, suffix and all. The suffix tells two files apart,
+    so ``jan.nc`` and ``jan.nc4`` are two datasets. The files land in sorted
+    order, which fixes the ordinals of the collection.
 
     Nothing at ``destination`` is readable until every file lands, with the
     footer. A failure part-way leaves no collection, not a partial one.
@@ -107,18 +111,24 @@ def create(
             defaults to ``"128MiB"``.
         on_error: ``"stop"`` is the default. It abandons the whole collection
             on the first bad file. ``"skip"`` records that file and continues.
+        on_unsupported: What one array of an unsupported dtype costs.
+            ``"stop"`` is the default, and fails the file, which ``on_error``
+            then handles. ``"skip"`` leaves that array out, and the rest of
+            the dataset still lands.
         progress: Takes each dataset name as that dataset lands.
         **store_options: These reach the obstore constructor for a remote
             destination. ``region``, ``endpoint``, and ``skip_signature``.
 
     Returns:
-        ``{"destination", "written", "skipped", "dataset_count"}``. ``skipped``
-        holds ``{"file", "error"}`` for each file that failed under
-        ``on_error="skip"``.
+        ``{"destination", "written", "skipped", "skipped_arrays",
+        "dataset_count"}``. ``skipped`` holds ``{"file", "error"}`` for each
+        file that failed under ``on_error="skip"``. ``skipped_arrays`` holds
+        ``{"dataset", "array", "dtype", "error"}`` for each array left out
+        under ``on_unsupported="skip"``.
 
     Raises:
         AtlasError: The directory holds no NetCDF file. Or two files share a
-            stem. Or ``open_chunks`` names no known mode. Or a file failed
+            name. Or ``open_chunks`` names no known mode. Or a file failed
             under ``on_error="stop"``.
         SourceError: ``destination`` did not resolve.
     """
@@ -134,8 +144,8 @@ def remove(
     """Removes datasets from a collection, in one call.
 
     Each entry of ``targets`` is a dataset name or a NetCDF path. A path
-    reduces to its stem. The list that built a collection can therefore tear
-    part of it down.
+    reduces to its file name. The list that built a collection can therefore
+    tear part of it down.
 
     This writes the deletion mask beside the container. The container does not
     change. This reclaims no space, and moves no ordinal. Rebuild the
@@ -230,5 +240,30 @@ def init_tracing(filter: Optional[str] = ...) -> None:
     """Installs a Rust ``tracing`` subscriber that writes to stderr.
 
     Set ``ATLAS_LOG`` or ``RUST_LOG``, and this runs on import.
+    """
+    ...
+
+def log_to_file(
+    path: Union[str, os.PathLike[str]],
+    *,
+    level: int = ...,
+    capture_warnings: bool = True,
+) -> logging.Handler:
+    """Writes the atlas log to ``path``. Returns the handler it attached.
+
+    The file gets every record at ``level`` and above. That covers each file an
+    ingest skips, each array it skips, and every error an operation reports.
+    It opens in append mode, so a second run adds to it.
+
+    With ``capture_warnings``, a Python warning goes to the same file. That
+    also moves it off stderr, because ``logging.captureWarnings`` is
+    process-wide.
+
+    Atlas logs to the ``atlas`` logger and adds no handler of its own, so
+    attach your own handler instead when you want a different destination.
+    The Rust core logs through ``tracing``, which :func:`init_tracing` sends to
+    stderr.
+
+    The ``atlas`` command takes ``--log-file PATH`` for the same thing.
     """
     ...

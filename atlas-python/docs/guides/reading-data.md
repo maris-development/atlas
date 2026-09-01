@@ -4,10 +4,10 @@ Python reads the **metadata** of a collection. It reads no array value.
 
 ```python
 atlas.list_datasets(collection)            # ✓
-atlas.describe(collection, "jan")          # ✓  types, shapes, attrs, stats
+atlas.describe(collection, "jan.nc")       # ✓  types, shapes, attrs, stats
 atlas.info(collection)                     # ✓  counts, size, collection stats
 
-atlas.read_array(collection, "jan", "t")   # ✗ does not exist
+atlas.read_array(collection, "jan.nc", "t")  # ✗ does not exist
 ```
 
 ## Why
@@ -27,7 +27,7 @@ It is enough to build a catalogue, to check an ingest, or to choose the
 datasets worth a fetch:
 
 ```python
-detail = atlas.describe(collection, "2024-01")
+detail = atlas.describe(collection, "2024-01.nc")
 
 detail["dimensions"]     # {'lat': 4, 'lon': 6}
 detail["coordinates"]    # ['lat', 'lon']
@@ -99,7 +99,7 @@ simpler than anything else here.
 reader opens it:
 
 ```python
-start, end = atlas.describe(collection, "2024-01")["segment_range"]
+start, end = atlas.describe(collection, "2024-01.nc")["segment_range"]
 blob = open(f"{collection}/data.atlas", "rb").read()[start:end]
 open("2024-01.af", "wb").write(blob)
 ```

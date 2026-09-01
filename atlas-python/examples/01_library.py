@@ -46,8 +46,8 @@ def main() -> None:
         collection = str(Path(tmp) / "collection")
 
         # ── 1. create ────────────────────────────────────────────────
-        # One dataset per file, named after the file stem. Nothing is
-        # readable until every file lands, with the footer.
+        # One dataset per file, named after the file. Nothing is readable
+        # until every file lands, with the footer.
         print("Files to ingest:", [p.name for p in atlas.find_netcdf_files(source)])
         # Each file opens with dask chunking. A file far larger than memory
         # therefore streams block by block. `chunk_size` is the block budget,
@@ -74,7 +74,7 @@ def main() -> None:
         print(f"  interned schemas: {summary['interned_schemas']}\n")
 
         # ── 4. describe ──────────────────────────────────────────────
-        detail = atlas.describe(collection, "2024-01")
+        detail = atlas.describe(collection, "2024-01.nc")
         print(f"dataset {detail['name']} (ordinal {detail['ordinal']}):")
         print(f"  dimensions: {detail['dimensions']}")
         print(f"  coordinates: {detail['coordinates']}")
@@ -92,7 +92,7 @@ def main() -> None:
 
         # ── 5. remove ────────────────────────────────────────────────
         # Several at once, by name or by the file each came from.
-        removed = atlas.remove(collection, ["2024-02", source / "2024-03.nc"])
+        removed = atlas.remove(collection, ["2024-02.nc", source / "2024-03.nc"])
         print(f"removed {removed['removed']}, {removed['remaining']} remain")
         print("datasets now:", atlas.list_datasets(collection))
 

@@ -28,14 +28,14 @@ def test_create_reports_what_it_wrote(capsys, netcdf_dir, tmp_path):
     assert code == 0
     assert "3 dataset(s) written" in out
     # Progress goes to stderr, so a pipe still reads stdout.
-    assert "2024-01" in err
+    assert "2024-01.nc" in err
     assert (dest / "data.atlas").exists()
 
 
 def test_create_is_quiet_when_asked(capsys, netcdf_dir, tmp_path):
     code, out, err = run(capsys, "create", str(netcdf_dir), str(tmp_path / "c"), "-q")
     assert code == 0
-    assert "2024-01" not in err
+    assert "2024-01.nc" not in err
 
 
 def test_create_accepts_a_codec(capsys, netcdf_dir, tmp_path):
@@ -51,7 +51,7 @@ def test_create_accepts_chunks_as_json(capsys, netcdf_dir, tmp_path):
         capsys, "create", str(netcdf_dir), str(dest),
         "--chunks", '{"temperature": [2, 3]}', "-q",
     )
-    code, out, _ = run(capsys, "show", str(dest), "2024-01", "--json")
+    code, out, _ = run(capsys, "show", str(dest), "2024-01.nc", "--json")
     arrays = {a["name"]: a for a in json.loads(out)["arrays"]}
     assert arrays["temperature"]["chunk_shape"] == [2, 3]
 
@@ -68,13 +68,13 @@ def test_create_chunk_size_controls_the_stored_chunk_shape(capsys, tmp_path):
 
     run(capsys, "create", str(src), str(tmp_path / "small"),
         "--chunk-size", "1MiB", "-q")
-    code, out, _ = run(capsys, "show", str(tmp_path / "small"), "big", "--json")
+    code, out, _ = run(capsys, "show", str(tmp_path / "small"), "big.nc", "--json")
     chunked = json.loads(out)["arrays"][0]["chunk_shape"]
     assert chunked != [1024, 1024]
 
     run(capsys, "create", str(src), str(tmp_path / "large"),
         "--chunk-size", "64MiB", "-q")
-    code, out, _ = run(capsys, "show", str(tmp_path / "large"), "big", "--json")
+    code, out, _ = run(capsys, "show", str(tmp_path / "large"), "big.nc", "--json")
     assert json.loads(out)["arrays"][0]["chunk_shape"] == [1024, 1024]
 
 
@@ -112,18 +112,71 @@ def test_create_on_an_empty_directory_fails(capsys, tmp_path):
     assert "no NetCDF files" in err
 
 
+def test_skip_unsupported_keeps_the_rest_of_the_dataset(capsys, tmp_path):
+    import numpy as np
+    import xarray as xr
+
+    d = tmp_path / "nc"
+    d.mkdir()
+    xr.Dataset(
+        data_vars={
+            "temperature": xr.DataArray(np.arange(6, dtype=np.float32), dims=["x"]),
+            "flag": xr.DataArray(np.array([True, False] * 3), dims=["x"]),
+        },
+        coords={"x": ("x", np.arange(6, dtype=np.float64))},
+    ).to_netcdf(d / "a.nc")
+
+    # Without the flag the file fails.
+    code, _, err = run(capsys, "create", str(d), str(tmp_path / "c1"), "-q")
+    assert code == 1
+    assert "bool" in err
+
+    code, out, err = run(
+        capsys, "create", str(d), str(tmp_path / "c2"), "-q", "--skip-unsupported"
+    )
+    assert code == 0
+    assert "1 dataset(s) written" in out
+    assert "skipped array a.nc/flag (bool)" in err
+
+    code, out, _ = run(capsys, "show", str(tmp_path / "c2"), "a.nc", "--json")
+    assert [a["name"] for a in json.loads(out)["arrays"]] == ["x", "temperature"]
+
+
+def test_log_file_captures_the_run(capsys, netcdf_dir, tmp_path):
+    log = tmp_path / "run.log"
+    code, _, _ = run(
+        capsys, "create", str(netcdf_dir), str(tmp_path / "c"), "-q",
+        "--log-file", str(log),
+    )
+    assert code == 0
+    text = log.read_text()
+    assert "ingesting 3 file(s)" in text
+    assert "wrote 3 dataset(s)" in text
+
+
+def test_log_file_records_a_failure(capsys, tmp_path):
+    log = tmp_path / "run.log"
+    code, _, err = run(
+        capsys, "ls", str(tmp_path / "nope"), "--log-file", str(log)
+    )
+    assert code == 1
+    # The message reaches both stderr and the file.
+    assert "atlas:" in err
+    assert "ERROR" in log.read_text()
+
+
 # ── ls ───────────────────────────────────────────────────────────────
 
 
 def test_ls_prints_one_name_per_line(capsys, collection):
     code, out, _ = run(capsys, "ls", str(collection))
     assert code == 0
-    assert out.split() == ["2024-01", "2024-02", "2024-03"]
+    assert out.split() == ["2024-01.nc", "2024-02.nc", "2024-03.nc"]
 
 
 def test_ls_json_is_a_list(capsys, collection):
     code, out, _ = run(capsys, "ls", str(collection), "--json")
-    assert json.loads(out) == ["2024-01", "2024-02", "2024-03"]
+    assert json.loads(out) == ["2024-01.nc", "2024-02.nc", "2024-03.nc"]
 
 
 def test_ls_on_a_non_collection_fails_clearly(capsys, tmp_path):
@@ -137,20 +190,20 @@ def test_ls_on_a_non_collection_fails_clearly(capsys, tmp_path):
 
 
 def test_rm_removes_several_in_one_call(capsys, collection):
-    code, out, _ = run(capsys, "rm", str(collection), "2024-01", "2024-03")
+    code, out, _ = run(capsys, "rm", str(collection), "2024-01.nc", "2024-03.nc")
     assert code == 0
     assert "removed 2" in out
     assert "1 dataset(s) remain" in out
 
     _, listing, _ = run(capsys, "ls", str(collection))
-    assert listing.split() == ["2024-02"]
+    assert listing.split() == ["2024-02.nc"]
 
 
 def test_rm_accepts_netcdf_paths(capsys, collection, netcdf_dir):
     code, _, _ = run(capsys, "rm", str(collection), str(netcdf_dir / "2024-02.nc"))
     assert code == 0
     _, listing, _ = run(capsys, "ls", str(collection))
-    assert listing.split() == ["2024-01", "2024-03"]
+    assert listing.split() == ["2024-01.nc", "2024-03.nc"]
 
 
 def test_rm_of_something_absent_fails(capsys, collection):
@@ -169,10 +222,10 @@ def test_rm_missing_ok_succeeds(capsys, collection):
 
 
 def test_show_renders_ncdump_style(capsys, collection):
-    code, out, _ = run(capsys, "show", str(collection), "2024-01")
+    code, out, _ = run(capsys, "show", str(collection), "2024-01.nc")
     assert code == 0
 
-    assert out.startswith("dataset 2024-01 {")
+    assert out.startswith("dataset 2024-01.nc {")
     assert out.rstrip().endswith("}")
     assert "dimensions:" in out
     assert "lat = 4 ;" in out
@@ -185,7 +238,7 @@ def test_show_renders_ncdump_style(capsys, collection):
 
 
 def test_show_includes_array_statistics(capsys, collection):
-    code, out, _ = run(capsys, "show", str(collection), "2024-01")
+    code, out, _ = run(capsys, "show", str(collection), "2024-01.nc")
     assert "// stats:" in out
     # temperature is arange(24) + 1.
     assert "count=24" in out
@@ -197,14 +250,14 @@ def test_show_notes_a_non_default_chunk_shape(capsys, netcdf_dir, tmp_path):
     dest = tmp_path / "c"
     run(capsys, "create", str(netcdf_dir), str(dest),
         "--chunks", '{"temperature": [2, 3]}', "-q")
-    code, out, _ = run(capsys, "show", str(dest), "2024-01")
+    code, out, _ = run(capsys, "show", str(dest), "2024-01.nc")
     assert "_ChunkShape = [2, 3]" in out
 
 
 def test_show_json_carries_the_full_structure(capsys, collection):
-    code, out, _ = run(capsys, "show", str(collection), "2024-01", "--json")
+    code, out, _ = run(capsys, "show", str(collection), "2024-01.nc", "--json")
     d = json.loads(out)
-    assert d["name"] == "2024-01"
+    assert d["name"] == "2024-01.nc"
     assert d["dimensions"] == {"lat": 4, "lon": 6}
     arrays = {a["name"]: a for a in d["arrays"]}
     assert arrays["temperature"]["stats"]["row_count"] == 24
@@ -240,7 +293,7 @@ def test_info_shows_collection_wide_stats(capsys, collection):
 
 
 def test_info_reports_removals(capsys, collection):
-    run(capsys, "rm", str(collection), "2024-01")
+    run(capsys, "rm", str(collection), "2024-01.nc")
     code, out, _ = run(capsys, "info", str(collection))
     assert "datasets          2" in out
     assert "removed           1" in out

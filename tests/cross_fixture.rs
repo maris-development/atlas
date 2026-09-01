@@ -29,9 +29,9 @@ fn fixture_dir() -> PathBuf {
 #[tokio::test]
 async fn the_python_written_fixture_holds_the_values_python_wrote() {
     let atlas = Atlas::open_path(fixture_dir()).await.unwrap();
-    assert_eq!(atlas.list_datasets(), vec!["grid", "grid_copy"]);
+    assert_eq!(atlas.list_datasets(), vec!["grid.nc", "grid_copy.nc"]);
 
-    let grid = atlas.dataset("grid").unwrap();
+    let grid = atlas.dataset("grid.nc").unwrap();
     // Coordinates first, then data variables, in the order xarray gives.
     assert_eq!(
         grid.list_arrays(),
@@ -96,7 +96,7 @@ async fn the_python_written_fixture_holds_the_values_python_wrote() {
 #[tokio::test]
 async fn the_python_written_fixture_carries_its_metadata() {
     let atlas = Atlas::open_path(fixture_dir()).await.unwrap();
-    let grid = atlas.dataset("grid").unwrap();
+    let grid = atlas.dataset("grid.nc").unwrap();
 
     assert_eq!(
         grid.array_meta("temperature").unwrap().dtype,
@@ -154,8 +154,8 @@ async fn the_python_written_fixture_carries_its_metadata() {
 #[tokio::test]
 async fn the_two_python_datasets_share_one_interned_schema() {
     let atlas = Atlas::open_path(fixture_dir()).await.unwrap();
-    let grid = atlas.dataset("grid").unwrap();
-    let copy = atlas.dataset("grid_copy").unwrap();
+    let grid = atlas.dataset("grid.nc").unwrap();
+    let copy = atlas.dataset("grid_copy.nc").unwrap();
 
     // Two equal files under one `chunks=` setting produce both datasets. They
     // declare the same arrays, so the footer stores that schema once.
@@ -175,7 +175,7 @@ async fn the_two_python_datasets_share_one_interned_schema() {
 #[tokio::test]
 async fn the_python_written_fixture_carries_statistics() {
     let atlas = Atlas::open_path(fixture_dir()).await.unwrap();
-    let grid = atlas.dataset("grid").unwrap();
+    let grid = atlas.dataset("grid.nc").unwrap();
 
     // The staging step computes these. The footer then stores them.
     let temperature = grid.array_stats("temperature").unwrap();

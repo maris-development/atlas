@@ -4,6 +4,8 @@ These tests check no array *value*, because Python cannot read one. The Rust
 suite checks the bytes these tests write. See ``tests/cross_fixture.rs``.
 """
 
+import logging
+
 import numpy as np
 import pytest
 import xarray as xr
@@ -21,18 +23,18 @@ def test_create_makes_one_dataset_per_netcdf_file(netcdf_dir, tmp_path):
     result = atlas.create(netcdf_dir, str(dest))
 
     assert result["dataset_count"] == 3
-    assert result["written"] == ["2024-01", "2024-02", "2024-03"]
+    assert result["written"] == ["2024-01.nc", "2024-02.nc", "2024-03.nc"]
     assert result["skipped"] == []
     # One file. A mask appears only after a remove.
     assert sorted(p.name for p in dest.iterdir()) == ["data.atlas"]
 
 
-def test_datasets_are_named_after_the_file_stem(netcdf_dir, tmp_path):
+def test_datasets_are_named_after_the_whole_file_name(netcdf_dir, tmp_path):
     atlas.create(netcdf_dir, str(tmp_path / "c"))
     assert atlas.list_datasets(str(tmp_path / "c")) == [
-        "2024-01",
-        "2024-02",
-        "2024-03",
+        "2024-01.nc",
+        "2024-02.nc",
+        "2024-03.nc",
     ]
 
 
@@ -58,7 +60,7 @@ def test_create_finds_files_recursively_when_asked(tmp_path):
     assert [p.name for p in found] == ["jan.nc"]
 
     atlas.create(tmp_path / "nc", str(tmp_path / "c"), recursive=True)
-    assert atlas.list_datasets(str(tmp_path / "c")) == ["jan"]
+    assert atlas.list_datasets(str(tmp_path / "c")) == ["jan.nc"]
 
 
 def test_an_empty_directory_is_an_error(tmp_path):
@@ -72,7 +74,7 @@ def test_a_missing_directory_is_an_error(tmp_path):
         atlas.create(tmp_path / "nope", str(tmp_path / "c"))
 
 
-def test_two_files_with_the_same_stem_collide(tmp_path):
+def test_two_files_with_the_same_name_collide(tmp_path):
     src = tmp_path / "nc"
     (src / "a").mkdir(parents=True)
     (src / "b").mkdir()
@@ -108,16 +110,16 @@ def test_skip_errors_keeps_the_good_files(tmp_path):
     )
 
     result = atlas.create(src, str(tmp_path / "c"), on_error="skip")
-    assert result["written"] == ["good"]
+    assert result["written"] == ["good.nc"]
     assert len(result["skipped"]) == 1
     assert result["skipped"][0]["file"].endswith("bad.nc")
-    assert atlas.list_datasets(str(tmp_path / "c")) == ["good"]
+    assert atlas.list_datasets(str(tmp_path / "c")) == ["good.nc"]
 
 
 def test_progress_is_called_per_dataset(netcdf_dir, tmp_path):
     seen = []
     atlas.create(netcdf_dir, str(tmp_path / "c"), progress=seen.append)
-    assert seen == ["2024-01", "2024-02", "2024-03"]
+    assert seen == ["2024-01.nc", "2024-02.nc", "2024-03.nc"]
 
 
 @pytest.mark.parametrize("codec", ["zstd", "lz4", "none"])
@@ -126,6 +128,132 @@ def test_every_codec_round_trips(netcdf_dir, tmp_path, codec):
     atlas.create(netcdf_dir, str(dest), codec=codec)
     assert atlas.info(str(dest))["codec"] == codec
     assert len(atlas.list_datasets(str(dest))) == 3
+
+
+# ── unsupported dtypes ───────────────────────────────────────────────
+
+
+@pytest.fixture
+def netcdf_dir_with_a_bool(tmp_path):
+    """One file holding a bool variable, which atlas cannot store."""
+    d = tmp_path / "nc"
+    d.mkdir()
+    xr.Dataset(
+        data_vars={
+            "temperature": xr.DataArray(np.arange(6, dtype=np.float32), dims=["x"]),
+            "flag": xr.DataArray(np.array([True, False] * 3), dims=["x"]),
+        },
+        coords={"x": ("x", np.arange(6, dtype=np.float64))},
+        attrs={"source": "test"},
+    ).to_netcdf(d / "a.nc")
+    return d
+
+
+def test_an_unsupported_dtype_fails_the_file_by_default(
+    netcdf_dir_with_a_bool, tmp_path
+):
+    with pytest.raises(atlas.AtlasError, match="bool"):
+        atlas.create(netcdf_dir_with_a_bool, str(tmp_path / "c"))
+
+
+def test_skipping_an_unsupported_array_keeps_the_rest_of_the_dataset(
+    netcdf_dir_with_a_bool, tmp_path
+):
+    dest = tmp_path / "c"
+    result = atlas.create(netcdf_dir_with_a_bool, str(dest), on_unsupported="skip")
+
+    assert result["written"] == ["a.nc"]
+    assert result["skipped"] == []
+    assert result["skipped_arrays"] == [
+        {
+            "array": "flag",
+            "dtype": "bool",
+            "error": result["skipped_arrays"][0]["error"],
+            "dataset": "a.nc",
+        }
+    ]
+    assert "not supported" in result["skipped_arrays"][0]["error"]
+
+    # The supported arrays and the attributes all landed.
+    detail = atlas.describe(str(dest), "a.nc")
+    assert [a["name"] for a in detail["arrays"]] == ["x", "temperature"]
+    assert detail["attributes"] == {"source": "test"}
+
+
+def test_a_skipped_array_leaves_no_partial_array(netcdf_dir_with_a_bool, tmp_path):
+    dest = tmp_path / "c"
+    atlas.create(netcdf_dir_with_a_bool, str(dest), on_unsupported="skip")
+    # The name is absent from the schema, not present and empty.
+    assert "flag" not in atlas.info(str(dest))["distinct_arrays"]
+
+
+def test_an_unknown_on_unsupported_mode_is_refused(netcdf_dir, tmp_path):
+    with pytest.raises(atlas.AtlasError, match="on_unsupported"):
+        atlas.create(netcdf_dir, str(tmp_path / "c"), on_unsupported="sometimes")
+
+
+def test_a_clean_ingest_reports_no_skipped_arrays(netcdf_dir, tmp_path):
+    result = atlas.create(netcdf_dir, str(tmp_path / "c"), on_unsupported="skip")
+    assert result["skipped_arrays"] == []
+
+
+# ── the log file ─────────────────────────────────────────────────────
+
+
+def test_the_log_file_records_a_skipped_array(netcdf_dir_with_a_bool, tmp_path):
+    log = tmp_path / "ingest.log"
+    handler = atlas.log_to_file(log)
+    try:
+        atlas.create(netcdf_dir_with_a_bool, str(tmp_path / "c"), on_unsupported="skip")
+    finally:
+        logging.getLogger("atlas").removeHandler(handler)
+        handler.close()
+
+    text = log.read_text()
+    assert "WARNING" in text
+    # The line names the file, the array, the dtype, and the reason.
+    assert "a.nc" in text
+    assert "skipped array 'flag' of dtype bool" in text
+    assert "is not supported by atlas" in text
+    assert "wrote 1 dataset(s)" in text
+
+
+def test_the_log_file_records_a_skipped_file(netcdf_dir, tmp_path):
+    (netcdf_dir / "broken.nc").write_bytes(b"not a netcdf file")
+    log = tmp_path / "ingest.log"
+    handler = atlas.log_to_file(log)
+    try:
+        result = atlas.create(netcdf_dir, str(tmp_path / "c"), on_error="skip")
+    finally:
+        logging.getLogger("atlas").removeHandler(handler)
+        handler.close()
+
+    assert len(result["skipped"]) == 1
+    text = log.read_text()
+    assert "skipping" in text and "broken.nc" in text
+
+
+def test_the_log_file_appends_across_runs(netcdf_dir, tmp_path):
+    log = tmp_path / "ingest.log"
+    for run in (1, 2):
+        handler = atlas.log_to_file(log)
+        try:
+            atlas.create(netcdf_dir, str(tmp_path / f"c{run}"))
+        finally:
+            logging.getLogger("atlas").removeHandler(handler)
+            handler.close()
+    assert log.read_text().count("ingesting 3 file(s)") == 2
+
+
+def test_atlas_logs_nowhere_by_default(netcdf_dir, tmp_path, caplog):
+    # The library adds no handler of its own, so a host application decides.
+    assert logging.getLogger("atlas").handlers == [
+        h for h in logging.getLogger("atlas").handlers if isinstance(h, logging.NullHandler)
+    ]
+    with caplog.at_level(logging.INFO, logger="atlas"):
+        atlas.create(netcdf_dir, str(tmp_path / "c"))
+    # Records still exist for anyone who attaches a handler.
+    assert any("ingesting" in r.message for r in caplog.records)
 
 
 # ── chunked ingest ───────────────────────────────────────────────────
@@ -158,7 +286,7 @@ def test_a_large_variable_streams_in_blocks(tmp_path, monkeypatch):
     # No single block is the whole array.
     assert all(shape != (rows, cols) for _, shape in blocks)
 
-    stored = atlas.describe(str(tmp_path / "c"), "big")["arrays"][0]
+    stored = atlas.describe(str(tmp_path / "c"), "big.nc")["arrays"][0]
     assert stored["shape"] == [rows, cols]
     assert stored["chunk_shape"] != [rows, cols]
 
@@ -172,7 +300,7 @@ def test_chunk_size_controls_the_stored_chunk_shape(tmp_path):
 
     def chunk_shape(dest, **kwargs):
         atlas.create(src, str(dest), **kwargs)
-        return atlas.describe(str(dest), "big")["arrays"][0]["chunk_shape"]
+        return atlas.describe(str(dest), "big.nc")["arrays"][0]["chunk_shape"]
 
     small = chunk_shape(tmp_path / "small", chunk_size="1MiB")
     large = chunk_shape(tmp_path / "large", chunk_size="64MiB")
@@ -186,7 +314,7 @@ def test_chunk_size_controls_the_stored_chunk_shape(tmp_path):
 def test_small_files_still_land_as_a_single_chunk(netcdf_dir, tmp_path):
     """Auto chunking must not split an array that fits with room to spare."""
     atlas.create(netcdf_dir, str(tmp_path / "c"))
-    for array in atlas.describe(str(tmp_path / "c"), "2024-01")["arrays"]:
+    for array in atlas.describe(str(tmp_path / "c"), "2024-01.nc")["arrays"]:
         assert array["chunk_shape"] == array["shape"], array["name"]
 
 
@@ -227,7 +355,7 @@ def test_open_chunks_native_uses_the_files_own_chunking(tmp_path):
     )
 
     atlas.create(src, str(tmp_path / "c"), open_chunks="native")
-    stored = atlas.describe(str(tmp_path / "c"), "big")["arrays"][0]
+    stored = atlas.describe(str(tmp_path / "c"), "big.nc")["arrays"][0]
     assert stored["chunk_shape"] == [128, 256]
 
 
@@ -239,7 +367,7 @@ def test_open_chunks_accepts_an_explicit_dict(tmp_path):
     ).to_netcdf(src / "big.nc")
 
     atlas.create(src, str(tmp_path / "c"), open_chunks={"y": 128, "x": 256})
-    stored = atlas.describe(str(tmp_path / "c"), "big")["arrays"][0]
+    stored = atlas.describe(str(tmp_path / "c"), "big.nc")["arrays"][0]
     assert stored["chunk_shape"] == [128, 256]
 
 
@@ -252,7 +380,7 @@ def test_an_unknown_open_chunks_mode_is_rejected(netcdf_dir, tmp_path, bad):
 def test_explicit_chunks_reach_the_stored_array(netcdf_dir, tmp_path):
     dest = tmp_path / "c"
     atlas.create(netcdf_dir, str(dest), chunks={"temperature": [2, 3]})
-    arrays = {a["name"]: a for a in atlas.describe(str(dest), "2024-01")["arrays"]}
+    arrays = {a["name"]: a for a in atlas.describe(str(dest), "2024-01.nc")["arrays"]}
     assert arrays["temperature"]["chunk_shape"] == [2, 3]
 
 
@@ -265,28 +393,28 @@ def test_on_error_must_be_a_known_mode(netcdf_dir, tmp_path):
 
 
 def test_remove_takes_several_datasets_in_one_call(collection):
-    result = atlas.remove(str(collection), ["2024-01", "2024-03"])
-    assert result["removed"] == ["2024-01", "2024-03"]
+    result = atlas.remove(str(collection), ["2024-01.nc", "2024-03.nc"])
+    assert result["removed"] == ["2024-01.nc", "2024-03.nc"]
     assert result["remaining"] == 1
-    assert atlas.list_datasets(str(collection)) == ["2024-02"]
+    assert atlas.list_datasets(str(collection)) == ["2024-02.nc"]
 
 
 def test_remove_accepts_the_netcdf_path_it_came_from(collection, netcdf_dir):
     atlas.remove(str(collection), [netcdf_dir / "2024-02.nc"])
-    assert atlas.list_datasets(str(collection)) == ["2024-01", "2024-03"]
+    assert atlas.list_datasets(str(collection)) == ["2024-01.nc", "2024-03.nc"]
 
 
 def test_remove_writes_a_mask_and_leaves_the_container_alone(collection):
     before = (collection / "data.atlas").stat().st_size
-    atlas.remove(str(collection), ["2024-01"])
+    atlas.remove(str(collection), ["2024-01.nc"])
     assert (collection / "data.atlas").stat().st_size == before
     assert (collection / "deleted.mask").exists()
 
 
 def test_removals_accumulate_across_calls(collection):
-    atlas.remove(str(collection), ["2024-01"])
-    atlas.remove(str(collection), ["2024-03"])
-    assert atlas.list_datasets(str(collection)) == ["2024-02"]
+    atlas.remove(str(collection), ["2024-01.nc"])
+    atlas.remove(str(collection), ["2024-03.nc"])
+    assert atlas.list_datasets(str(collection)) == ["2024-02.nc"]
 
 
 def test_removing_many_datasets_is_one_call(collection, monkeypatch):
@@ -301,17 +429,17 @@ def test_removing_many_datasets_is_one_call(collection, monkeypatch):
         return original(self, names)
 
     monkeypatch.setattr(_atlas.Atlas, "delete_datasets", spy)
-    result = atlas.remove(str(collection), ["2024-01", "2024-03"])
+    result = atlas.remove(str(collection), ["2024-01.nc", "2024-03.nc"])
 
-    assert calls == [["2024-01", "2024-03"]]
-    assert result["removed"] == ["2024-01", "2024-03"]
+    assert calls == [["2024-01.nc", "2024-03.nc"]]
+    assert result["removed"] == ["2024-01.nc", "2024-03.nc"]
     assert result["remaining"] == 1
-    assert atlas.list_datasets(str(collection)) == ["2024-02"]
+    assert atlas.list_datasets(str(collection)) == ["2024-02.nc"]
 
 
 def test_a_repeated_target_counts_once(collection):
-    result = atlas.remove(str(collection), ["2024-01", "2024-01"])
-    assert result["removed"] == ["2024-01"]
+    result = atlas.remove(str(collection), ["2024-01.nc", "2024-01.nc"])
+    assert result["removed"] == ["2024-01.nc"]
     assert result["remaining"] == 2
 
 
@@ -321,8 +449,8 @@ def test_removing_something_absent_is_an_error(collection):
 
 
 def test_missing_ok_reports_instead_of_raising(collection):
-    result = atlas.remove(str(collection), ["2024-01", "nope"], missing_ok=True)
-    assert result["removed"] == ["2024-01"]
+    result = atlas.remove(str(collection), ["2024-01.nc", "nope"], missing_ok=True)
+    assert result["removed"] == ["2024-01.nc"]
     assert result["missing"] == ["nope"]
 
 
@@ -332,9 +460,9 @@ def test_removing_nothing_is_an_error(collection):
 
 
 def test_ordinals_do_not_shift_when_a_dataset_is_removed(collection):
-    before = atlas.describe(str(collection), "2024-03")["ordinal"]
-    atlas.remove(str(collection), ["2024-01"])
-    assert atlas.describe(str(collection), "2024-03")["ordinal"] == before
+    before = atlas.describe(str(collection), "2024-03.nc")["ordinal"]
+    atlas.remove(str(collection), ["2024-01.nc"])
+    assert atlas.describe(str(collection), "2024-03.nc")["ordinal"] == before
 
 
 # ── list ─────────────────────────────────────────────────────────────
@@ -342,8 +470,8 @@ def test_ordinals_do_not_shift_when_a_dataset_is_removed(collection):
 
 def test_list_applies_the_mask(collection):
     assert len(atlas.list_datasets(str(collection))) == 3
-    atlas.remove(str(collection), ["2024-02"])
-    assert atlas.list_datasets(str(collection)) == ["2024-01", "2024-03"]
+    atlas.remove(str(collection), ["2024-02.nc"])
+    assert atlas.list_datasets(str(collection)) == ["2024-01.nc", "2024-03.nc"]
 
 
 def test_listing_a_non_collection_fails_clearly(tmp_path):
@@ -356,9 +484,9 @@ def test_listing_a_non_collection_fails_clearly(tmp_path):
 
 
 def test_describe_reports_the_whole_dataset(collection):
-    d = atlas.describe(str(collection), "2024-01")
+    d = atlas.describe(str(collection), "2024-01.nc")
 
-    assert d["name"] == "2024-01"
+    assert d["name"] == "2024-01.nc"
     assert d["ordinal"] == 0
     assert d["dimensions"] == {"lat": 4, "lon": 6}
     assert sorted(d["coordinates"]) == ["lat", "lon", "time"]
@@ -371,7 +499,7 @@ def test_describe_reports_the_whole_dataset(collection):
 
 
 def test_describe_reports_each_array(collection):
-    arrays = {a["name"]: a for a in atlas.describe(str(collection), "2024-01")["arrays"]}
+    arrays = {a["name"]: a for a in atlas.describe(str(collection), "2024-01.nc")["arrays"]}
     assert set(arrays) == {"lat", "lon", "time", "temperature", "counts", "station"}
 
     temp = arrays["temperature"]
@@ -391,7 +519,7 @@ def test_describe_reports_each_array(collection):
 
 
 def test_describe_reports_the_statistics_recorded_at_write_time(collection):
-    arrays = {a["name"]: a for a in atlas.describe(str(collection), "2024-01")["arrays"]}
+    arrays = {a["name"]: a for a in atlas.describe(str(collection), "2024-01.nc")["arrays"]}
 
     # temperature is arange(24) + 1. That gives 1..24, with nothing missing.
     temp = arrays["temperature"]["stats"]
@@ -411,7 +539,7 @@ def test_describe_reports_the_statistics_recorded_at_write_time(collection):
 
 
 def test_describe_accepts_a_netcdf_path(collection, netcdf_dir):
-    by_name = atlas.describe(str(collection), "2024-01")
+    by_name = atlas.describe(str(collection), "2024-01.nc")
     by_path = atlas.describe(str(collection), netcdf_dir / "2024-01.nc")
     # Two NaN fill values never compare equal. Compare everything else.
     for key in ("name", "ordinal", "segment_range", "dimensions", "coordinates",
@@ -428,9 +556,9 @@ def test_describing_a_missing_dataset_is_an_error(collection):
 
 
 def test_describing_a_removed_dataset_is_an_error(collection):
-    atlas.remove(str(collection), ["2024-01"])
+    atlas.remove(str(collection), ["2024-01.nc"])
     with pytest.raises(atlas.AtlasError, match="removed"):
-        atlas.describe(str(collection), "2024-01")
+        atlas.describe(str(collection), "2024-01.nc")
 
 
 # ── info ─────────────────────────────────────────────────────────────
@@ -474,7 +602,7 @@ def test_info_folds_array_stats_over_the_collection(collection):
         "row_count": 72,
     }
     # One dataset holds a third of that.
-    one = atlas.describe(str(collection), "2024-01")
+    one = atlas.describe(str(collection), "2024-01.nc")
     temperature = next(a for a in one["arrays"] if a["name"] == "temperature")
     assert temperature["stats"]["row_count"] == 24
     assert temperature["stats"]["max"] == 24.0
@@ -486,7 +614,7 @@ def test_info_folds_array_stats_over_the_collection(collection):
 
 
 def test_info_stats_leave_out_a_removed_dataset(collection):
-    atlas.remove(str(collection), ["2024-01"])
+    atlas.remove(str(collection), ["2024-01.nc"])
     stats = atlas.info(str(collection))["array_stats"]
     # January held the lowest temperature, so the minimum rises.
     assert stats["temperature"]["min"] == 2.0
@@ -494,7 +622,7 @@ def test_info_stats_leave_out_a_removed_dataset(collection):
 
 
 def test_info_counts_removals_separately(collection):
-    atlas.remove(str(collection), ["2024-01"])
+    atlas.remove(str(collection), ["2024-01.nc"])
     i = atlas.info(str(collection))
     assert i["dataset_count"] == 2
     assert i["deleted_count"] == 1
@@ -526,6 +654,7 @@ def test_the_public_surface_is_exactly_the_five_operations():
     # Everything else exported is a helper or an error type, not an operation.
     assert set(atlas.__all__) - operations == {
         "find_netcdf_files",
+        "log_to_file",
         "AtlasError",
         "SourceError",
         "init_tracing",

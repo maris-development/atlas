@@ -15,8 +15,9 @@ atlas create /data/nc /data/collection
 ## What happens
 
 `create` collects every file that matches `.nc`, `.nc4`, `.cdf`, or `.netcdf`.
-It **sorts** them, and writes one dataset per file, named after the file stem.
-`2024-01.nc` becomes the dataset `2024-01`.
+It **sorts** them, and writes one dataset per file, named after the file.
+`2024-01.nc` becomes the dataset `2024-01.nc`. The suffix is part of the name,
+so `jan.nc` and `jan.nc4` are two datasets.
 
 The sort matters. An ordinal comes from the write order, so a sorted ingest
 makes it reproducible. Rebuild the same directory, and every dataset lands at
@@ -39,7 +40,7 @@ That is what you usually want. When it is not:
 
 ```python
 result = atlas.create("/data/nc", dest, on_error="skip")
-result["written"]   # ['2024-01', '2024-03']
+result["written"]   # ['2024-01.nc', '2024-03.nc']
 result["skipped"]   # [{'file': '.../2024-02.nc', 'error': '...'}]
 ```
 
@@ -50,6 +51,78 @@ atlas create /data/nc /data/collection --skip-errors
 A skipped file leaves no trace in the collection. The writer moves to the next
 one. The CLI exits `1` when it skipped anything, so a pipeline sees that. It
 still writes the collection.
+
+## One bad array, not one bad file
+
+`on_error` works at the granularity of a file. One variable of an unsupported
+dtype therefore costs the whole dataset. `on_unsupported="skip"` narrows that
+to the array:
+
+```python
+result = atlas.create("/data/nc", dest, on_unsupported="skip")
+result["skipped_arrays"]
+# [{'array': 'flag', 'dtype': 'bool', 'error': '...', 'dataset': '2024-01.nc'}]
+```
+
+```bash
+atlas create /data/nc /data/collection --skip-unsupported
+```
+
+The rest of the dataset lands as usual: every other array, every attribute,
+and the dataset itself. The skipped name is absent from the schema, so no
+empty array stands in for it.
+
+Atlas resolves every dtype before it defines the first array. A skip therefore
+never leaves a half-written array behind.
+
+The two settings compose. `--skip-unsupported` handles the array atlas cannot
+store. `--skip-errors` handles the file that fails for any other reason.
+
+See [Supported dtypes](dtypes.md) for what atlas can store.
+
+## The log file
+
+Both kinds of skip go to a log file, with the reason:
+
+```bash
+atlas create /data/nc /data/collection --skip-unsupported --log-file ingest.log
+```
+
+```text
+2026-09-01 14:30:41 INFO    atlas.ops: ingesting 2 file(s) into /data/collection
+2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/broken.nc: ValueError: did not find a match ...
+2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/buoy.nc: skipped array 'flag' of dtype bool: numpy dtype dtype('bool') is not supported by atlas (supported: ...)
+2026-09-01 14:30:41 INFO    atlas.ops: wrote 1 dataset(s); skipped 1 file(s) and 1 array(s)
+```
+
+Each line names the file, so a thousand-file ingest stays readable. The file
+opens in append mode, so a repeat run adds to it.
+
+From the library:
+
+```python
+import atlas
+
+atlas.log_to_file("ingest.log")
+atlas.create("/data/nc", dest, on_unsupported="skip")
+```
+
+Atlas logs to the `atlas` logger and attaches no handler of its own, so attach
+your own to send the records somewhere else:
+
+```python
+import logging
+
+logging.getLogger("atlas").addHandler(logging.StreamHandler())
+logging.getLogger("atlas").setLevel(logging.INFO)
+```
+
+`log_to_file` also captures Python warnings, such as the one about missing
+string cells. That moves them off stderr, because `logging.captureWarnings` is
+process-wide.
+
+The Rust core logs separately, through `tracing`. `atlas.init_tracing()` sends
+that stream to stderr. See [Installation](../installation.md).
 
 ## Chunking and memory
 
@@ -114,12 +187,12 @@ alone. A one-chunk array reads whole, or not at all.
 Confirm what landed:
 
 ```python
-arrays = {a["name"]: a for a in atlas.describe(dest, "2024-01")["arrays"]}
+arrays = {a["name"]: a for a in atlas.describe(dest, "2024-01.nc")["arrays"]}
 arrays["temperature"]["chunk_shape"]
 ```
 
 ```bash
-atlas show dest 2024-01 | grep _ChunkShape
+atlas show dest 2024-01.nc | grep _ChunkShape
 ```
 
 ### The writer's own memory
@@ -157,12 +230,13 @@ turns it off.
 | Situation | Result |
 |---|---|
 | Directory holds no NetCDF files | `AtlasError` |
-| Two files share a stem | `AtlasError`. A dataset name must be unique |
-| A variable has a dtype atlas cannot store | `AtlasError` (or skipped) |
+| Two files share a name | `AtlasError`. A dataset name must be unique |
+| A variable has a dtype atlas cannot store | `AtlasError`, or one skipped array under `--skip-unsupported` |
+| Any other bad file | `AtlasError`, or one skipped file under `--skip-errors` |
 | Destination URL cannot be resolved | `SourceError` |
 
-Two files with one stem surprise people. `a/jan.nc` and `b/jan.nc` both want
-the name `jan`. Rename one, or ingest them into two collections.
+Two files with one name surprise people. `a/jan.nc` and `b/jan.nc` both want
+the name `jan.nc`. Rename one, or ingest them into two collections.
 
 For the dtype rules, see [Supported dtypes](dtypes.md).
 

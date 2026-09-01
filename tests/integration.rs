@@ -967,6 +967,31 @@ async fn duplicate_names_are_refused() {
 }
 
 #[tokio::test]
+async fn a_name_stays_reserved_after_an_aborted_dataset() {
+    let tmp = tempfile::tempdir().unwrap();
+    let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+        .await
+        .unwrap();
+
+    // This dataset never enters the container.
+    let ds = w.add_dataset("d").await.unwrap();
+    drop(ds);
+
+    // Its name is still spoken for. The reservation starts at add_dataset,
+    // not at finish.
+    assert!(matches!(
+        w.add_dataset("d").await,
+        Err(Error::DatasetAlreadyExists(_))
+    ));
+
+    w.add_dataset("e").await.unwrap().finish().await.unwrap();
+    w.finish().await.unwrap();
+
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+    assert_eq!(atlas.list_datasets(), vec!["e"]);
+}
+
+#[tokio::test]
 async fn invalid_names_are_refused() {
     let tmp = tempfile::tempdir().unwrap();
     let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())

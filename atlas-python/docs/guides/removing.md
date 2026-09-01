@@ -1,11 +1,11 @@
 # Removing datasets
 
 ```python
-atlas.remove("/data/collection", ["2024-02", "2024-03"])
+atlas.remove("/data/collection", ["2024-02.nc", "2024-03.nc"])
 ```
 
 ```bash
-atlas rm /data/collection 2024-02 2024-03
+atlas rm /data/collection 2024-02.nc 2024-03.nc
 ```
 
 One call, whatever the number of datasets. A name is a dataset name, or the
@@ -66,7 +66,7 @@ mask holds a sorted set of ordinals.
 The same holds on the command line, up to the argument limit of your shell:
 
 ```bash
-atlas rm /data/collection 2024-01 2024-02 2024-03
+atlas rm /data/collection 2024-01.nc 2024-02.nc 2024-03.nc
 ```
 
 For a list too long for one command line, call `atlas.remove` from Python.
@@ -83,8 +83,8 @@ atlas.remove(collection, ["nope"])
 `missing_ok` reports it instead:
 
 ```python
-result = atlas.remove(collection, ["2024-01", "nope"], missing_ok=True)
-result["removed"]   # ['2024-01']
+result = atlas.remove(collection, ["2024-01.nc", "nope"], missing_ok=True)
+result["removed"]   # ['2024-01.nc']
 result["missing"]   # ['nope']
 ```
 

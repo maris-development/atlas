@@ -20,7 +20,9 @@ import json
 import sys
 from typing import Any, Optional, Sequence
 
-from . import __version__, _ops, _source
+from . import __version__, _log, _ops, _source
+
+_LOG = _log.get_logger("cli")
 
 
 # ── formatting helpers ───────────────────────────────────────────────
@@ -160,12 +162,19 @@ def cmd_create(args: argparse.Namespace) -> int:
         open_chunks=open_chunks,
         chunk_size=args.chunk_size,
         on_error="skip" if args.skip_errors else "stop",
+        on_unsupported="skip" if args.skip_unsupported else "stop",
         progress=progress,
         **_store_options(args),
     )
 
     def render(r: dict[str, Any]) -> None:
         print(f"{r['dataset_count']} dataset(s) written to {r['destination']}")
+        for item in r["skipped_arrays"]:
+            print(
+                f"  skipped array {item['dataset']}/{item['array']} "
+                f"({item['dtype']})",
+                file=sys.stderr,
+            )
         for item in r["skipped"]:
             print(f"  skipped {item['file']}: {item['error']}", file=sys.stderr)
 
@@ -296,7 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
         "create",
         help="build a collection from a directory of NetCDF files",
         description=(
-            "Each NetCDF file becomes one dataset, named after the file stem. "
+            "Each NetCDF file becomes one dataset, named after the file. "
             "Nothing at the destination is readable until every file lands. A "
             "failure therefore leaves no half-built collection."
         ),
@@ -340,6 +349,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-errors",
         action="store_true",
         help="skip files that fail instead of abandoning the collection",
+    )
+    p.add_argument(
+        "--skip-unsupported",
+        action="store_true",
+        help=(
+            "leave out an array whose dtype atlas cannot store, instead of "
+            "failing the file. The rest of the dataset still lands"
+        ),
     )
     p.add_argument("-q", "--quiet", action="store_true", help="do not list files as they are written")
     p.set_defaults(func=cmd_create)
@@ -397,6 +414,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     for sub in subs.choices.values():
         sub.add_argument("--json", action="store_true", help="emit JSON instead of text")
+        sub.add_argument(
+            "--log-file",
+            metavar="PATH",
+            help="append errors and warnings to this file",
+        )
         _add_store_flags(sub)
 
     return parser
@@ -404,19 +426,31 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.log_file:
+        try:
+            _log.log_to_file(args.log_file)
+        except OSError as exc:
+            print(f"atlas: cannot open log file: {exc}", file=sys.stderr)
+            return 1
+        _LOG.info("atlas %s: %s", __version__, " ".join(argv or sys.argv[1:]))
     try:
         return args.func(args)
     except (_ops.AtlasError, _source.SourceError) as exc:
-        print(f"atlas: {exc}", file=sys.stderr)
-        return 1
+        return _fail(exc)
     except KeyError as exc:
-        print(f"atlas: not found: {exc.args[0] if exc.args else exc}", file=sys.stderr)
-        return 1
+        return _fail(exc, f"not found: {exc.args[0] if exc.args else exc}")
     except (ValueError, OSError, RuntimeError) as exc:
-        print(f"atlas: {exc}", file=sys.stderr)
-        return 1
+        return _fail(exc)
     except BrokenPipeError:  # `atlas ls ... | head`
         return 0
+
+
+def _fail(exc: BaseException, message: Optional[str] = None) -> int:
+    """Reports one error on stderr and in the log. Returns the exit code."""
+    text = message or str(exc)
+    _LOG.error("%s", _log.describe_exception(exc))
+    print(f"atlas: {text}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

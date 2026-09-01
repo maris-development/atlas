@@ -62,7 +62,7 @@ fill of the array, and not as an attribute.
 Check what landed:
 
 ```python
-arrays = {a["name"]: a for a in atlas.describe(collection, "2024-01")["arrays"]}
+arrays = {a["name"]: a for a in atlas.describe(collection, "2024-01.nc")["arrays"]}
 arrays["temperature"]["fill_value"]
 ```
 
@@ -86,7 +86,10 @@ array data, not to the attributes. They come through unchanged:
 | `list[...]`, `fixed_size_list[..., N]` | Not exposed yet |
 
 A NetCDF file with a boolean variable fails the ingest. Store it as `uint8`,
-and write the convention down.
+and write the convention down. To keep the rest of that file, pass
+`--skip-unsupported`, or `on_unsupported="skip"`. That leaves out the one array
+and lands everything else. See
+[Creating a collection](creating.md#one-bad-array-not-one-bad-file).
 
 All four work as an **attribute** value, which is where they usually appear.
 
@@ -100,7 +103,7 @@ Some xarray attributes are no scalar. A nested dict, a ragged list, and a numpy
 array each encode as JSON on the way in. `describe` decodes them again:
 
 ```python
-atlas.describe(collection, "2024-01")["attributes"]
+atlas.describe(collection, "2024-01.nc")["attributes"]
 # {'month': 1, 'bounds': [1.0, 2.0], 'nested': {'a': 1}}
 ```
 

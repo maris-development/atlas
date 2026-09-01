@@ -1,10 +1,29 @@
 """Shared fixtures. A directory of NetCDF files, and a collection from it."""
 
+import logging
+
 import numpy as np
 import pytest
 import xarray as xr
 
 import atlas
+
+
+@pytest.fixture(autouse=True)
+def isolate_atlas_logging():
+    """Keeps a log handler one test attached out of the next test.
+
+    `atlas.log_to_file` and `atlas --log-file` both add a handler and leave it
+    in place. That is right for a one-shot process, and wrong inside a suite.
+    """
+    logger = logging.getLogger("atlas")
+    before, level = list(logger.handlers), logger.level
+    yield
+    for handler in list(logger.handlers):
+        if handler not in before:
+            logger.removeHandler(handler)
+            handler.close()
+    logger.setLevel(level)
 
 
 def make_dataset(month: int) -> xr.Dataset:
@@ -34,7 +53,7 @@ def make_dataset(month: int) -> xr.Dataset:
 
 @pytest.fixture
 def netcdf_dir(tmp_path):
-    """Three NetCDF files. Their names give a predictable stem order."""
+    """Three NetCDF files. Their names sort in a predictable order."""
     d = tmp_path / "nc"
     d.mkdir()
     for month in (1, 2, 3):

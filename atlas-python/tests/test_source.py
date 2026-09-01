@@ -72,12 +72,12 @@ def test_every_operation_works_through_an_obstore_handle(netcdf_dir, tmp_path):
     created = atlas.create(netcdf_dir, store)
     assert created["dataset_count"] == 3
 
-    assert atlas.list_datasets(store) == ["2024-01", "2024-02", "2024-03"]
+    assert atlas.list_datasets(store) == ["2024-01.nc", "2024-02.nc", "2024-03.nc"]
 
-    described = atlas.describe(store, "2024-02")
+    described = atlas.describe(store, "2024-02.nc")
     assert described["dimensions"] == {"lat": 4, "lon": 6}
     arrays = {a["name"]: a for a in described["arrays"]}
     assert arrays["temperature"]["stats"]["row_count"] == 24
 
-    assert atlas.remove(store, ["2024-01"])["remaining"] == 2
+    assert atlas.remove(store, ["2024-01.nc"])["remaining"] == 2
     assert atlas.info(store)["deleted_count"] == 1

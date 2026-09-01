@@ -35,6 +35,10 @@ import atlas
     options:
         heading_level: 3
 
+::: atlas.log_to_file
+    options:
+        heading_level: 3
+
 ::: atlas.init_tracing
     options:
         heading_level: 3

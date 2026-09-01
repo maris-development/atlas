@@ -16,8 +16,27 @@ A `<collection>` is a local path or a URL: `s3://bucket/prefix`, `gs://...`,
 `pip install "atlas-python[cloud]"`. See
 [Cloud storage](guides/cloud-storage.md).
 
-Every subcommand takes `--json`, and the remote flags `--region`,
-`--endpoint`, and `--anonymous`.
+Every subcommand takes `--json` and `--log-file PATH`, plus the remote flags
+`--region`, `--endpoint`, and `--anonymous`.
+
+## Logging
+
+`--log-file PATH` appends every error and warning to a file, with the reason:
+
+```bash
+$ atlas create /data/nc /data/collection --skip-unsupported --log-file ingest.log
+$ cat ingest.log
+2026-09-01 14:30:41 INFO    atlas.cli: atlas 0.16.1: create /data/nc ...
+2026-09-01 14:30:41 INFO    atlas.ops: ingesting 2 file(s) into /data/collection
+2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/buoy.nc: skipped array 'flag' of dtype bool: numpy dtype dtype('bool') is not supported by atlas (supported: ...)
+2026-09-01 14:30:41 INFO    atlas.ops: wrote 1 dataset(s); skipped 0 file(s) and 1 array(s)
+```
+
+The file opens in append mode. Each line names the file it came from, so a
+large ingest stays readable.
+
+This is separate from `ATLAS_LOG`, which turns on the Rust `tracing` stream to
+stderr.
 
 ## create
 
@@ -25,9 +44,9 @@ Every subcommand takes `--json`, and the remote flags `--region`,
 atlas create /data/nc /data/collection
 ```
 
-Each NetCDF file becomes one dataset, named after its stem. `2024-01.nc`
-becomes `2024-01`. The files land in sorted order, which makes the ordinals of
-a collection reproducible.
+Each NetCDF file becomes one dataset, named after the file. `2024-01.nc`
+becomes `2024-01.nc`, suffix and all. The files land in sorted order, which
+makes the ordinals of a collection reproducible.
 
 Nothing at the destination is readable until every file lands, with the footer.
 A failure part-way leaves no collection, and not a partial one.
@@ -40,9 +59,32 @@ A failure part-way leaves no collection, and not a partial one.
 | `--open-chunks MODE` | How files are read: `auto`, `native`, `none`, or a JSON dict |
 | `--chunks JSON` | Override the stored chunk shape, `'{"temperature": [64, 64]}'` |
 | `--skip-errors` | Skip files that fail instead of abandoning the collection |
+| `--skip-unsupported` | Leave out an array of an unsupported dtype, and keep the rest of the dataset |
 | `-q`, `--quiet` | Do not list a file as it lands |
 
 Progress goes to stderr, so a pipe still reads stdout.
+
+### Unsupported dtypes
+
+Atlas cannot store every numpy dtype. `bool` is the common case. By default one
+such variable fails the whole file:
+
+```bash
+$ atlas create /data/nc /data/collection
+atlas: /data/nc/buoy.nc: numpy dtype dtype('bool') is not supported by atlas ...
+```
+
+`--skip-unsupported` narrows that to the one array:
+
+```bash
+$ atlas create /data/nc /data/collection --skip-unsupported
+  skipped array buoy/flag (bool)
+1 dataset(s) written to /data/collection
+```
+
+Every other array of that dataset lands, with its attributes. `--json` reports
+the skipped arrays under `skipped_arrays`, with the dataset, the dtype, and the
+reason. See [Supported dtypes](guides/dtypes.md).
 
 ### Large files
 
@@ -88,7 +130,7 @@ atlas create /data/nc s3://bucket/2024 --chunk-size 64MiB --region eu-west-1
 ## rm
 
 ```bash
-atlas rm /data/collection 2024-02 2024-03
+atlas rm /data/collection 2024-02.nc 2024-03.nc
 ```
 
 This removes several datasets in one call. A name is a dataset name, or the
@@ -114,9 +156,9 @@ error.
 
 ```bash
 $ atlas ls /data/collection
-2024-01
-2024-02
-2024-03
+2024-01.nc
+2024-02.nc
+2024-03.nc
 ```
 
 One name per line, in write order. A removed dataset does not appear. This
@@ -131,8 +173,8 @@ atlas ls /data/collection --json | jq .    # as a JSON array
 ## show
 
 ```bash
-$ atlas show /data/collection 2024-01
-dataset 2024-01 {
+$ atlas show /data/collection 2024-01.nc
+dataset 2024-01.nc {
 dimensions:
 	lat = 4 ;
 	lon = 6 ;

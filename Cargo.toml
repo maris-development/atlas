@@ -5,7 +5,7 @@ members = ["atlas-python"]
 # Registry name on crates.io (`atlas` is taken). The library is still
 # imported as `atlas` — see `[lib]` below.
 name = "atlas-rust"
-version = "0.16.0"
+version = "0.16.1"
 edition = "2024"
 description = "Single-file immutable store for thousands of N-dimensional datasets, local or on object storage."
 license = "Apache-2.0"

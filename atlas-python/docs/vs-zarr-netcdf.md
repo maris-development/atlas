@@ -107,7 +107,7 @@ layout and access cost, not in bytes saved.
 
 ```rust
 let atlas = Atlas::open_path("/data/collection").await?;
-let ds = atlas.dataset("2024-01")?;
+let ds = atlas.dataset("2024-01.nc")?;
 let window = ds.read_array::<f32>("temperature", vec![1, 3], vec![2, 2]).await?;
 ```
 
