@@ -47,6 +47,47 @@ To run the test suite:
 pytest atlas-python/tests/ -v
 ```
 
+## The `atlas` command is not found
+
+`pip install` puts the `atlas` script in the script directory of the
+environment it installed into. The shell finds it only when that directory is
+on `PATH`.
+
+Run the command through Python instead. This form needs no `PATH` entry, so it
+works everywhere the package imports:
+
+```bash
+python -m atlas --version
+python -m atlas ls /data/collection
+```
+
+To fix the `PATH` itself, first find where the script landed:
+
+```bash
+pip show -f atlas-python | grep -i bin
+python -c "import sysconfig; print(sysconfig.get_path('scripts'))"
+```
+
+Three causes cover almost every case:
+
+- **`pip install --user`.** The script goes to `~/.local/bin`. Many
+  distributions leave that off `PATH`. Add it:
+  `export PATH="$HOME/.local/bin:$PATH"`.
+- **A virtual environment nobody activated.** Run `source .venv/bin/activate`,
+  or call `.venv/bin/atlas` directly.
+- **Two Pythons.** `pip` and `python` resolve to different environments. Use
+  `python -m pip install atlas-python` to install into the interpreter you
+  actually run.
+
+Confirm the package itself is sound:
+
+```bash
+python -c "import atlas; print(atlas.__version__, atlas.__file__)"
+```
+
+A version and a path mean the install worked, and only the script lookup
+failed.
+
 ## Optional: cloud storage (S3, GCS, Azure)
 
 Install the `cloud` extra to open or create an atlas store on S3, GCS, Azure

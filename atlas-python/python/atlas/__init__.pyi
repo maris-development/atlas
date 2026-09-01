@@ -57,7 +57,7 @@ def create(
     directory: Union[str, os.PathLike[str]],
     destination: Source,
     *,
-    recursive: bool = False,
+    recursive: bool = True,
     codec: str = "zstd",
     chunks: Optional[dict[str, Sequence[int]]] = None,
     open_chunks: Union[str, dict[str, int], None] = "auto",
@@ -69,10 +69,14 @@ def create(
 ) -> dict[str, Any]:
     """Builds a collection at ``destination`` from the NetCDF files in ``directory``.
 
+    The scan descends into every subdirectory. Pass ``recursive=False`` for the
+    top directory alone.
+
     Each file becomes one dataset, named after the file. ``jan_2024.nc``
     becomes ``jan_2024.nc``, suffix and all. The suffix tells two files apart,
-    so ``jan.nc`` and ``jan.nc4`` are two datasets. The files land in sorted
-    order, which fixes the ordinals of the collection.
+    so ``jan.nc`` and ``jan.nc4`` are two datasets. A name carries no
+    directory, so two files of one name in two subdirectories collide. The
+    files land in sorted order, which fixes the ordinals of the collection.
 
     Nothing at ``destination`` is readable until every file lands, with the
     footer. A failure part-way leaves no collection, not a partial one.
@@ -85,7 +89,8 @@ def create(
         directory: Where the NetCDF files are.
         destination: Where to write the collection. A local path, or a URL for
             object storage.
-        recursive: Descend into the subdirectories. Off by default.
+        recursive: Descend into the subdirectories. On by default. Set it
+            false for the top directory alone.
         codec: Block compression. ``"zstd"`` is the default. ``"lz4"`` and
             ``"none"`` are the others. Each block records its own codec, so a
             reader needs no argument.
@@ -225,9 +230,11 @@ def info(source: Source, **store_options: Any) -> dict[str, Any]:
     ...
 
 def find_netcdf_files(
-    directory: Union[str, os.PathLike[str]], recursive: bool = False
+    directory: Union[str, os.PathLike[str]], recursive: bool = True
 ) -> list[pathlib.Path]:
     """NetCDF files in ``directory``, sorted. :func:`create` ingests these.
+
+    The walk descends into every subdirectory, as :func:`create` does.
 
     Call it to see what a ``create`` call picks up, before you run that call.
 

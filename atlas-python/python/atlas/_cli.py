@@ -156,7 +156,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     result = _ops.create(
         args.directory,
         args.destination,
-        recursive=args.recursive,
+        recursive=not args.no_recursive,
         codec=args.codec,
         chunks=chunks,
         open_chunks=open_chunks,
@@ -312,7 +312,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("directory", help="directory holding the NetCDF files")
     p.add_argument("destination", help="where to write the collection")
-    p.add_argument("-r", "--recursive", action="store_true", help="descend into subdirectories")
+    p.add_argument(
+        "--no-recursive",
+        action="store_true",
+        help="scan the top directory alone. The scan descends by default",
+    )
+    p.add_argument(
+        "-r",
+        "--recursive",
+        action="store_true",
+        help="accepted for compatibility. The scan already descends",
+    )
     p.add_argument(
         "--codec",
         default="zstd",

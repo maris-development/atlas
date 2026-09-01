@@ -46,10 +46,15 @@ for `ATLS`, and you get nothing.
 
 ## Ingest
 
-`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf` files. It
-sorts them, and writes one dataset per file, named after the file. `2024-01.nc`
-becomes `2024-01.nc`, suffix and all. The sort makes the ordinals reproducible.
-Build the same directory twice, and every dataset lands at the same position.
+`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf` files, and
+descends into every subdirectory. It sorts them, and writes one dataset per
+file, named after the file. `2024-01.nc` becomes `2024-01.nc`, suffix and all.
+The sort makes the ordinals reproducible. Build the same directory twice, and
+every dataset lands at the same position.
+
+A dataset name carries no directory, because a name may hold no `/`. Two files
+of one name in two subdirectories therefore collide. `recursive=False` scans
+the top directory alone.
 
 One writer does all of it. Nothing at the destination is readable until the
 last file lands, with the footer. A failure part-way leaves no collection. That

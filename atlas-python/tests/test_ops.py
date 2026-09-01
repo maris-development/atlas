@@ -48,19 +48,48 @@ def test_create_is_ordered_by_filename(netcdf_dir, tmp_path):
         )
 
 
-def test_create_finds_files_recursively_when_asked(tmp_path):
+def test_create_descends_into_subdirectories_by_default(tmp_path):
     nested = tmp_path / "nc" / "2024" / "q1"
     nested.mkdir(parents=True)
     make_dataset(1).to_netcdf(nested / "jan.nc")
+    make_dataset(2).to_netcdf(tmp_path / "nc" / "top.nc")
 
-    flat = atlas.find_netcdf_files(tmp_path / "nc")
-    assert flat == []
+    found = atlas.find_netcdf_files(tmp_path / "nc")
+    assert [p.name for p in found] == ["jan.nc", "top.nc"]
 
-    found = atlas.find_netcdf_files(tmp_path / "nc", recursive=True)
-    assert [p.name for p in found] == ["jan.nc"]
+    atlas.create(tmp_path / "nc", str(tmp_path / "c"))
+    assert atlas.list_datasets(str(tmp_path / "c")) == ["jan.nc", "top.nc"]
 
-    atlas.create(tmp_path / "nc", str(tmp_path / "c"), recursive=True)
-    assert atlas.list_datasets(str(tmp_path / "c")) == ["jan.nc"]
+
+def test_recursive_false_scans_the_top_directory_alone(tmp_path):
+    nested = tmp_path / "nc" / "2024" / "q1"
+    nested.mkdir(parents=True)
+    make_dataset(1).to_netcdf(nested / "jan.nc")
+    make_dataset(2).to_netcdf(tmp_path / "nc" / "top.nc")
+
+    found = atlas.find_netcdf_files(tmp_path / "nc", recursive=False)
+    assert [p.name for p in found] == ["top.nc"]
+
+    atlas.create(tmp_path / "nc", str(tmp_path / "c"), recursive=False)
+    assert atlas.list_datasets(str(tmp_path / "c")) == ["top.nc"]
+
+
+def test_a_name_repeated_across_subdirectories_collides(tmp_path):
+    """A dataset name carries no directory, so two `jan.nc` files clash."""
+    src = tmp_path / "nc"
+    (src / "a").mkdir(parents=True)
+    (src / "b").mkdir()
+    make_dataset(1).to_netcdf(src / "a" / "jan.nc")
+    make_dataset(2).to_netcdf(src / "b" / "jan.nc")
+
+    with pytest.raises(atlas.AtlasError, match="duplicate dataset name"):
+        atlas.create(src, str(tmp_path / "c"))
+
+    # on_error="skip" keeps the first and reports the second.
+    result = atlas.create(src, str(tmp_path / "c2"), on_error="skip")
+    assert result["written"] == ["jan.nc"]
+    assert len(result["skipped"]) == 1
+    assert "duplicate dataset name" in result["skipped"][0]["error"]
 
 
 def test_an_empty_directory_is_an_error(tmp_path):
@@ -72,17 +101,6 @@ def test_an_empty_directory_is_an_error(tmp_path):
 def test_a_missing_directory_is_an_error(tmp_path):
     with pytest.raises(atlas.AtlasError, match="not a directory"):
         atlas.create(tmp_path / "nope", str(tmp_path / "c"))
-
-
-def test_two_files_with_the_same_name_collide(tmp_path):
-    src = tmp_path / "nc"
-    (src / "a").mkdir(parents=True)
-    (src / "b").mkdir()
-    make_dataset(1).to_netcdf(src / "a" / "jan.nc")
-    make_dataset(2).to_netcdf(src / "b" / "jan.nc")
-
-    with pytest.raises(atlas.AtlasError, match="duplicate dataset name"):
-        atlas.create(src, str(tmp_path / "c"), recursive=True)
 
 
 def test_a_bad_file_abandons_the_collection_by_default(tmp_path):

@@ -165,6 +165,27 @@ def test_log_file_records_a_failure(capsys, tmp_path):
     assert "ERROR" in log.read_text()
 
 
+def test_create_descends_by_default_and_no_recursive_opts_out(capsys, tmp_path):
+    from conftest import make_dataset
+
+    src = tmp_path / "nc"
+    (src / "sub").mkdir(parents=True)
+    make_dataset(1).to_netcdf(src / "sub" / "deep.nc")
+    make_dataset(2).to_netcdf(src / "top.nc")
+
+    run(capsys, "create", str(src), str(tmp_path / "all"), "-q")
+    code, out, _ = run(capsys, "ls", str(tmp_path / "all"))
+    assert out.split() == ["deep.nc", "top.nc"]
+
+    run(capsys, "create", str(src), str(tmp_path / "flat"), "-q", "--no-recursive")
+    code, out, _ = run(capsys, "ls", str(tmp_path / "flat"))
+    assert out.split() == ["top.nc"]
+
+    # -r still parses, so an existing script keeps working.
+    code, _, err = run(capsys, "create", str(src), str(tmp_path / "r"), "-q", "-r")
+    assert code == 0, err
+
+
 # ── ls ───────────────────────────────────────────────────────────────
 
 
@@ -305,6 +326,41 @@ def test_info_json(capsys, collection):
     i = json.loads(out)
     assert i["dataset_count"] == 3
     assert i["format_version"] == 1
+
+
+# ── entry points ─────────────────────────────────────────────────────
+
+
+def test_python_dash_m_atlas_runs_the_cli(netcdf_dir, tmp_path):
+    """`python -m atlas` needs no directory on PATH, so it always works."""
+    import subprocess
+    import sys
+
+    dest = tmp_path / "c"
+    done = subprocess.run(
+        [sys.executable, "-m", "atlas", "create", str(netcdf_dir), str(dest), "-q"],
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
+
+    done = subprocess.run(
+        [sys.executable, "-m", "atlas", "ls", str(dest)],
+        capture_output=True,
+        text=True,
+    )
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.split() == ["2024-01.nc", "2024-02.nc", "2024-03.nc"]
+
+
+def test_the_console_script_is_declared():
+    """The wheel must carry the `atlas` console script."""
+    from importlib.metadata import entry_points
+
+    scripts = {
+        e.name: e.value for e in entry_points(group="console_scripts")
+    }
+    assert scripts.get("atlas") == "atlas._cli:main"
 
 
 # ── parsing ──────────────────────────────────────────────────────────

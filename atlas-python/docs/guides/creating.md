@@ -15,9 +15,20 @@ atlas create /data/nc /data/collection
 ## What happens
 
 `create` collects every file that matches `.nc`, `.nc4`, `.cdf`, or `.netcdf`.
-It **sorts** them, and writes one dataset per file, named after the file.
-`2024-01.nc` becomes the dataset `2024-01.nc`. The suffix is part of the name,
-so `jan.nc` and `jan.nc4` are two datasets.
+The scan **descends into every subdirectory**. It **sorts** the result, and
+writes one dataset per file, named after the file. `2024-01.nc` becomes the
+dataset `2024-01.nc`. The suffix is part of the name, so `jan.nc` and
+`jan.nc4` are two datasets.
+
+Pass `recursive=False`, or `--no-recursive`, to scan the top directory alone:
+
+```python
+atlas.create("/data/nc", dest, recursive=False)
+```
+
+```bash
+atlas create /data/nc /data/collection --no-recursive
+```
 
 The sort matters. An ordinal comes from the write order, so a sorted ingest
 makes it reproducible. Rebuild the same directory, and every dataset lands at
@@ -26,8 +37,8 @@ the same position.
 Check what the call picks up before you run it:
 
 ```python
-atlas.find_netcdf_files("/data/nc")             # sorted list of paths
-atlas.find_netcdf_files("/data/nc", recursive=True)
+atlas.find_netcdf_files("/data/nc")                  # sorted, and recursive
+atlas.find_netcdf_files("/data/nc", recursive=False)  # the top level alone
 ```
 
 ## All or nothing
@@ -236,7 +247,13 @@ turns it off.
 | Destination URL cannot be resolved | `SourceError` |
 
 Two files with one name surprise people. `a/jan.nc` and `b/jan.nc` both want
-the name `jan.nc`. Rename one, or ingest them into two collections.
+the name `jan.nc`. The scan descends by default, so a tree of monthly
+directories hits this often. A dataset name carries no directory, because a
+name may hold no `/`.
+
+Three ways out. Rename the files. Ingest each subdirectory into its own
+collection. Or pass `on_error="skip"`, which keeps the first file and reports
+the second.
 
 For the dtype rules, see [Supported dtypes](dtypes.md).
 

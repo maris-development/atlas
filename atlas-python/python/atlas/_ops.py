@@ -56,9 +56,13 @@ def dataset_name(path: "pathlib.Path | str") -> str:
 
 
 def find_netcdf_files(
-    directory: "pathlib.Path | str", recursive: bool = False
+    directory: "pathlib.Path | str", recursive: bool = True
 ) -> list[pathlib.Path]:
-    """NetCDF files in `directory`, sorted. The sort fixes a collection's order."""
+    """NetCDF files in `directory`, sorted. The sort fixes a collection's order.
+
+    The walk descends into every subdirectory. Pass `recursive=False` for the
+    top directory alone.
+    """
     root = pathlib.Path(directory)
     if not root.is_dir():
         raise AtlasError(f"not a directory: {root}")
@@ -96,7 +100,7 @@ def create(
     directory: "pathlib.Path | str",
     destination: Any,
     *,
-    recursive: bool = False,
+    recursive: bool = True,
     codec: str = "zstd",
     chunks: Optional[dict[str, Sequence[int]]] = None,
     open_chunks: Any = "auto",
@@ -108,10 +112,16 @@ def create(
 ) -> dict[str, Any]:
     """Builds a collection at `destination` from the NetCDF files in `directory`.
 
+    The scan descends into every subdirectory. Pass `recursive=False` for the
+    top directory alone.
+
     Each file becomes one dataset, named after the file. `2024-01.nc` becomes
-    `2024-01.nc`, suffix and all. Nothing at `destination` is readable until
-    every file lands, with the footer. A failure therefore leaves no half-built
-    collection.
+    `2024-01.nc`, suffix and all. A name carries no directory, so two files of
+    one name in two subdirectories collide. `on_error="skip"` keeps the first
+    and reports the second.
+
+    Nothing at `destination` is readable until every file lands, with the
+    footer. A failure therefore leaves no half-built collection.
 
     Each file opens with dask chunking, under `open_chunks="auto"` by default.
     A file far larger than memory then streams block by block. Those blocks

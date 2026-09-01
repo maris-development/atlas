@@ -3,6 +3,10 @@
 `pip install atlas-python` puts `atlas` on your PATH. Five subcommands, one per
 operation.
 
+`python -m atlas` runs the same command without a PATH lookup. Use it in a
+container, in a CI job, or when the shell cannot find `atlas`. See
+[Installation](installation.md#the-atlas-command-is-not-found).
+
 ```text
 atlas create <netcdf-dir> <collection>   build a collection
 atlas rm     <collection> <name>...      remove datasets
@@ -26,7 +30,7 @@ Every subcommand takes `--json` and `--log-file PATH`, plus the remote flags
 ```bash
 $ atlas create /data/nc /data/collection --skip-unsupported --log-file ingest.log
 $ cat ingest.log
-2026-09-01 14:30:41 INFO    atlas.cli: atlas 0.16.1: create /data/nc ...
+2026-09-01 14:30:41 INFO    atlas.cli: atlas 0.16.2: create /data/nc ...
 2026-09-01 14:30:41 INFO    atlas.ops: ingesting 2 file(s) into /data/collection
 2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/buoy.nc: skipped array 'flag' of dtype bool: numpy dtype dtype('bool') is not supported by atlas (supported: ...)
 2026-09-01 14:30:41 INFO    atlas.ops: wrote 1 dataset(s); skipped 0 file(s) and 1 array(s)
@@ -44,16 +48,19 @@ stderr.
 atlas create /data/nc /data/collection
 ```
 
-Each NetCDF file becomes one dataset, named after the file. `2024-01.nc`
-becomes `2024-01.nc`, suffix and all. The files land in sorted order, which
-makes the ordinals of a collection reproducible.
+The scan descends into every subdirectory. Each NetCDF file becomes one
+dataset, named after the file. `2024-01.nc` becomes `2024-01.nc`, suffix and
+all. A name carries no directory, so two files of one name in two
+subdirectories collide. The files land in sorted order, which makes the
+ordinals of a collection reproducible.
 
 Nothing at the destination is readable until every file lands, with the footer.
 A failure part-way leaves no collection, and not a partial one.
 
 | Flag | Effect |
 |---|---|
-| `-r`, `--recursive` | Descend into subdirectories |
+| `--no-recursive` | Scan the top directory alone. The scan descends by default |
+| `-r`, `--recursive` | Accepted for compatibility. The scan already descends |
 | `--codec {zstd,lz4,none}` | Block compression. Default `zstd` |
 | `--chunk-size SIZE` | Block size to aim for. Default `128MiB` |
 | `--open-chunks MODE` | How files are read: `auto`, `native`, `none`, or a JSON dict |
@@ -121,7 +128,7 @@ reads. Each misaligned block then costs a read-modify-write. Use
 
 ```bash
 # One collection from a tree of monthly directories, tolerating bad files
-atlas create /data/nc /data/collection --recursive --skip-errors
+atlas create /data/nc /data/collection --skip-errors
 
 # A big grid, chunked for selective reads, straight to a bucket
 atlas create /data/nc s3://bucket/2024 --chunk-size 64MiB --region eu-west-1

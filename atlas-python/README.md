@@ -16,6 +16,9 @@ atlas info   /data/collection
 atlas rm     /data/collection 2024-02.nc 2024-03.nc
 ```
 
+`python -m atlas` runs the same command without a PATH lookup, for a shell that
+cannot find `atlas`.
+
 | Extra | Install | Adds |
 |---|---|---|
 | cloud | `pip install "atlas-python[cloud]"` | S3 / GCS / Azure / HTTP via [obstore](https://github.com/developmentseed/obstore) |
@@ -92,8 +95,9 @@ command gives the same content as a structure.
 
 ## Ingest
 
-`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf`. It sorts
-them, and writes one dataset per file, named after the file. Each coordinate
+`create` scans a directory for `.nc`, `.nc4`, `.cdf`, and `.netcdf`, and
+descends into every subdirectory. It sorts them, and writes one dataset per
+file, named after the file. Each coordinate
 and data variable becomes an array. Each variable attribute becomes a per-array
 attribute. `_FillValue` becomes the fill of the array.
 
