@@ -33,7 +33,6 @@ detail["dimensions"]     # {'lat': 4, 'lon': 6}
 detail["coordinates"]    # ['lat', 'lon']
 detail["attributes"]     # decoded, markers hidden
 detail["ordinal"]        # stable position in the collection
-detail["segment_range"]  # [start, end] byte offsets in data.atlas
 
 for array in detail["arrays"]:
     array["dtype"], array["shape"], array["chunk_shape"]
@@ -93,16 +92,6 @@ Three options, from the least work to the most.
 **Keep the source data.** A collection comes from NetCDF files, and those files
 are the obvious place to read a value. `xr.open_dataset` on the original is
 simpler than anything else here.
-
-**Extract a segment.** `segment_range` gives the byte offsets of a complete
-`array-format` file that stands alone. Cut it out, and any `array-format`
-reader opens it:
-
-```python
-start, end = atlas.describe(collection, "2024-01.nc")["segment_range"]
-blob = open(f"{collection}/data.atlas", "rb").read()[start:end]
-open("2024-01.af", "wb").write(blob)
-```
 
 **Write a small Rust service.** The values often travel over a network anyway.
 To read them in Rust and serve the result is then simpler than a path through

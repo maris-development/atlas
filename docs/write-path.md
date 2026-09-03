@@ -21,24 +21,33 @@ target then opens as a collection.
 
 ## Staging
 
-Each dataset builds as a complete `array-format` file, in a local scratch
-directory. The writer then copies that file into the output stream, byte for
-byte:
+Each **variable** builds as a complete `array-format` file, in a local scratch
+directory. Every dataset writes into it under the dataset's own name:
 
 ```text
-add_dataset("jan")  ──▶ scratch/1/data.af      define, write, define, write, …
-  finish()          ──▶ flush → compact → copy ──▶ container[8 .. 4_100]
+add_dataset("jan")  ──▶ scratch/v0/data.af     temperature/jan
+                        scratch/v1/data.af     salinity/jan
 
-add_dataset("feb")  ──▶ scratch/2/data.af
-  finish()          ──▶ flush → compact → copy ──▶ container[4_100 .. 9_002]
+add_dataset("feb")  ──▶ scratch/v0/data.af     temperature/feb
+                        scratch/v1/data.af     salinity/feb
 
-AtlasWriter::finish ──▶ footer, trailer, done
+AtlasWriter::finish ──▶ flush → compact → copy, per variable
+                    ──▶ footer, trailer, done
 ```
 
-Local staging bounds the memory. `array-format` spills each compressed chunk to
-a temporary file on arrival. The copy into the container streams in 8 MiB
-pieces. A dataset far larger than RAM therefore writes without trouble. The
-scratch directory goes as soon as its segment lands.
+A variable's segment is complete only when every dataset has contributed, so
+nothing reaches the container until `AtlasWriter::finish`. Local scratch
+therefore holds the whole collection once. The scratch directory of each
+variable goes as soon as its segment lands.
+
+Memory stays bounded. `array-format` keeps a pending write in memory until
+`flush`, and each flush seals a sidecar layer that `compact` must later merge.
+A variable past `STAGING_FLUSH_BUDGET`, which is 64 MiB, therefore flushes. A
+small budget costs layers, and a large one costs memory. Per-dataset flushing
+is the wrong end of that trade: it made a 800-dataset write nine times slower,
+and its cost grew faster than the dataset count.
+
+The copy into the container streams in 8 MiB pieces.
 
 ### flush, then compact
 
@@ -48,13 +57,16 @@ Run both, in that order. The order matters.
 every layer into one base file. A `compact()` without a `flush()` first leaves
 the buffered writes behind. It can also produce a dangling attribute index,
 because `compact` builds its attribute dictionary from committed layers only.
+The attribute values matter here now: `DatasetWriter::finish` writes them into
+the staging files, and `AtlasWriter::finish` flushes before it compacts.
 
 The result is one self-contained file, which is what a segment must be.
 
 The flush also computes the minimum, the maximum, and the null count of each
-array. Those reach the footer entry before the staged file closes. A reader
-therefore gets them without the segment. See
-[format.md](format.md#statistics-live-here-too).
+array, and writes them to the `{stem}.stats` sidecar beside the file. The
+container embeds that sidecar next to the segment, and records where it is. A
+reader then finds the statistics where `array-format` looks for them. See
+[format.md](format.md#a-segment-is-two-objects).
 
 > **Cost.** This pass reads, decompresses, and compresses every chunk again. It
 > also computes the statistics twice. All of it happens on local scratch.
@@ -91,17 +103,16 @@ for path in files {
 }
 ```
 
-Staging is parallel. Only the append serializes. A `DatasetWriter` takes the
-writer's lock once, in `finish()`, for its append and its footer entry.
-Concurrent datasets therefore land in finish order, and never interleave their
-bytes. `tests/integration.rs` asserts that the segments still tile the
-container without a gap under concurrent staging.
+A `DatasetWriter` takes the writer's lock for each define and each write,
+because every dataset writes into the same per-variable files. That is the
+price of the layout: the writes serialize, and only the work outside the lock
+runs in parallel.
 
 **Ordinals do not follow that order.** Each dataset carries the number of the
 `add_dataset` call that opened it. `AtlasWriter::finish` then sorts the footer
-entries on that number. Stage a directory twice and every dataset lands at the same
-ordinal, however many threads did the work. Each entry holds its own byte
-range, so the segments need no matching order on disk.
+entries on that number. Stage a directory twice and every dataset lands at the
+same ordinal, however many threads did the work. No dataset holds a byte range,
+so nothing on disk has to match that order.
 
 ## Failure
 
@@ -121,13 +132,40 @@ The backend decides whether a partial object stays after a dropped writer. A
 lifecycle rule clears an incomplete S3 multipart upload. This is a question of
 hygiene, not of correctness.
 
+## Attributes go into the segments
+
+`DatasetWriter::finish` writes them, before anything is compacted.
+
+A per-array value goes on the array's own entry in that variable's staging
+file, under this dataset's name. A dataset-level value has no array to sit on,
+so the reserved `_datasets` staging file gets a rank-0 array per dataset to
+carry it. That file appears only when some dataset has a global attribute.
+
+`array-format` interns each key and each value per file, so `units =
+"celsius"` across ten thousand datasets is stored once per segment.
+
+A timestamp is the one lossy step. `AttributeValue` has no timestamp variant,
+so it stores as its `i64`, and the schema records the key as `TimestampNs` so a
+reader can tell it from an integer.
+
 ## Interning as you write
 
-The writer holds an `Interner`. Each finished dataset hands it a
-`DatasetSchema`, and gets back a `u32`. Two equal schemas land on one pool
-entry. A content hash resolves them, and `PartialEq` settles a hash collision.
-Attribute keys intern the same way.
+The writer holds an `Interner`. Each finished dataset hands it its array names
+with their element types, and its attribute keys with theirs, and gets back a
+`u32`. The attribute **values** do not go to the interner. They go into the
+segments, and the key with its type is what the footer keeps.
 
-One detail matters. `FillValueS` compares floats by bit pattern, so one NaN
-fill equals another. Without that, every float array with the default NaN fill
-takes its own pool entry, and interning never fires on the common case.
+The interner works in two steps. Every name and every dtype goes to a pool
+first. What is left is pairs of `u32`, which are `Hash` and `Eq`. One map
+lookup then settles the whole schema. Two equal schemas land on one pool entry.
+There is no content hash and no collision fallback.
+
+Nothing about the data enters the schema. No shape, no chunk shape, no
+dimension name, and no fill value. Those go into the variable's segment, which
+records them anyway. That is what lets a directory of files of unequal length
+share one pool entry.
+
+The pool holds `SmolStr`, not `String`. A name of 22 bytes or fewer sits
+inline. See
+[format.md](format.md#the-decoded-form-is-not-the-wire-form) for what that buys
+and where it does not.

@@ -118,16 +118,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  datasets: {:?}", atlas.list_datasets());
     println!("  arrays:   {:?}", atlas.list_arrays());
 
-    // Metadata for every dataset, and still no array byte.
+    // Names and types for every dataset, and still no array byte.
     for name in atlas.list_datasets() {
         let ds = atlas.dataset(&name)?;
-        let shapes: Vec<String> = ds
+        let arrays: Vec<String> = ds
             .schema()
-            .arrays
             .iter()
-            .map(|(array, schema)| format!("{array}{:?}", schema.shape))
+            .map(|a| format!("{}:{:?}", a.name(), a.dtype()))
             .collect();
-        println!("  {name}: {}", shapes.join(", "));
+        println!("  {name}: {}", arrays.join(", "));
     }
     println!();
 

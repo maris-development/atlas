@@ -1,6 +1,6 @@
 //! [`Attr`], atlas's public attribute value.
 
-use array_format::DType;
+use array_format::{AttributeValue, DType};
 
 /// A typed attribute value.
 ///
@@ -107,11 +107,152 @@ impl Attr {
             Attr::BinaryList(_) => list(DType::Binary),
         }
     }
+
+    /// The form a segment stores.
+    ///
+    /// `array-format` has no timestamp attribute, so a timestamp goes in as
+    /// its `i64`. [`from_stored`](Self::from_stored) reads the tag back from
+    /// the schema, which records the declared type of every key.
+    pub(crate) fn into_stored(self) -> AttributeValue {
+        match self {
+            Attr::Bool(v) => AttributeValue::Bool(v),
+            Attr::Int8(v) => AttributeValue::Int8(v),
+            Attr::Int16(v) => AttributeValue::Int16(v),
+            Attr::Int32(v) => AttributeValue::Int32(v),
+            Attr::Int64(v) => AttributeValue::Int64(v),
+            Attr::UInt8(v) => AttributeValue::UInt8(v),
+            Attr::UInt16(v) => AttributeValue::UInt16(v),
+            Attr::UInt32(v) => AttributeValue::UInt32(v),
+            Attr::UInt64(v) => AttributeValue::UInt64(v),
+            Attr::Float32(v) => AttributeValue::Float32(v),
+            Attr::Float64(v) => AttributeValue::Float64(v),
+            Attr::String(v) => AttributeValue::String(v),
+            Attr::Binary(v) => AttributeValue::Binary(v),
+            // The one lossy step. The schema carries the tag.
+            Attr::TimestampNanoseconds(v) => AttributeValue::Int64(v),
+            Attr::BoolList(v) => AttributeValue::BoolList(v),
+            Attr::Int8List(v) => AttributeValue::Int8List(v),
+            Attr::Int16List(v) => AttributeValue::Int16List(v),
+            Attr::Int32List(v) => AttributeValue::Int32List(v),
+            Attr::Int64List(v) => AttributeValue::Int64List(v),
+            Attr::UInt8List(v) => AttributeValue::UInt8List(v),
+            Attr::UInt16List(v) => AttributeValue::UInt16List(v),
+            Attr::UInt32List(v) => AttributeValue::UInt32List(v),
+            Attr::UInt64List(v) => AttributeValue::UInt64List(v),
+            Attr::Float32List(v) => AttributeValue::Float32List(v),
+            Attr::Float64List(v) => AttributeValue::Float64List(v),
+            Attr::StringList(v) => AttributeValue::StringList(v),
+            Attr::BinaryList(v) => AttributeValue::BinaryList(v),
+        }
+    }
+
+    /// Rebuilds a value a segment stored, given the type the schema declared
+    /// for that key.
+    ///
+    /// `declared` settles the one case the segment cannot: an `i64` is a
+    /// timestamp when the schema says [`DType::TimestampNs`], and a plain
+    /// integer otherwise. Every other variant carries its own tag.
+    pub(crate) fn from_stored(value: &AttributeValue, declared: &DType) -> Self {
+        match value {
+            AttributeValue::Bool(v) => Attr::Bool(*v),
+            AttributeValue::Int8(v) => Attr::Int8(*v),
+            AttributeValue::Int16(v) => Attr::Int16(*v),
+            AttributeValue::Int32(v) => Attr::Int32(*v),
+            AttributeValue::Int64(v) if *declared == DType::TimestampNs => {
+                Attr::TimestampNanoseconds(*v)
+            }
+            AttributeValue::Int64(v) => Attr::Int64(*v),
+            AttributeValue::UInt8(v) => Attr::UInt8(*v),
+            AttributeValue::UInt16(v) => Attr::UInt16(*v),
+            AttributeValue::UInt32(v) => Attr::UInt32(*v),
+            AttributeValue::UInt64(v) => Attr::UInt64(*v),
+            AttributeValue::Float32(v) => Attr::Float32(*v),
+            AttributeValue::Float64(v) => Attr::Float64(*v),
+            AttributeValue::String(v) => Attr::String(v.clone()),
+            AttributeValue::Binary(v) => Attr::Binary(v.clone()),
+            AttributeValue::BoolList(v) => Attr::BoolList(v.clone()),
+            AttributeValue::Int8List(v) => Attr::Int8List(v.clone()),
+            AttributeValue::Int16List(v) => Attr::Int16List(v.clone()),
+            AttributeValue::Int32List(v) => Attr::Int32List(v.clone()),
+            AttributeValue::Int64List(v) => Attr::Int64List(v.clone()),
+            AttributeValue::UInt8List(v) => Attr::UInt8List(v.clone()),
+            AttributeValue::UInt16List(v) => Attr::UInt16List(v.clone()),
+            AttributeValue::UInt32List(v) => Attr::UInt32List(v.clone()),
+            AttributeValue::UInt64List(v) => Attr::UInt64List(v.clone()),
+            AttributeValue::Float32List(v) => Attr::Float32List(v.clone()),
+            AttributeValue::Float64List(v) => Attr::Float64List(v.clone()),
+            AttributeValue::StringList(v) => Attr::StringList(v.clone()),
+            AttributeValue::BinaryList(v) => Attr::BinaryList(v.clone()),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_value_survives_a_round_trip_through_a_segment() {
+        let cases = vec![
+            Attr::Bool(true),
+            Attr::Int8(-3),
+            Attr::Int16(-300),
+            Attr::Int32(-70_000),
+            Attr::Int64(-5_000_000_000),
+            Attr::UInt8(200),
+            Attr::UInt16(60_000),
+            Attr::UInt32(4_000_000_000),
+            Attr::UInt64(18_000_000_000_000_000_000),
+            Attr::Float32(2.5),
+            Attr::Float64(-0.125),
+            Attr::String("hello".into()),
+            Attr::Binary(vec![0xde, 0xad]),
+            Attr::TimestampNanoseconds(1_700_000_000_000_000_000),
+            Attr::BoolList(vec![true, false]),
+            Attr::Int8List(vec![1, -1]),
+            Attr::Int16List(vec![2]),
+            Attr::Int32List(vec![1, 2, 3]),
+            Attr::Int64List(vec![4]),
+            Attr::UInt8List(vec![5]),
+            Attr::UInt16List(vec![6]),
+            Attr::UInt32List(vec![7]),
+            Attr::UInt64List(vec![8]),
+            Attr::Float32List(vec![1.5]),
+            Attr::Float64List(vec![0.0, 1.5]),
+            Attr::StringList(vec!["a".into(), "b".into()]),
+            Attr::BinaryList(vec![vec![1], vec![2]]),
+        ];
+        for v in cases {
+            let declared = v.dtype();
+            let stored = v.clone().into_stored();
+            assert_eq!(Attr::from_stored(&stored, &declared), v, "{v:?}");
+        }
+    }
+
+    #[test]
+    fn a_timestamp_and_an_integer_share_a_stored_form_and_stay_distinct() {
+        // `array-format` has no timestamp attribute, so both store as i64.
+        // Only the declared type tells them apart.
+        let when = Attr::TimestampNanoseconds(1_700_000_000_000_000_000);
+        let count = Attr::Int64(1_700_000_000_000_000_000);
+        assert_eq!(when.clone().into_stored(), count.clone().into_stored());
+
+        assert_eq!(
+            Attr::from_stored(&when.clone().into_stored(), &DType::TimestampNs),
+            when
+        );
+        assert_eq!(
+            Attr::from_stored(&count.clone().into_stored(), &DType::Int64),
+            count
+        );
+    }
+
+    #[test]
+    fn a_date_shaped_string_stays_a_string() {
+        let v = Attr::String("2023-11-14T22:13:20Z".into());
+        let declared = v.dtype();
+        assert_eq!(Attr::from_stored(&v.clone().into_stored(), &declared), v);
+    }
 
     #[test]
     fn scalars_and_lists_report_their_dtype() {

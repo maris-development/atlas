@@ -34,6 +34,11 @@ zstd = "0.13"
 thiserror = "2"
 ndarray = "0.17"
 indexmap = { version = "2", features = ["serde"] }
+# Inline storage for the small vectors the footer holds per dataset. Already in
+# the tree through object_store, so it adds no dependency.
+smallvec = { version = "1", features = ["serde"] }
+# Inline storage for a name of 22 bytes or fewer. Most names fit.
+smol_str = { version = "0.3", features = ["serde"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 parking_lot = "0.12"
 tempfile = "3"

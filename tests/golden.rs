@@ -1,8 +1,8 @@
 //! Compatibility test against committed bytes.
 //!
-//! `tests/fixtures/golden_v1/` holds one container, written by hand and
+//! `tests/fixtures/golden_v6/` holds one container, written by hand and
 //! committed. The test below opens it and asserts every value. A change to the
-//! format or the reader that breaks a v1 container fails here. No round-trip
+//! format or the reader that breaks a v6 container fails here. No round-trip
 //! test catches that.
 //!
 //! This test does *not* compare the writer's output byte for byte. Zstd
@@ -22,7 +22,7 @@ use atlas::{Atlas, AtlasWriter, Attr, Codec, FillValue, StatValue, WriterConfig}
 use ndarray::{Array1, ArrayD, IxDyn};
 
 fn fixture_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_v1")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_v6")
 }
 
 /// Writes the fixture. Keep it in step with the assertions below.
@@ -85,7 +85,7 @@ async fn write_golden(dir: &Path) {
 }
 
 #[tokio::test]
-#[ignore = "run explicitly to regenerate tests/fixtures/golden_v1"]
+#[ignore = "run explicitly to regenerate tests/fixtures/golden_v6"]
 async fn regenerate() {
     let dir = fixture_dir();
     let _ = std::fs::remove_dir_all(&dir);
@@ -95,7 +95,7 @@ async fn regenerate() {
 }
 
 #[tokio::test]
-async fn the_committed_v1_container_still_opens() {
+async fn the_committed_v6_container_still_opens() {
     let atlas = Atlas::open_path(fixture_dir()).await.unwrap();
 
     assert_eq!(atlas.list_datasets(), vec!["grid", "labels"]);
@@ -106,27 +106,36 @@ async fn the_committed_v1_container_still_opens() {
     assert_eq!(grid.list_arrays(), vec!["temperature", "counts"]);
 
     let meta = grid.array_meta("temperature").unwrap();
-    assert_eq!(meta.dtype, atlas::DType::Float32);
-    assert_eq!(meta.shape, vec![4, 6]);
-    assert_eq!(meta.chunk_shape, vec![2, 3]);
-    assert_eq!(meta.dimension_names, vec!["lat", "lon"]);
+    assert_eq!(*meta.dtype(), atlas::DType::Float32);
+    let layout = grid.array_layout("temperature").await.unwrap();
+    assert_eq!(layout.shape(), vec![4, 6]);
+    assert_eq!(layout.chunk_shape(), vec![2, 3]);
+    assert_eq!(layout.dimension_names(), vec!["lat", "lon"]);
     assert!(matches!(
-        grid.array_fill_value("temperature"),
+        layout.fill_value(),
         Some(FillValue::Float(f)) if f.is_nan()
     ));
 
-    assert_eq!(grid.get_attribute("month"), Some(Attr::Int64(1)));
-    assert_eq!(grid.get_attribute("scale"), Some(Attr::Float64(0.5)));
     assert_eq!(
-        grid.get_attribute("tags"),
+        grid.get_attribute("month").await.unwrap(),
+        Some(Attr::Int64(1))
+    );
+    assert_eq!(
+        grid.get_attribute("scale").await.unwrap(),
+        Some(Attr::Float64(0.5))
+    );
+    assert_eq!(
+        grid.get_attribute("tags").await.unwrap(),
         Some(Attr::StringList(vec!["a".into(), "b".into()]))
     );
     assert_eq!(
-        grid.get_attribute("created"),
+        grid.get_attribute("created").await.unwrap(),
         Some(Attr::TimestampNanoseconds(1_700_000_000_000_000_000))
     );
     assert_eq!(
-        grid.get_array_attribute("temperature", "units"),
+        grid.get_array_attribute("temperature", "units")
+            .await
+            .unwrap(),
         Some(Attr::String("celsius".into()))
     );
 
@@ -154,6 +163,8 @@ async fn the_committed_v1_container_still_opens() {
     // The write computed these statistics. They live in the footer.
     let stats = grid
         .array_stats("temperature")
+        .await
+        .unwrap()
         .expect("temperature has stats");
     assert_eq!(stats.name, "temperature");
     assert_eq!(stats.row_count, 24);
@@ -164,17 +175,25 @@ async fn the_committed_v1_container_still_opens() {
 
     // counts is declared and never written. Every element is therefore the
     // fill value, which is what the null count reports.
-    let counts_stats = grid.array_stats("counts").expect("counts has stats");
+    let counts_stats = grid
+        .array_stats("counts")
+        .await
+        .unwrap()
+        .expect("counts has stats");
     assert_eq!(counts_stats.row_count, 4);
     assert_eq!(counts_stats.null_count, 4);
     assert_eq!(counts_stats.min, None);
 
     // An array this dataset does not declare has no statistics.
-    assert!(grid.array_stats("missing").is_none());
+    assert!(grid.array_stats("missing").await.unwrap().is_none());
 
     // A string gets a lexicographic min and max, as raw bytes.
     let labels = atlas.dataset("labels").unwrap();
-    let name_stats = labels.array_stats("name").expect("name has stats");
+    let name_stats = labels
+        .array_stats("name")
+        .await
+        .unwrap()
+        .expect("name has stats");
     assert_eq!(name_stats.row_count, 3);
     assert_eq!(name_stats.min, Some(StatValue::Bytes(b"alpha".to_vec())));
     assert_eq!(name_stats.max, Some(StatValue::Bytes(b"gamma".to_vec())));
@@ -188,20 +207,20 @@ async fn the_committed_v1_container_still_opens() {
 }
 
 #[tokio::test]
-async fn the_committed_container_has_the_v1_framing() {
+async fn the_committed_container_has_the_v6_framing() {
     let bytes = std::fs::read(fixture_dir().join("data.atlas")).unwrap();
     let len = bytes.len();
 
     assert_eq!(&bytes[0..4], b"ATLS", "leading magic");
     assert_eq!(
         u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
-        1,
+        6,
         "header version"
     );
     assert_eq!(&bytes[len - 4..], b"ATLS", "trailing magic");
     assert_eq!(
         u32::from_le_bytes(bytes[len - 8..len - 4].try_into().unwrap()),
-        1,
+        6,
         "trailer version"
     );
     let footer_size = u64::from_le_bytes(bytes[len - 16..len - 8].try_into().unwrap()) as usize;

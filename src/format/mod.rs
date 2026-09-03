@@ -37,7 +37,7 @@ pub(crate) const MAGIC: [u8; 4] = *b"ATLS";
 
 /// Version of the container framing and of the footer schema. The two move
 /// together. A change to one footer field is a format change.
-pub(crate) const FORMAT_VERSION: u32 = 1;
+pub(crate) const FORMAT_VERSION: u32 = 6;
 
 /// Bytes before the first segment: magic + version.
 pub(crate) const HEADER_SIZE: u64 = 8;
@@ -48,6 +48,17 @@ pub(crate) const TRAILER_SIZE: u64 = 16;
 /// `array-format` footer version inside every segment. The container footer
 /// records it, so a future reader can dispatch on it.
 pub(crate) const SEGMENT_FORMAT: u32 = 5;
+
+/// Segment that carries the dataset-level attributes.
+///
+/// It holds one rank-0 array per dataset, named after the dataset, with that
+/// dataset's global attributes on it and no data. `array-format` attaches an
+/// attribute to an array and never to a file, so a dataset-level value needs
+/// an array of its own to sit on.
+///
+/// [`validate_name`](crate::validate_name) refuses a leading underscore, so no
+/// user array can take this name.
+pub(crate) const DATASET_ATTRS_VARIABLE: &str = "_datasets";
 
 /// Container object name under the collection prefix.
 pub(crate) const DATA_FILE: &str = "data.atlas";
@@ -195,7 +206,7 @@ mod tests {
             decode_trailer(&t),
             Err(Error::UnsupportedVersion {
                 found: 99,
-                expected: 1
+                expected: FORMAT_VERSION
             })
         ));
 

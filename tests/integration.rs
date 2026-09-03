@@ -56,7 +56,8 @@ async fn build_fixture(path: &std::path::Path) {
     }
 
     {
-        // Same array shapes as jan_2024, so the schema interns to one entry.
+        // The same arrays as jan_2024, but one attribute fewer. The schema
+        // names the attribute keys, so this is a second schema.
         let mut ds = w.add_dataset("feb_2024").await.unwrap();
         ds.define_array::<f32>(
             "temperature",
@@ -275,27 +276,33 @@ async fn a_finished_collection_reopens_with_all_its_metadata() {
     assert_eq!(jan.list_arrays(), vec!["temperature", "counts"]);
 
     let meta = jan.array_meta("temperature").unwrap();
-    assert_eq!(meta.shape, vec![4, 8]);
-    assert_eq!(meta.chunk_shape, vec![2, 4]);
-    assert_eq!(meta.dimension_names, vec!["lat", "lon"]);
-    assert_eq!(meta.dtype, atlas::DType::Float32);
+    assert_eq!(*meta.dtype(), atlas::DType::Float32);
+    let layout = jan.array_layout("temperature").await.unwrap();
+    assert_eq!(layout.shape(), vec![4, 8]);
+    assert_eq!(layout.chunk_shape(), vec![2, 4]);
+    assert_eq!(layout.dimension_names(), vec!["lat", "lon"]);
     assert!(matches!(
-        jan.array_fill_value("temperature"),
+        layout.fill_value(),
         Some(FillValue::Float(f)) if f.is_nan()
     ));
 
-    assert_eq!(jan.get_attribute("month"), Some(Attr::Int64(1)));
     assert_eq!(
-        jan.get_attribute("source"),
+        jan.get_attribute("month").await.unwrap(),
+        Some(Attr::Int64(1))
+    );
+    assert_eq!(
+        jan.get_attribute("source").await.unwrap(),
         Some(Attr::String("buoy".into()))
     );
-    assert_eq!(jan.attributes().len(), 2);
+    assert_eq!(jan.attributes().await.unwrap().len(), 2);
     assert_eq!(
-        jan.get_array_attribute("temperature", "units"),
+        jan.get_array_attribute("temperature", "units")
+            .await
+            .unwrap(),
         Some(Attr::String("celsius".into()))
     );
     // counts has no attributes of its own.
-    assert!(jan.array_attributes("counts").is_empty());
+    assert!(jan.array_attributes("counts").await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -305,7 +312,7 @@ async fn collection_stats_fold_every_dataset_that_holds_the_array() {
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
 
     // jan_2024 holds 0.0..=31.0 and feb_2024 holds -1.5, over 32 elements each.
-    let temperature = atlas.array_stats("temperature").unwrap();
+    let temperature = atlas.array_stats("temperature").await.unwrap().unwrap();
     assert_eq!(temperature.name, "temperature");
     assert_eq!(temperature.min, Some(StatValue::Float(-1.5)));
     assert_eq!(temperature.max, Some(StatValue::Float(31.0)));
@@ -314,7 +321,7 @@ async fn collection_stats_fold_every_dataset_that_holds_the_array() {
 
     // feb_2024 declares counts and never writes it. It therefore adds
     // elements and nulls, but no bounds. The bounds come from jan_2024 alone.
-    let counts = atlas.array_stats("counts").unwrap();
+    let counts = atlas.array_stats("counts").await.unwrap().unwrap();
     assert_eq!(counts.min, Some(StatValue::Int(10)));
     assert_eq!(counts.max, Some(StatValue::Int(40)));
     assert_eq!(counts.row_count, 8);
@@ -322,10 +329,112 @@ async fn collection_stats_fold_every_dataset_that_holds_the_array() {
 
     // One dataset holds name, so the result matches that dataset alone.
     let stations = atlas.dataset("stations").unwrap();
-    assert_eq!(atlas.array_stats("name"), stations.array_stats("name"));
+    assert_eq!(
+        atlas.array_stats("name").await.unwrap(),
+        stations.array_stats("name").await.unwrap()
+    );
 
     // No dataset declares this name.
-    assert!(atlas.array_stats("missing").is_none());
+    assert!(atlas.array_stats("missing").await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn one_attribute_across_every_dataset_lines_up_with_the_list() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    let names = atlas.list_datasets();
+    let months = atlas.attribute_by_dataset("month").await.unwrap();
+    assert_eq!(months.len(), names.len(), "one entry per live dataset");
+
+    assert_eq!(months[0], Some(Attr::Int64(1)));
+    assert_eq!(months[1], Some(Attr::Int64(2)));
+    // stations carries no month, so the entry is present and empty.
+    assert_eq!(months[2], None);
+
+    // Index for index, it equals what each dataset reports on its own.
+    for (name, value) in names.iter().zip(&months) {
+        assert_eq!(
+            &atlas
+                .dataset(name)
+                .unwrap()
+                .get_attribute("month")
+                .await
+                .unwrap(),
+            value
+        );
+    }
+
+    // A key no dataset carries still gives a full column of None.
+    let missing = atlas.attribute_by_dataset("nope").await.unwrap();
+    assert_eq!(missing.len(), 3);
+    assert!(missing.iter().all(Option::is_none));
+}
+
+#[tokio::test]
+async fn the_mask_hides_a_dataset_from_the_attribute_column() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+    assert_eq!(atlas.attribute_by_dataset("month").await.unwrap().len(), 3);
+
+    atlas.delete_dataset("jan_2024").await.unwrap();
+    let names = atlas.list_datasets();
+    let months = atlas.attribute_by_dataset("month").await.unwrap();
+
+    // The mask shortens both, so index 0 still means the same dataset.
+    assert_eq!(names, vec!["feb_2024", "stations"]);
+    assert_eq!(months.len(), names.len());
+    assert_eq!(months[0], Some(Attr::Int64(2)));
+    assert_eq!(months[1], None);
+}
+
+#[tokio::test]
+async fn attributes_and_stats_join_into_one_table() {
+    // The shape a Parquet row group index has: one row per dataset, with the
+    // attributes beside the bounds.
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    // Every attribute column lines up with the dataset names by index.
+    let names = atlas.list_datasets();
+    let months = atlas.attribute_by_dataset("month").await.unwrap();
+    let sources = atlas.attribute_by_dataset("source").await.unwrap();
+
+    // Array statistics leave out a dataset that lacks the array, so that one
+    // joins by name.
+    let temperature: std::collections::HashMap<String, atlas::ArrayStats> = atlas
+        .array_stats_by_dataset("temperature")
+        .await
+        .unwrap()
+        .into_iter()
+        .collect();
+
+    let table: Vec<_> = names
+        .iter()
+        .zip(&months)
+        .zip(&sources)
+        .map(|((name, month), source)| {
+            let bounds = temperature
+                .get(name)
+                .map(|s| (s.min.clone(), s.max.clone()));
+            (name.as_str(), month.clone(), source.clone(), bounds)
+        })
+        .collect();
+
+    assert_eq!(table.len(), 3);
+    assert_eq!(table[0].1, Some(Attr::Int64(1)));
+    assert_eq!(table[0].2, Some(Attr::String("buoy".into())));
+    assert_eq!(
+        table[0].3,
+        Some((Some(StatValue::Float(0.0)), Some(StatValue::Float(31.0))))
+    );
+    // stations holds neither the attributes nor the array.
+    assert_eq!(table[2].0, "stations");
+    assert_eq!(table[2].1, None);
+    assert_eq!(table[2].3, None);
 }
 
 #[tokio::test]
@@ -334,7 +443,7 @@ async fn per_dataset_stats_list_every_live_dataset_in_write_order() {
     build_fixture(tmp.path()).await;
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
 
-    let per = atlas.array_stats_by_dataset("temperature");
+    let per = atlas.array_stats_by_dataset("temperature").await.unwrap();
     let names: Vec<&str> = per.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(names, vec!["jan_2024", "feb_2024"]);
     assert_eq!(per[0].1.max, Some(StatValue::Float(31.0)));
@@ -343,16 +452,25 @@ async fn per_dataset_stats_list_every_live_dataset_in_write_order() {
     // Each entry equals what that dataset reports on its own.
     for (name, stats) in &per {
         let view = atlas.dataset(name).unwrap();
-        assert_eq!(view.array_stats("temperature").as_ref(), Some(stats));
+        assert_eq!(
+            view.array_stats("temperature").await.unwrap().as_ref(),
+            Some(stats)
+        );
     }
 
     // stations declares neither, so it stays out of both lists.
-    let per_name = atlas.array_stats_by_dataset("name");
+    let per_name = atlas.array_stats_by_dataset("name").await.unwrap();
     assert_eq!(per_name.len(), 1);
     assert_eq!(per_name[0].0, "stations");
 
     // A name no dataset declares gives an empty list.
-    assert!(atlas.array_stats_by_dataset("missing").is_empty());
+    assert!(
+        atlas
+            .array_stats_by_dataset("missing")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -360,21 +478,41 @@ async fn the_mask_hides_a_dataset_from_the_per_dataset_stats() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
-    assert_eq!(atlas.array_stats_by_dataset("temperature").len(), 2);
+    assert_eq!(
+        atlas
+            .array_stats_by_dataset("temperature")
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 
     atlas.delete_dataset("jan_2024").await.unwrap();
-    let per = atlas.array_stats_by_dataset("temperature");
+    let per = atlas.array_stats_by_dataset("temperature").await.unwrap();
     assert_eq!(per.len(), 1);
     assert_eq!(per[0].0, "feb_2024");
 
     // The mask on disk hides it for a fresh handle too.
     let reopened = Atlas::open_path(tmp.path()).await.unwrap();
-    assert_eq!(reopened.array_stats_by_dataset("temperature").len(), 1);
+    assert_eq!(
+        reopened
+            .array_stats_by_dataset("temperature")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 
     // Hide the last holder, and nothing remains to report.
     atlas.delete_dataset("feb_2024").await.unwrap();
-    assert!(atlas.array_stats_by_dataset("temperature").is_empty());
-    assert!(atlas.array_stats("temperature").is_none());
+    assert!(
+        atlas
+            .array_stats_by_dataset("temperature")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(atlas.array_stats("temperature").await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -385,17 +523,20 @@ async fn a_deleted_dataset_drops_out_of_the_collection_stats() {
     atlas.delete_dataset("feb_2024").await.unwrap();
 
     // Only jan_2024 remains to contribute.
-    let temperature = atlas.array_stats("temperature").unwrap();
+    let temperature = atlas.array_stats("temperature").await.unwrap().unwrap();
     assert_eq!(temperature.min, Some(StatValue::Float(0.0)));
     assert_eq!(temperature.max, Some(StatValue::Float(31.0)));
     assert_eq!(temperature.row_count, 32);
 
     let jan = atlas.dataset("jan_2024").unwrap();
-    assert_eq!(atlas.array_stats("counts"), jan.array_stats("counts"));
+    assert_eq!(
+        atlas.array_stats("counts").await.unwrap(),
+        jan.array_stats("counts").await.unwrap()
+    );
 
     // Delete the only dataset that holds an array, and nothing remains.
     atlas.delete_dataset("stations").await.unwrap();
-    assert!(atlas.array_stats("name").is_none());
+    assert!(atlas.array_stats("name").await.unwrap().is_none());
 }
 
 #[tokio::test]
@@ -469,17 +610,218 @@ async fn an_array_that_was_never_written_reads_as_its_fill_value() {
 }
 
 #[tokio::test]
-async fn identical_schemas_are_stored_once() {
+async fn the_schema_names_the_attribute_keys_too() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
 
-    // jan and feb declare the same arrays. They differ only in attributes,
-    // which the schema excludes. They must share one interned entry.
+    // jan and feb declare the same arrays. jan carries `source` and feb does
+    // not, and the schema names the keys, so the two do not share an entry.
     let jan = atlas.dataset("jan_2024").unwrap();
     let feb = atlas.dataset("feb_2024").unwrap();
-    assert_eq!(jan.schema(), feb.schema());
-    assert_ne!(jan.attributes(), feb.attributes());
+    assert_eq!(
+        jan.schema().names().collect::<Vec<_>>(),
+        feb.schema().names().collect::<Vec<_>>()
+    );
+    assert_ne!(jan.schema(), feb.schema());
+    assert_ne!(
+        jan.attributes().await.unwrap(),
+        feb.attributes().await.unwrap()
+    );
+    // The values differ, and both resolve against their own schema.
+    assert_eq!(
+        jan.get_attribute("month").await.unwrap(),
+        Some(Attr::Int64(1))
+    );
+    assert_eq!(
+        feb.get_attribute("month").await.unwrap(),
+        Some(Attr::Int64(2))
+    );
+    assert_eq!(feb.get_attribute("source").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn the_schema_view_reads_every_array_from_the_footer() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+    let jan = atlas.dataset("jan_2024").unwrap();
+    let schema = jan.schema();
+
+    assert_eq!(schema.len(), 2);
+    assert!(!schema.is_empty());
+    assert_eq!(
+        schema.names().collect::<Vec<_>>(),
+        vec!["temperature", "counts"]
+    );
+    assert_eq!(schema.index_of("counts"), Some(1));
+    assert_eq!(schema.index_of("missing"), None);
+
+    // By name and by position give the same array.
+    let by_name = schema.get("temperature").unwrap();
+    let by_index = schema.get_index(0).unwrap();
+    assert_eq!(by_name, by_index);
+    assert_eq!(by_name.name(), "temperature");
+    assert_eq!(*by_name.dtype(), atlas::DType::Float32);
+    assert_eq!(by_name.position(), 0);
+    assert!(schema.get_index(2).is_none());
+
+    // Attribute keys and their types come from the footer too.
+    assert_eq!(
+        schema.attribute_names().collect::<Vec<_>>(),
+        vec!["month", "source"]
+    );
+    assert_eq!(schema.attribute_dtype("month"), Some(&atlas::DType::Int64));
+    assert_eq!(schema.attribute_dtype("missing"), None);
+    assert_eq!(by_name.attribute_names(), vec!["units"]);
+    assert_eq!(
+        by_name.attribute_dtype("units"),
+        Some(&atlas::DType::String)
+    );
+
+    // The owned copy holds the same names and types.
+    let owned = schema.to_owned_schema();
+    assert_eq!(
+        owned.arrays.keys().collect::<Vec<_>>(),
+        vec!["temperature", "counts"]
+    );
+    assert_eq!(owned.arrays["temperature"], atlas::DType::Float32);
+    assert_eq!(owned.attributes["month"], atlas::DType::Int64);
+    assert_eq!(
+        owned.array_attributes["temperature"]["units"],
+        atlas::DType::String
+    );
+
+    // Shape and chunking come from the segment, not the footer.
+    let layout = jan.array_layout("temperature").await.unwrap();
+    assert_eq!(layout.shape(), vec![4, 8]);
+    assert_eq!(layout.chunk_shape(), vec![2, 4]);
+    assert_eq!(layout.dimension_names(), vec!["lat", "lon"]);
+    assert_eq!(layout.element_count(), 32);
+    // A name this dataset does not declare has no layout to read.
+    assert!(matches!(
+        jan.array_layout("missing").await,
+        Err(Error::ArrayNotFound(_))
+    ));
+}
+
+#[tokio::test]
+async fn datasets_that_differ_only_in_shape_share_one_schema() {
+    // The shape is what varies across a directory of files, and it is not in
+    // the schema. The segment records it. A thousand files of one convention
+    // therefore intern to one entry, whatever their lengths.
+    let tmp = tempfile::tempdir().unwrap();
+    {
+        let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+            .await
+            .unwrap();
+        for (name, len) in [("short", 2usize), ("long", 3usize)] {
+            let mut ds = w.add_dataset(name).await.unwrap();
+            ds.define_array::<f32>("temperature", vec!["time".into()], vec![len], None, None)
+                .await
+                .unwrap();
+            let data = Array1::from_vec(vec![1.5f32; len]).into_dyn();
+            ds.write_array("temperature", vec![0], data.view())
+                .await
+                .unwrap();
+            ds.set_attribute("site", Attr::String(name.into()));
+            ds.finish().await.unwrap();
+        }
+        w.finish().await.unwrap();
+    }
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    assert_eq!(atlas.total_datasets(), 2);
+    assert_eq!(atlas.interned_schemas(), 1);
+    assert_eq!(atlas.list_arrays(), vec!["temperature"]);
+
+    let short = atlas.dataset("short").unwrap();
+    let long = atlas.dataset("long").unwrap();
+    assert_eq!(short.schema(), long.schema());
+    // The attribute values still differ. Only the keys are in the schema.
+    assert_eq!(
+        short.get_attribute("site").await.unwrap(),
+        Some(Attr::String("short".into()))
+    );
+    assert_eq!(
+        long.get_attribute("site").await.unwrap(),
+        Some(Attr::String("long".into()))
+    );
+
+    // The lengths differ, and both come from the one segment.
+    let short_layout = short.array_layout("temperature").await.unwrap();
+    let long_layout = long.array_layout("temperature").await.unwrap();
+    assert_eq!(short_layout.shape(), vec![2]);
+    assert_eq!(long_layout.shape(), vec![3]);
+    assert_eq!(
+        short_layout.dimension_names(),
+        long_layout.dimension_names()
+    );
+    assert_eq!(
+        short
+            .read_array::<f32>("temperature", vec![], vec![])
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        long.read_array::<f32>("temperature", vec![], vec![])
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn one_array_resolves_to_its_own_position_in_each_schema() {
+    // Two datasets declare the same arrays in opposite order. The footer
+    // records a position, not a name, so a collection-wide call must map the
+    // name once per schema.
+    let tmp = tempfile::tempdir().unwrap();
+    {
+        let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
+            .await
+            .unwrap();
+        for (dataset, order, base) in [
+            ("a", ["temperature", "salinity"], 1.0f32),
+            ("b", ["salinity", "temperature"], 10.0f32),
+        ] {
+            let mut ds = w.add_dataset(dataset).await.unwrap();
+            for (i, array) in order.iter().enumerate() {
+                ds.define_array::<f32>(array, vec!["time".into()], vec![2], None, None)
+                    .await
+                    .unwrap();
+                let offset = base + (i * 100) as f32;
+                let data = Array1::from_vec(vec![offset, offset + 1.0]).into_dyn();
+                ds.write_array(array, vec![0], data.view()).await.unwrap();
+            }
+            ds.finish().await.unwrap();
+        }
+        w.finish().await.unwrap();
+    }
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+
+    // The two orders make two schemas, and temperature sits elsewhere in each.
+    assert_eq!(atlas.interned_schemas(), 2);
+    let a = atlas.dataset("a").unwrap();
+    let b = atlas.dataset("b").unwrap();
+    assert_eq!(a.schema().index_of("temperature"), Some(0));
+    assert_eq!(b.schema().index_of("temperature"), Some(1));
+
+    // a holds 1.0..=2.0 and b holds 110.0..=111.0.
+    let per = atlas.array_stats_by_dataset("temperature").await.unwrap();
+    assert_eq!(per.len(), 2);
+    assert_eq!(per[0].0, "a");
+    assert_eq!(per[0].1.min, Some(StatValue::Float(1.0)));
+    assert_eq!(per[1].0, "b");
+    assert_eq!(per[1].1.min, Some(StatValue::Float(110.0)));
+
+    let merged = atlas.array_stats("temperature").await.unwrap().unwrap();
+    assert_eq!(merged.min, Some(StatValue::Float(1.0)));
+    assert_eq!(merged.max, Some(StatValue::Float(111.0)));
+    assert_eq!(merged.row_count, 4);
 }
 
 #[tokio::test]
@@ -501,11 +843,11 @@ async fn timestamps_and_date_shaped_strings_stay_distinct() {
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
     let ds = atlas.dataset("d").unwrap();
     assert_eq!(
-        ds.get_attribute("when"),
+        ds.get_attribute("when").await.unwrap(),
         Some(Attr::TimestampNanoseconds(1_700_000_000_000_000_000))
     );
     assert_eq!(
-        ds.get_attribute("looks_like"),
+        ds.get_attribute("looks_like").await.unwrap(),
         Some(Attr::String("2023-11-14T22:13:20Z".into()))
     );
 }
@@ -744,24 +1086,61 @@ async fn opening_reads_only_the_tail_of_the_container() {
         counting.bytes(),
     );
 
-    // Metadata questions cost nothing more.
+    // The footer holds names and types. Those cost nothing more.
     counting.reset();
     let _ = atlas.list_datasets();
     let _ = atlas.list_arrays();
+    let _ = atlas.dataset_count();
+    let _ = atlas.interned_schemas();
     let ds = atlas.dataset("ds0").unwrap();
+    let _ = ds.name();
+    let _ = ds.ordinal();
     let _ = ds.list_arrays();
-    let _ = ds.array_meta("x");
-    let _ = ds.attributes();
-    let _ = ds.array_attributes("x");
-    assert_eq!(
-        counting.gets(),
-        0,
-        "metadata access should not touch the store"
+    let _ = ds.schema().attribute_names().count();
+    let _ = ds.array_meta("x").unwrap().dtype();
+    assert_eq!(counting.gets(), 0, "the footer must answer these alone");
+
+    // Nothing else is in the footer. A statistic, an attribute value, and a
+    // layout all live on the array they belong to, so each reads a segment.
+    // `build_bulky_fixture` gives each dataset an `index` attribute, which
+    // sits in the reserved `_datasets` segment.
+    counting.reset();
+    let stats = ds.array_stats("x").await.unwrap().unwrap();
+    assert_eq!(stats.name, "x");
+    assert!(stats.row_count > 0, "the segment recorded a row count");
+    let opened = counting.gets();
+    assert!(opened > 0, "a statistic comes from a segment");
+
+    // That segment is open now, so everything else it holds is free.
+    counting.reset();
+    let _ = atlas.array_stats("x").await.unwrap();
+    let _ = atlas.array_stats_by_dataset("x").await.unwrap();
+    let _ = ds.array_layout("x").await.unwrap();
+    let other = atlas.dataset("ds1").unwrap();
+    let _ = other.array_stats("x").await.unwrap();
+    assert_eq!(counting.gets(), 0, "the handle is cached");
+
+    // The attribute values are in another segment, so that one opens once too.
+    counting.reset();
+    assert_eq!(ds.attributes().await.unwrap().len(), 1);
+    let attrs_opened = counting.gets();
+    assert!(attrs_opened > 0, "an attribute value comes from a segment");
+    counting.reset();
+    assert_eq!(other.attributes().await.unwrap().len(), 1);
+    assert!(
+        counting.gets() < attrs_opened,
+        "the second dataset cost {} reads, the first {attrs_opened}",
+        counting.gets()
     );
+
+    // An array with no attribute reads nothing, because the schema says so.
+    counting.reset();
+    assert!(ds.array_attributes("x").await.unwrap().is_empty());
+    assert_eq!(counting.gets(), 0, "an empty key list needs no segment");
 }
 
 #[tokio::test]
-async fn reading_one_dataset_touches_only_its_own_segment() {
+async fn one_variable_segment_opens_once_for_every_dataset() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
 
@@ -772,31 +1151,27 @@ async fn reading_one_dataset_touches_only_its_own_segment() {
         .await
         .unwrap();
 
-    // The ranges the reader may touch. The tail, and the segment of jan.
-    let bare = Atlas::open_path(tmp.path()).await.unwrap();
-    let jan_ordinal = bare.dataset("jan_2024").unwrap().ordinal();
-    assert_eq!(jan_ordinal, 0);
-
     counting.reset();
-    let ds = atlas.dataset("jan_2024").unwrap();
-    let counts = ds
-        .read_array::<i64>("counts", vec![], vec![])
+    let jan = atlas.dataset("jan_2024").unwrap();
+    let first_read = jan
+        .read_array::<f32>("temperature", vec![], vec![])
         .await
         .unwrap();
-    assert_eq!(counts.as_slice().unwrap(), &[10, 20, 30, 40]);
+    assert_eq!(first_read.shape(), &[4, 8]);
     let first = counting.gets();
     assert!(first > 0, "a data read must fetch something");
 
-    // The segment is open now. A second array from the same dataset therefore
-    // costs fewer reads than the first.
+    // One segment holds `temperature` for every dataset. It is open now, so
+    // the next dataset's temperature costs fewer reads than the first did.
     counting.reset();
-    let _ = ds
+    let feb = atlas.dataset("feb_2024").unwrap();
+    let _ = feb
         .read_array::<f32>("temperature", vec![], vec![])
         .await
         .unwrap();
     assert!(
         counting.gets() < first,
-        "reopening cost {} reads, first read cost {first}",
+        "the second dataset cost {} reads, the first {first}",
         counting.gets()
     );
 }
@@ -838,7 +1213,7 @@ async fn a_dataset_with_no_arrays_still_round_trips() {
     let ds = atlas.dataset("empty").unwrap();
     assert!(ds.list_arrays().is_empty());
     assert_eq!(
-        ds.get_attribute("note"),
+        ds.get_attribute("note").await.unwrap(),
         Some(Attr::String("no arrays here".into()))
     );
 }
@@ -933,14 +1308,8 @@ async fn datasets_staged_concurrently_land_intact() {
         );
         assert_eq!(got[[255]], (d * 1000 + 255) as i32);
     }
-    // The segments still tile the container, with no gap and no overlap.
-    let mut ranges: Vec<_> = (0..4)
-        .map(|d| atlas.dataset(&format!("ds{d}")).unwrap().segment_range())
-        .collect();
-    ranges.sort_by_key(|r| r.start);
-    for pair in ranges.windows(2) {
-        assert_eq!(pair[0].end, pair[1].start, "segments must be contiguous");
-    }
+    // Every dataset declares `x`, so one segment holds all four.
+    assert_eq!(atlas.list_arrays(), vec!["x"]);
 }
 
 #[tokio::test]
@@ -1307,7 +1676,7 @@ async fn a_container_from_a_future_version_is_rejected_clearly() {
         Atlas::open_path(tmp.path()).await,
         Err(Error::UnsupportedVersion {
             found: 99,
-            expected: 1
+            expected: 6
         })
     ));
 }
@@ -1322,67 +1691,38 @@ async fn the_container_carries_the_documented_framing() {
 
     // Header: magic then version.
     assert_eq!(&bytes[0..4], b"ATLS");
-    assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 1);
+    assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 6);
 
     // Trailer: footer size, version, magic.
     let len = bytes.len();
     assert_eq!(&bytes[len - 4..], b"ATLS");
     assert_eq!(
         u32::from_le_bytes(bytes[len - 8..len - 4].try_into().unwrap()),
-        1
+        6
     );
     let footer_size = u64::from_le_bytes(bytes[len - 16..len - 8].try_into().unwrap()) as usize;
     assert!(footer_size > 0 && footer_size < len - 24);
 
-    // The segments pack back to back, from just after the header. The first
-    // one ends where the second starts.
+    // One segment per distinct array name, packed back to back from just
+    // after the header, and ending where the container footer starts.
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
-    let first = atlas.dataset("jan_2024").unwrap().segment_range();
-    let second = atlas.dataset("feb_2024").unwrap().segment_range();
-    assert_eq!(first.start, 8);
-    assert_eq!(first.end, second.start);
-    // array-format addresses from the footer, so each segment ends in its own
-    // magic.
-    assert_eq!(&bytes[first.end as usize - 4..first.end as usize], b"ARRF");
-    // The last segment ends where the container footer starts.
-    let last = atlas.dataset("stations").unwrap().segment_range();
-    assert_eq!(last.end as usize, len - 16 - footer_size);
-}
-
-#[tokio::test]
-async fn a_segment_cut_out_of_the_container_opens_on_its_own() {
-    let tmp = tempfile::tempdir().unwrap();
-    build_fixture(tmp.path()).await;
-    let bytes = std::fs::read(tmp.path().join("data.atlas")).unwrap();
-
-    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
-    let jan = atlas.dataset("jan_2024").unwrap();
-    let expected = jan
-        .read_array::<i64>("counts", vec![], vec![])
-        .await
-        .unwrap();
-
-    // Carve the segment out as `dd` would. Then hand it to array-format, with
-    // no atlas in the way.
-    let range = jan.segment_range();
-    let carved = &bytes[range.start as usize..range.end as usize];
-
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("data.af"), carved).unwrap();
-    let store: Arc<dyn ObjectStore> =
-        Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir.path()).unwrap());
-    let file = array_format::ArrayFile::open(
-        store,
-        OsPath::from("data.af"),
-        array_format::FileConfig::new(array_format::NoCompression),
-    )
-    .await
-    .unwrap();
-    let direct = file
-        .read_array::<i64>("counts", vec![], vec![])
-        .await
-        .unwrap();
-    assert_eq!(direct.as_slice().unwrap(), expected.as_slice().unwrap());
+    assert_eq!(
+        atlas.list_arrays(),
+        vec!["counts", "name", "observed", "temperature"]
+    );
+    let segment_bytes = len - 8 - 16 - footer_size;
+    assert!(segment_bytes > 0);
+    // Each variable contributes two objects: the array-format file, then the
+    // statistics sidecar that crate keeps beside it. Both end in their own
+    // magic, so the bytes just before the container footer are the last
+    // sidecar's.
+    let last = len - 16 - footer_size;
+    assert_eq!(&bytes[last - 4..last], b"ARST");
+    // The `.af` file that precedes it ends in its own.
+    assert!(
+        bytes[8..last].windows(4).any(|w| w == b"ARRF"),
+        "no array-format file in the segment region"
+    );
 }
 
 // ── type safety ──────────────────────────────────────────────────────

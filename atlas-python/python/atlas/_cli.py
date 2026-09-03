@@ -267,8 +267,7 @@ def _render_dataset(d: dict[str, Any]) -> None:
         for key, value in d["attributes"].items():
             print(f"\t\t:{key} = {_format_value(value)} ;")
 
-    start, end = d["segment_range"]
-    print(f"\n// ordinal {d['ordinal']}, segment bytes {start}..{end}")
+    print(f"\n// ordinal {d['ordinal']}")
     print("}")
 
 

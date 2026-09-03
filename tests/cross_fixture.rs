@@ -49,9 +49,9 @@ async fn the_python_written_fixture_holds_the_values_python_wrote() {
             assert_eq!(temperature[[row, col]], (row * 6 + col) as f32);
         }
     }
-    let meta = grid.array_meta("temperature").unwrap();
-    assert_eq!(meta.chunk_shape, vec![2, 3]);
-    assert_eq!(meta.dimension_names, vec!["lat", "lon"]);
+    let layout = grid.array_layout("temperature").await.unwrap();
+    assert_eq!(layout.chunk_shape(), vec![2, 3]);
+    assert_eq!(layout.dimension_names(), vec!["lat", "lon"]);
 
     // A window across all four chunks.
     let window = grid
@@ -67,7 +67,10 @@ async fn the_python_written_fixture_holds_the_values_python_wrote() {
         .await
         .unwrap();
     assert_eq!(counts.as_slice().unwrap(), &[10, 20, 30, 40]);
-    assert_eq!(grid.array_fill_value("counts"), None);
+    assert_eq!(
+        grid.array_layout("counts").await.unwrap().fill_value(),
+        None
+    );
 
     // Object strings become variable-length atlas strings.
     let label = grid
@@ -99,55 +102,62 @@ async fn the_python_written_fixture_carries_its_metadata() {
     let grid = atlas.dataset("grid.nc").unwrap();
 
     assert_eq!(
-        grid.array_meta("temperature").unwrap().dtype,
+        *grid.array_meta("temperature").unwrap().dtype(),
         DType::Float32
     );
-    assert_eq!(grid.array_meta("counts").unwrap().dtype, DType::Int64);
-    assert_eq!(grid.array_meta("label").unwrap().dtype, DType::String);
+    assert_eq!(*grid.array_meta("counts").unwrap().dtype(), DType::Int64);
+    assert_eq!(*grid.array_meta("label").unwrap().dtype(), DType::String);
     assert_eq!(
-        grid.array_meta("observed").unwrap().dtype,
+        *grid.array_meta("observed").unwrap().dtype(),
         DType::TimestampNs
     );
 
     // Dataset attributes, with the coordinate marker the xarray layer writes
     // and the JSON-encoded list.
-    assert_eq!(grid.get_attribute("month"), Some(Attr::Int64(1)));
     assert_eq!(
-        grid.get_attribute("station"),
+        grid.get_attribute("month").await.unwrap(),
+        Some(Attr::Int64(1))
+    );
+    assert_eq!(
+        grid.get_attribute("station").await.unwrap(),
         Some(Attr::String("KNMI".into()))
     );
     assert_eq!(
-        grid.get_attribute("_pyatlas_coords"),
+        grid.get_attribute("_pyatlas_coords").await.unwrap(),
         Some(Attr::String("[\"lat\", \"lon\"]".into()))
     );
     assert_eq!(
-        grid.get_attribute("bounds"),
+        grid.get_attribute("bounds").await.unwrap(),
         Some(Attr::String("json:[1.0, 2.0]".into()))
     );
 
     // Each per-variable attribute lands on its own array.
     assert_eq!(
-        grid.get_array_attribute("temperature", "units"),
+        grid.get_array_attribute("temperature", "units")
+            .await
+            .unwrap(),
         Some(Attr::String("celsius".into()))
     );
     assert_eq!(
-        grid.get_array_attribute("temperature", "long_name"),
+        grid.get_array_attribute("temperature", "long_name")
+            .await
+            .unwrap(),
         Some(Attr::String("surface temperature".into()))
     );
-    assert!(grid.array_attributes("counts").is_empty());
+    assert!(grid.array_attributes("counts").await.unwrap().is_empty());
 
     // A float defaults to a NaN fill. A datetime defaults to NaT.
     assert!(matches!(
-        grid.array_fill_value("temperature"),
+        grid.array_layout("temperature").await.unwrap().fill_value(),
         Some(FillValue::Float(f)) if f.is_nan()
     ));
     assert_eq!(
-        grid.array_fill_value("observed"),
-        Some(FillValue::TimestampNs(i64::MIN))
+        grid.array_layout("observed").await.unwrap().fill_value(),
+        Some(&FillValue::TimestampNs(i64::MIN))
     );
     assert_eq!(
-        grid.array_fill_value("label"),
-        Some(FillValue::String(String::new()))
+        grid.array_layout("label").await.unwrap().fill_value(),
+        Some(&FillValue::String(String::new()))
     );
 }
 
@@ -161,10 +171,13 @@ async fn the_two_python_datasets_share_one_interned_schema() {
     // declare the same arrays, so the footer stores that schema once.
     assert_eq!(grid.list_arrays(), copy.list_arrays());
     assert_eq!(grid.schema(), copy.schema());
-    assert_eq!(grid.attributes(), copy.attributes());
+    assert_eq!(
+        grid.attributes().await.unwrap(),
+        copy.attributes().await.unwrap()
+    );
 
-    // The copy holds the same data, in a segment of its own.
-    assert_ne!(grid.segment_range(), copy.segment_range());
+    // Both datasets read their counts out of the one `counts` segment, each
+    // under its own name.
     let copy_counts = copy
         .read_array::<i64>("counts", vec![], vec![])
         .await
@@ -178,23 +191,23 @@ async fn the_python_written_fixture_carries_statistics() {
     let grid = atlas.dataset("grid.nc").unwrap();
 
     // The staging step computes these. The footer then stores them.
-    let temperature = grid.array_stats("temperature").unwrap();
+    let temperature = grid.array_stats("temperature").await.unwrap().unwrap();
     assert_eq!(temperature.row_count, 24);
     assert_eq!(temperature.null_count, 0);
     assert_eq!(temperature.min, Some(StatValue::Float(0.0)));
     assert_eq!(temperature.max, Some(StatValue::Float(23.0)));
 
-    let counts = grid.array_stats("counts").unwrap();
+    let counts = grid.array_stats("counts").await.unwrap().unwrap();
     assert_eq!(counts.min, Some(StatValue::Int(10)));
     assert_eq!(counts.max, Some(StatValue::Int(40)));
 
     // A string compares lexicographically, as raw bytes.
-    let label = grid.array_stats("label").unwrap();
+    let label = grid.array_stats("label").await.unwrap().unwrap();
     assert_eq!(label.min, Some(StatValue::Bytes(b"alpha".to_vec())));
     assert_eq!(label.max, Some(StatValue::Bytes(b"gamma".to_vec())));
 
     // A timestamp keeps its own statistic type.
-    let observed = grid.array_stats("observed").unwrap();
+    let observed = grid.array_stats("observed").await.unwrap().unwrap();
     let jan_1_2024 = 1_704_067_200_000_000_000i64;
     assert_eq!(observed.min, Some(StatValue::TimestampNs(jan_1_2024)));
     assert_eq!(

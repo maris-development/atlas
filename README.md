@@ -11,23 +11,32 @@
 
 A collection is one write-once file. A dataset is a set of named N-dimensional
 arrays with attributes. It has the shape of a NetCDF file or an
-`xarray.Dataset`. Each dataset occupies one contiguous byte range inside the
-file. A footer at the end records where each one lives, with its schema and its
-attributes.
+`xarray.Dataset`.
+
+The file stores one segment per **variable**, not one per dataset. A segment
+holds one array name across the whole collection, and each dataset's copy sits
+inside it under the dataset's own name. A footer at the end records where each
+variable lives, and what each dataset declares.
 
 ```text
 my_collection/
-├── data.atlas      ATLS │ segment │ segment │ … │ footer │ trailer
+├── data.atlas      ATLS │ temperature │ salinity │ … │ footer │ trailer
 └── deleted.mask    optional: ordinals of deleted datasets
 ```
 
-Two results follow, and they are most of the point:
+Three results follow, and they are most of the point:
 
-- **Metadata is one read.** An open of a collection fetches the footer and
-  nothing else. To list the datasets, to inspect a schema, and to read an
-  attribute are then free. Ten datasets and a million datasets cost the same.
-- **Data arrives chunk by chunk.** A read of a region of an array fetches only
-  the chunks that region overlaps.
+- **The catalogue is one read.** An open of a collection fetches the footer
+  and nothing else. To list the datasets and to inspect what each declares are
+  then free. Ten datasets and a million cost the same. The footer repeats
+  nothing a segment holds, so a value costs one segment open, and one open
+  serves the whole collection.
+- **One variable is one file.** To read `temperature` across every dataset
+  opens one segment and walks it. The old shape, one segment per dataset, had
+  to open every dataset and discard the other variables in each block.
+- **Data arrives block by block.** A read fetches only the blocks the region
+  overlaps, and a block holds one dtype for a run of neighbouring datasets. It
+  therefore compresses far better than a mix.
 
 Atlas builds on [`array-format`](https://github.com/robinskil/array-format) for
 the chunked-array encoding, and on
@@ -77,8 +86,8 @@ let atlas = Atlas::open_path("/data/weather").await?;
 assert_eq!(atlas.list_datasets(), vec!["jan_2024".to_string()]);
 
 let ds = atlas.dataset("jan_2024")?;
-assert_eq!(ds.array_meta("temperature").unwrap().shape, vec![4, 8]);
-assert_eq!(ds.get_attribute("month"), Some(Attr::Int64(1)));
+assert_eq!(*ds.array_meta("temperature").unwrap().dtype(), DType::Float32);
+assert_eq!(ds.get_attribute("month").await?, Some(Attr::Int64(1)));
 
 // Only this line fetches array bytes, and only the chunks it needs.
 let window = ds.read_array::<f32>("temperature", vec![0, 0], vec![2, 4]).await?;
@@ -122,12 +131,13 @@ any number of names, and still writes the mask once.
 
 ```text
 offset 0     b"ATLS"                     4 B   leading magic
-offset 4     format_version u32 LE = 1   4 B
-offset 8     segment[0]                        a complete array-format file
+offset 4     format_version u32 LE = 3   4 B
+offset 8     segment[0]                        one variable, array-format
+             segment[0].stats                  its statistics sidecar
              segment[1] …                      back to back, no padding
              footer_bytes                      zstd(msgpack(CollectionFooter))
 end - 16     footer_size u64 LE          8 B  ┐
-end - 8      format_version u32 LE = 1   4 B  ├ trailer
+end - 8      format_version u32 LE = 3   4 B  ├ trailer
 end - 4      b"ATLS"                     4 B  ┘
 ```
 
@@ -137,28 +147,45 @@ the trailing copy. The leading copy lets `file` and `xxd` name the file.
 
 ### Segments
 
-One per dataset. Each is a complete `array-format` file that describes itself.
-Cut one out, and it opens on its own:
+One per variable, each a complete `array-format` file that describes itself,
+followed by the statistics sidecar that crate keeps beside it. Inside, an array
+keys on the **dataset** name, so `temperature` holds `jan_2024`, `feb_2024`,
+and every other dataset that declares it.
 
-```bash
-# offsets from DatasetView::segment_range()
-dd if=data.atlas of=jan.af bs=1 skip=8 count=1438
-```
+That is what makes a scan cheap. `array-format` packs neighbouring chunks into
+one block, so a block holds `temperature` for a run of datasets. One fetch
+serves them all, and the block holds one dtype, which compresses far better
+than a mix. Each block records its own codec, so nothing needs to tell a reader
+how a collection compresses.
 
-Inside, each array keys on its real name, and each block records its own codec.
-Nothing therefore needs to tell a reader how a collection compresses.
+It also puts the shape, the chunking, the attribute values and the statistics
+in the segment, where the data is. The footer repeats none of them.
 
 ### Footer
 
-MessagePack, then zstd. It holds every dataset name, segment byte range,
-schema, and attribute. Two pools keep it small. Schemas intern by content hash,
-so a fleet of a thousand datasets of one shape stores one copy. Attribute keys
-intern as strings.
+MessagePack, then zstd. It holds every dataset name, every variable's byte
+range, and what each dataset declares. **Nothing a segment already holds.**
 
-Attribute **values** live here too, and not in the segments. So do the minimum,
-the maximum, and the null count of each array. The staging step computes those,
-because the writer walks the data anyway. A metadata-only open therefore
-answers every question about a collection with no further I/O.
+Three pools keep it small. Every string interns once, whether it names an array
+or an attribute. So does every dtype. Every distinct schema interns once.
+
+A schema names things: array names with their element types, and attribute keys
+with theirs. No shape, no chunking, no attribute value, no statistic. So
+datasets whose arrays differ only in length share one entry, and a directory of
+ten thousand files of one convention interns to one.
+
+A dataset is then one `u32` into that pool. The datasets are an `IndexMap` keyed
+by name, so a name and its ordinal are one structure and a lookup is one hash.
+
+Everything else sits on the array it belongs to, inside that variable's
+segment. Attribute values, because `array-format` attaches an attribute to an
+array. Statistics, because it computes them while writing and stores them in a
+sidecar beside the file. A segment interns each attribute key and value once, so
+`units = "celsius"` across ten thousand datasets is stored once.
+
+A dataset-level attribute has no array of its own, so the reserved `_datasets`
+segment gives it one: a rank-0 array per dataset carrying its global
+attributes.
 
 Full byte-level detail in [`docs/format.md`](docs/format.md).
 
@@ -169,17 +196,30 @@ Full byte-level detail in [`docs/format.md`](docs/format.md).
 ```rust
 let atlas = Atlas::open_path(path).await?;   // 1–2 requests, any collection size
 
+// From the footer. No I/O, whatever the collection size.
 atlas.list_datasets();
 atlas.list_arrays();
-atlas.array_stats("temperature");            // every live dataset, combined
-atlas.array_stats_by_dataset("temperature"); // the same, split per dataset
-let ds = atlas.dataset("jan_2024")?;         // no I/O
-ds.schema();
-ds.array_meta("temperature");
-ds.attributes();
-ds.array_fill_value("temperature");
-ds.array_stats("temperature");               // min, max, null count, row count
+let ds = atlas.dataset("jan_2024")?;         // one hash lookup
+ds.name();
+ds.schema();                                 // array and attribute names, types
+ds.array_meta("temperature");                // name and dtype
+
+// From a segment. Everything the footer does not repeat.
+ds.array_layout("temperature").await?;       // shape, chunks, dims, fill value
+ds.array_stats("temperature").await?;        // min, max, null count, row count
+ds.attributes().await?;                      // dataset-level values
+ds.array_attributes("temperature").await?;   // one array's values
+atlas.array_stats("temperature").await?;     // every live dataset, combined
+atlas.array_stats_by_dataset("temperature").await?;
+atlas.attribute_by_dataset("month").await?;  // one attribute, one per dataset
 ```
+
+`schema()` and `array_meta()` borrow the footer and copy no name. Call
+`to_owned_schema()` on either one for an owned copy.
+
+The reading calls open one segment, once for the whole collection. A variable's
+statistics and its layout come out of the same open. A dataset that declares no
+attribute key costs nothing at all, because the schema settles it first.
 
 None of that touches the store after the open. `tests/integration.rs` proves it
 with a request-counting `ObjectStore`.
@@ -191,30 +231,39 @@ let all    = ds.read_array::<f32>("temperature", vec![], vec![]).await?;
 let window = ds.read_array::<f32>("temperature", vec![1, 3], vec![2, 2]).await?;
 ```
 
-The first read on a dataset opens its segment, in two small range reads. The
-handle then stays in the cache. The read fetches the overlapping chunks, and no
-more. Every cell nobody wrote comes from the fill value, and costs no I/O.
+The first read of a variable opens its segment, in two small range reads. The
+handle then stays in the cache, and every other dataset's copy of that variable
+uses it. The read fetches the overlapping blocks, and no more. Every cell
+nobody wrote comes from the fill value, and costs no I/O.
 
 ---
 
 ## Writing
 
-`AtlasWriter` streams one object. Each dataset stages as a complete
-`array-format` file on local scratch. The writer then copies that file into the
-stream, byte for byte:
+`AtlasWriter` streams one object. Each **variable** stages as a complete
+`array-format` file on local scratch, and every dataset writes into it under
+its own name:
 
 ```text
-add_dataset("jan")  ──▶ scratch/1/data.af      define, write, define, write, …
-  finish()          ──▶ flush, compact, copy   ──▶ container[8 .. 4_100]
-AtlasWriter::finish ──▶ footer, trailer, done
+add_dataset("jan")  ──▶ scratch/v0/data.af     temperature/jan
+                        scratch/v1/data.af     salinity/jan
+add_dataset("feb")  ──▶ scratch/v0/data.af     temperature/feb
+                        scratch/v1/data.af     salinity/feb
+AtlasWriter::finish ──▶ compact each, copy in, footer, trailer, done
 ```
 
-Memory stays bounded, whatever the dataset size. `array-format` spills each
-compressed chunk to a temporary file, and the copy streams in 8 MiB pieces.
+A variable's segment is complete only when every dataset has contributed, so
+nothing reaches the container until `AtlasWriter::finish`. Local scratch
+therefore holds the whole collection once.
 
-`add_dataset` returns an owned writer, so several datasets can stage at once.
-Each takes the writer's lock for its append alone. The segments therefore land
-in finish order, and never interleave.
+Memory stays bounded. `array-format` keeps a pending write in memory until
+`flush`, so a variable past 64 MiB flushes and seals a layer. `compact` merges
+the layers at the end, and the copy streams in 8 MiB pieces.
+
+A `DatasetWriter` takes the writer's lock for each define and each write,
+because the variable files are shared. Ordinals do not depend on that order.
+Each dataset carries the number of its `add_dataset` call, and the footer sorts
+on it.
 
 ---
 
@@ -224,8 +273,8 @@ Scalars: `Bool`, `Int8`…`Int64`, `UInt8`…`UInt64`, `Float32`, `Float64`,
 `String`, `Binary`, `TimestampNs`. Nested: `List<T>`, `FixedSizeList<T, n>`.
 
 Two datasets can declare one array name with unrelated types. Atlas stores each
-as declared. There is no merged schema, and no type widening. One segment per
-dataset leaves nothing to reconcile. `Atlas::array_stats` leaves such a dataset
+as declared, as its own array inside that variable's segment. There is no
+merged schema, and no type widening. `Atlas::array_stats` leaves such a dataset
 out, because two dtypes do not compare.
 
 An attribute takes any scalar type, or a list of one type. It sits at dataset
@@ -261,7 +310,7 @@ cargo test -p atlas-rust
 
 This covers the format framing, the footer and mask codecs, the segment-store
 adapter, and the whole lifecycle. Two committed fixtures pin compatibility.
-`tests/fixtures/golden_v1/` is a v1 container, read back with every value
+`tests/fixtures/golden_v6/` is a v6 container, read back with every value
 asserted. The Python xarray layer writes `tests/fixtures/from_python/`, and
 Rust checks it. That keeps the two in agreement, because Python reads no array.
 

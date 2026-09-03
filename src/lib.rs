@@ -68,8 +68,12 @@
 //! assert_eq!(atlas.list_datasets(), vec!["jan_2024".to_string()]);
 //!
 //! let ds = atlas.dataset("jan_2024").unwrap();
-//! assert_eq!(ds.array_meta("temperature").unwrap().shape, vec![4, 8]);
-//! assert_eq!(ds.get_attribute("month"), Some(Attr::Int64(1)));
+//! assert_eq!(*ds.array_meta("temperature").unwrap().dtype(), atlas::DType::Float32);
+//! assert_eq!(ds.get_attribute("month").await.unwrap(), Some(Attr::Int64(1)));
+//!
+//! // The shape lives in the array's segment, so this one reads it.
+//! let layout = ds.array_layout("temperature").await.unwrap();
+//! assert_eq!(layout.shape(), vec![4, 8]);
 //!
 //! // Only this line fetches array bytes.
 //! let temp = ds.read_array::<f32>("temperature", vec![], vec![]).await.unwrap();
@@ -99,7 +103,7 @@ mod writer;
 pub use config::{Codec, WriterConfig};
 pub use error::{Error, Result};
 pub use reader::{Atlas, DatasetView};
-pub use schema::{ArraySchema, Attr, DatasetSchema, FillValueS};
+pub use schema::{ArrayLayout, ArrayMeta, Attr, DatasetSchema, SchemaView};
 pub use writer::{AtlasWriter, DatasetWriter};
 
 pub use array_format::{ArrayElement, ArrayStats, DType, FillValue, StatValue, TimestampNs};

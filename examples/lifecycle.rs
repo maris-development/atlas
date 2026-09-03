@@ -60,21 +60,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  arrays:   {:?}", atlas.list_arrays());
 
     let north = atlas.dataset("north")?;
+    // Names and types come from the footer, and cost nothing.
     let meta = north.array_meta("grid").expect("grid is defined");
+    // Shape and chunking live in the segment, so this one reads it.
+    let layout = north.array_layout("grid").await?;
     println!(
         "  north/grid: {:?} shape {:?} chunks {:?}",
-        meta.dtype, meta.shape, meta.chunk_shape
+        meta.dtype(),
+        layout.shape(),
+        layout.chunk_shape()
     );
-    println!("  north attributes: {:?}", north.attributes());
+    println!("  north attributes: {:?}", north.attributes().await?);
     println!(
         "  north/grid units: {:?}",
-        north.get_array_attribute("grid", "units")
+        north.get_array_attribute("grid", "units").await?
     );
-    println!(
-        "  north segment bytes: {:?}  (a complete array-format file)",
-        north.segment_range()
-    );
-
     // The first call that needs data opens the segment. This call reads one
     // chunk, not the whole array.
     let corner = north

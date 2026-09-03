@@ -29,7 +29,7 @@ atlas info /data/collection
 ```python
 {
     "source": "/data/collection",
-    "format_version": 1,
+    "format_version": 6,
     "created_unix_ms": 1788165177965,
     "codec": "zstd",
     "container_bytes": 5571,
@@ -124,20 +124,12 @@ detail["coordinates"]              # ['lat', 'lon']
 
 The CLI marks them with `// coordinate`.
 
-### Segment range
+### Where the bytes are
 
-```python
-detail["segment_range"]   # [8, 1691]
-```
-
-The bytes this dataset occupies in `data.atlas`. They are a complete
-`array-format` file that stands alone:
-
-```python
-start, end = detail["segment_range"]
-blob = open(f"{collection}/data.atlas", "rb").read()[start:end]
-open("2024-01.af", "wb").write(blob)
-```
+A dataset occupies no contiguous range. `data.atlas` stores one segment per
+**variable**, and each dataset's array sits inside it under the dataset's name.
+To read `temperature` across the collection therefore reads one segment. To
+read one whole dataset touches one segment per variable it declares.
 
 ## Filtering a fleet
 

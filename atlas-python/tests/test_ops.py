@@ -780,9 +780,6 @@ def test_describe_reports_the_whole_dataset(collection):
     # The coordinate marker is internal to atlas, and no user attribute.
     assert "_pyatlas_coords" not in d["attributes"]
 
-    start, end = d["segment_range"]
-    assert 0 < start < end
-
 
 def test_describe_reports_each_array(collection):
     arrays = {a["name"]: a for a in atlas.describe(str(collection), "2024-01.nc")["arrays"]}
@@ -828,8 +825,7 @@ def test_describe_accepts_a_netcdf_path(collection, netcdf_dir):
     by_name = atlas.describe(str(collection), "2024-01.nc")
     by_path = atlas.describe(str(collection), netcdf_dir / "2024-01.nc")
     # Two NaN fill values never compare equal. Compare everything else.
-    for key in ("name", "ordinal", "segment_range", "dimensions", "coordinates",
-                "attributes"):
+    for key in ("name", "ordinal", "dimensions", "coordinates", "attributes"):
         assert by_name[key] == by_path[key], key
     assert [a["name"] for a in by_name["arrays"]] == [
         a["name"] for a in by_path["arrays"]
@@ -853,7 +849,7 @@ def test_describing_a_removed_dataset_is_an_error(collection):
 def test_info_summarises_the_collection(collection):
     i = atlas.info(str(collection))
 
-    assert i["format_version"] == 1
+    assert i["format_version"] == 6
     assert i["codec"] == "zstd"
     assert i["dataset_count"] == 3
     assert i["total_datasets"] == 3

@@ -60,14 +60,17 @@ impl PyAtlas {
     /// that declares the name with another dtype stays out, because two dtypes
     /// do not compare.
     ///
+    /// `array-format` keeps the statistics beside the data, so this reads that
+    /// variable's segment. One open covers every dataset.
+    ///
     /// Use `DatasetView.array_stats` for one dataset on its own.
     fn array_stats<'py>(
         &self,
         py: Python<'py>,
         array: &str,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
-        self.inner
-            .array_stats(array)
+        py.detach(|| runtime().block_on(self.inner.array_stats(array)))
+            .map_err(to_py_err)?
             .map(|stats| stats_to_py(py, &stats))
             .transpose()
     }
@@ -86,8 +89,11 @@ impl PyAtlas {
         py: Python<'py>,
         array: &str,
     ) -> PyResult<Bound<'py, PyDict>> {
+        let per_dataset = py
+            .detach(|| runtime().block_on(self.inner.array_stats_by_dataset(array)))
+            .map_err(to_py_err)?;
         let dict = PyDict::new(py);
-        for (name, stats) in self.inner.array_stats_by_dataset(array) {
+        for (name, stats) in per_dataset {
             dict.set_item(name, stats_to_py(py, &stats)?)?;
         }
         Ok(dict)
@@ -188,14 +194,6 @@ impl PyDatasetView {
         self.inner.ordinal()
     }
 
-    /// The `(start, end)` byte offsets of this dataset's segment in
-    /// `data.atlas`. Those bytes are a complete array-format file.
-    #[getter]
-    fn segment_range(&self) -> (u64, u64) {
-        let r = self.inner.segment_range();
-        (r.start, r.end)
-    }
-
     /// Array names, in definition order.
     fn list_arrays(&self) -> Vec<String> {
         self.inner.list_arrays()
@@ -203,36 +201,52 @@ impl PyDatasetView {
 
     /// `{"dtype", "shape", "chunk_shape", "dimension_names", "fill_value"}`
     /// for `array`. `None` if this dataset does not declare it.
+    ///
+    /// The name and the dtype come from the footer. The rest lives in the
+    /// array's segment, so this opens it. One segment covers that array for
+    /// every dataset, so the open happens once per variable.
     fn array_meta<'py>(
         &self,
         py: Python<'py>,
         array: &str,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
-        let Some(schema) = self.inner.array_meta(array) else {
+        let Some(meta) = self.inner.array_meta(array) else {
             return Ok(None);
         };
+        let dtype = dtype_to_string(meta.dtype());
+        let layout = py
+            .detach(|| runtime().block_on(self.inner.array_layout(array)))
+            .map_err(to_py_err)?;
         let dict = PyDict::new(py);
-        dict.set_item("dtype", dtype_to_string(&schema.dtype))?;
-        dict.set_item("shape", schema.shape.clone())?;
-        dict.set_item("chunk_shape", schema.chunk_shape.clone())?;
-        dict.set_item("dimension_names", schema.dimension_names.clone())?;
-        dict.set_item(
-            "fill_value",
-            fill_value_to_py(py, self.inner.array_fill_value(array).as_ref())?,
-        )?;
+        dict.set_item("dtype", dtype)?;
+        dict.set_item("shape", layout.shape().to_vec())?;
+        dict.set_item("chunk_shape", layout.chunk_shape().to_vec())?;
+        dict.set_item("dimension_names", layout.dimension_names())?;
+        dict.set_item("fill_value", fill_value_to_py(py, layout.fill_value())?)?;
         Ok(Some(dict))
     }
 
     /// The value a read returns for every element nobody wrote. `None` when
     /// the array has no fill value.
+    ///
+    /// This reads the array's segment, as [`array_meta`] does.
     fn array_fill_value(&self, py: Python<'_>, array: &str) -> PyResult<Py<PyAny>> {
-        fill_value_to_py(py, self.inner.array_fill_value(array).as_ref())
+        let layout = py
+            .detach(|| runtime().block_on(self.inner.array_layout(array)))
+            .map_err(to_py_err)?;
+        fill_value_to_py(py, layout.fill_value())
     }
 
     /// Dataset-level attributes, in the order somebody set them.
+    ///
+    /// The values live in the reserved `_datasets` segment, so this reads it.
+    /// A dataset that declares no attribute costs no I/O.
     fn attributes<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let attrs = py
+            .detach(|| runtime().block_on(self.inner.attributes()))
+            .map_err(to_py_err)?;
         let dict = PyDict::new(py);
-        for (k, v) in &self.inner.attributes() {
+        for (k, v) in &attrs {
             dict.set_item(k, attr_to_py(py, v)?)?;
         }
         Ok(dict)
@@ -240,16 +254,22 @@ impl PyDatasetView {
 
     /// One dataset-level attribute, or `None`.
     fn get_attribute(&self, py: Python<'_>, key: &str) -> PyResult<Option<Py<PyAny>>> {
-        self.inner
-            .get_attribute(key)
+        py.detach(|| runtime().block_on(self.inner.get_attribute(key)))
+            .map_err(to_py_err)?
             .map(|attr| attr_to_py(py, &attr))
             .transpose()
     }
 
     /// The attributes of one array, in the order somebody set them.
+    ///
+    /// The values live on this dataset's array in that variable's segment, so
+    /// this reads it.
     fn array_attributes<'py>(&self, py: Python<'py>, array: &str) -> PyResult<Bound<'py, PyDict>> {
+        let attrs = py
+            .detach(|| runtime().block_on(self.inner.array_attributes(array)))
+            .map_err(to_py_err)?;
         let dict = PyDict::new(py);
-        for (k, v) in &self.inner.array_attributes(array) {
+        for (k, v) in &attrs {
             dict.set_item(k, attr_to_py(py, v)?)?;
         }
         Ok(dict)
@@ -262,8 +282,8 @@ impl PyDatasetView {
         array: &str,
         key: &str,
     ) -> PyResult<Option<Py<PyAny>>> {
-        self.inner
-            .get_array_attribute(array, key)
+        py.detach(|| runtime().block_on(self.inner.get_array_attribute(array, key)))
+            .map_err(to_py_err)?
             .map(|attr| attr_to_py(py, &attr))
             .transpose()
     }
@@ -279,8 +299,8 @@ impl PyDatasetView {
         py: Python<'py>,
         array: &str,
     ) -> PyResult<Option<Bound<'py, PyDict>>> {
-        self.inner
-            .array_stats(array)
+        py.detach(|| runtime().block_on(self.inner.array_stats(array)))
+            .map_err(to_py_err)?
             .map(|stats| stats_to_py(py, &stats))
             .transpose()
     }

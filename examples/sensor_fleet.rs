@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut north = Vec::new();
     for name in atlas.list_datasets() {
         let ds = atlas.dataset(&name)?;
-        if ds.get_attribute("site") == Some(Attr::String("north".into())) {
+        if ds.get_attribute("site").await? == Some(Attr::String("north".into())) {
             north.push(name);
         }
     }

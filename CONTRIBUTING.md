@@ -53,12 +53,12 @@ bug to live. Keep it that way.
 |---|---|
 | [src/lib.rs](src/lib.rs) | Public re-exports, `validate_name`, thread-safety asserts |
 | [src/format/mod.rs](src/format/mod.rs) | Container framing: magic, header, trailer |
-| [src/format/footer.rs](src/format/footer.rs) | `CollectionFooter`, `DatasetEntry`, `AttrS`, the interner |
+| [src/format/footer.rs](src/format/footer.rs) | `CollectionFooter`, `InternedSchema`, `VariableEntry`, `DatasetEntry`, `AttrS`, the interner |
 | [src/format/mask.rs](src/format/mask.rs) | The deletion mask codec |
 | [src/format/segment_store.rs](src/format/segment_store.rs) | `ObjectStore` adapter over one byte range |
 | [src/writer/mod.rs](src/writer/mod.rs) | `AtlasWriter`, `DatasetWriter` |
 | [src/reader/mod.rs](src/reader/mod.rs) | `Atlas`, `DatasetView` |
-| [src/schema/](src/schema/) | `ArraySchema`, `DatasetSchema`, `Attr`, dtype serde |
+| [src/schema/](src/schema/) | `SchemaView`, `ArrayMeta`, `ArrayLayout`, `DatasetSchema`, `Attr`, dtype serde |
 | [src/config.rs](src/config.rs) | `Codec`, `WriterConfig` |
 | [src/error.rs](src/error.rs) | `Error` / `Result` |
 
@@ -173,7 +173,7 @@ against the previously built binary.
 
 Two committed fixtures pin behaviour that a round-trip test would miss.
 
-**`tests/fixtures/golden_v1/`** — a v1 container, read back by
+**`tests/fixtures/golden_v6/`** — a v6 container, read back by
 [tests/golden.rs](tests/golden.rs) with every value asserted. If a change breaks
 compatibility with an existing container, this catches it. Regenerate only when
 you intend to break the format, which means bumping `FORMAT_VERSION`:

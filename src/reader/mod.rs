@@ -1,14 +1,20 @@
 //! How a collection is read.
 //!
 //! An open reads the container's tail, and the deletion mask if one exists.
-//! Nothing else. That one read answers every metadata question. Which datasets
-//! exist, what arrays they hold, the type and shape of each array, and every
-//! attribute. None of it costs more I/O.
+//! Nothing else. That one read answers which datasets exist, what arrays they
+//! declare, the type of each, and every attribute value. None of it costs more
+//! I/O.
 //!
-//! Atlas fetches array data only when [`DatasetView::read_array`] asks for it.
-//! The first such call on a dataset opens its segment, in two small range
-//! reads. The call then fetches only the chunks that overlap the region. A
-//! dataset nobody reads costs nothing.
+//! Shape and chunking are the exception. The segment that holds the data
+//! records them, so the footer does not.
+//! [`DatasetView::array_layout`] opens that segment to answer.
+//!
+//! A segment holds one **variable** across the whole collection, keyed by
+//! dataset name. So the first read of `temperature` opens one file, in two
+//! small range reads, and every other dataset's `temperature` then comes from
+//! the same handle. The call fetches only the blocks the region overlaps, and
+//! a block holds a run of neighbouring datasets. A variable nobody reads costs
+//! nothing.
 //!
 //! There is no write path here. A collection cannot change after a write.
 //! [`Atlas::delete_dataset`] is the one exception. It rewrites the mask
@@ -18,7 +24,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use array_format::{
-    ArrayElement, ArrayFile, ArrayStats, DType, DeltaCache, FileConfig, FillValue, NoCompression,
+    ArrayElement, ArrayFile, ArrayStats, DeltaCache, FileConfig, NoCompression, StatValue,
 };
 use indexmap::IndexMap;
 use object_store::path::Path as OsPath;
@@ -27,10 +33,10 @@ use parking_lot::RwLock;
 use tracing::debug;
 
 use crate::config::{DEFAULT_CACHE_CAPACITY, DEFAULT_IO_CACHE_CAPACITY};
-use crate::format::footer::{ArrayStatsS, CollectionFooter, DatasetEntry};
+use crate::format::footer::CollectionFooter;
 use crate::format::segment_store::SegmentStore;
-use crate::format::{self, DATA_FILE, MASK_FILE, child, mask};
-use crate::schema::{ArraySchema, Attr, DatasetSchema};
+use crate::format::{self, DATA_FILE, DATASET_ATTRS_VARIABLE, MASK_FILE, child, mask};
+use crate::schema::{ArrayLayout, ArrayMeta, Attr, SchemaView};
 use crate::{Error, Result};
 
 /// An open collection.
@@ -45,7 +51,8 @@ pub struct Atlas {
     /// Ordinals the deletion mask hides. A lock guards the set, because
     /// `delete_dataset` updates it in place.
     deleted: Arc<RwLock<BTreeSet<u32>>>,
-    /// One `ArrayFile` per dataset ordinal. Each one opens on demand.
+    /// One `ArrayFile` per variable, in footer order. Each opens on demand,
+    /// and every dataset that declares the array shares it.
     segments: Arc<Vec<tokio::sync::OnceCell<Arc<ArrayFile>>>>,
     cache: Arc<DeltaCache>,
     /// Size of `data.atlas`. The head request that opened it reports this.
@@ -74,7 +81,7 @@ impl Atlas {
             "opened collection"
         );
 
-        let segments = (0..footer.datasets.len())
+        let segments = (0..footer.variables.len())
             .map(|_| tokio::sync::OnceCell::new())
             .collect();
         Ok(Self {
@@ -162,10 +169,10 @@ impl Atlas {
         let deleted = self.deleted.read();
         self.footer
             .datasets
-            .iter()
+            .keys()
             .enumerate()
             .filter(|(i, _)| !deleted.contains(&(*i as u32)))
-            .map(|(_, d)| d.name.clone())
+            .map(|(_, name)| name.to_string())
             .collect()
     }
 
@@ -182,15 +189,22 @@ impl Atlas {
     /// Every distinct array name across the live datasets, sorted.
     pub fn list_arrays(&self) -> Vec<String> {
         let deleted = self.deleted.read();
-        let mut names: BTreeSet<&str> = BTreeSet::new();
-        for (i, ds) in self.footer.datasets.iter().enumerate() {
+        // A schema names its arrays by pool index, so the walk collects
+        // integers. Only the distinct ones resolve to a string.
+        let mut ids: BTreeSet<u32> = BTreeSet::new();
+        for (i, schema) in self.footer.datasets.values().enumerate() {
             if deleted.contains(&(i as u32)) {
                 continue;
             }
-            for name in self.footer.schema_of(ds).arrays.keys() {
-                names.insert(name.as_str());
+            for &(name, _) in &self.footer.schema_of(*schema).arrays {
+                ids.insert(name);
             }
         }
+        let mut names: Vec<&str> = ids
+            .into_iter()
+            .filter_map(|id| self.footer.string(id))
+            .collect();
+        names.sort_unstable();
         names.into_iter().map(str::to_string).collect()
     }
 
@@ -206,35 +220,19 @@ impl Atlas {
     /// Use [`array_stats_by_dataset`](Self::array_stats_by_dataset) for the
     /// same numbers split per dataset, and [`DatasetView::array_stats`] for
     /// one dataset on its own.
-    pub fn array_stats(&self, array: &str) -> Option<ArrayStats> {
-        let deleted = self.deleted.read();
-        let mut dtype: Option<&DType> = None;
-        let mut merged: Option<ArrayStatsS> = None;
-        for (ordinal, ds) in self.footer.datasets.iter().enumerate() {
-            if deleted.contains(&(ordinal as u32)) {
-                continue;
-            }
-            let Some((position, _, meta)) = self.footer.schema_of(ds).arrays.get_full(array) else {
-                continue;
-            };
-            match dtype {
-                None => dtype = Some(&meta.dtype),
-                Some(first) if *first != meta.dtype => continue,
-                Some(_) => {}
-            }
-            let Some((_, stats)) = ds
-                .array_stats
-                .iter()
-                .find(|(pos, _)| *pos as usize == position)
-            else {
-                continue;
-            };
+    pub async fn array_stats(&self, array: &str) -> Result<Option<ArrayStats>> {
+        let mut merged: Option<ArrayStats> = None;
+        for (_, stats) in self.stats_of(array).await? {
             match &mut merged {
-                Some(acc) => acc.merge(stats),
-                None => merged = Some(stats.clone()),
+                Some(acc) => merge_stats(acc, stats),
+                None => {
+                    let mut first = stats.clone();
+                    first.name = array.to_string();
+                    merged = Some(first);
+                }
             }
         }
-        merged.map(|s| s.to_array_stats(array))
+        Ok(merged)
     }
 
     /// What each live dataset recorded about one array, in write order.
@@ -249,26 +247,161 @@ impl Atlas {
     /// Unlike [`array_stats`](Self::array_stats), this keeps a dataset that
     /// declares the name with another dtype. Nothing merges here, so two
     /// dtypes never have to compare.
-    pub fn array_stats_by_dataset(&self, array: &str) -> Vec<(String, ArrayStats)> {
-        let deleted = self.deleted.read();
-        let mut out = Vec::new();
-        for (ordinal, ds) in self.footer.datasets.iter().enumerate() {
-            if deleted.contains(&(ordinal as u32)) {
-                continue;
-            }
-            let Some(position) = self.footer.schema_of(ds).arrays.get_index_of(array) else {
-                continue;
-            };
-            let Some((_, stats)) = ds
-                .array_stats
-                .iter()
-                .find(|(pos, _)| *pos as usize == position)
-            else {
-                continue;
-            };
-            out.push((ds.name.clone(), stats.to_array_stats(array)));
+    pub async fn array_stats_by_dataset(&self, array: &str) -> Result<Vec<(String, ArrayStats)>> {
+        Ok(self
+            .stats_of(array)
+            .await?
+            .into_iter()
+            .map(|(name, stats)| {
+                let mut owned = stats.clone();
+                owned.name = array.to_string();
+                (name.to_string(), owned)
+            })
+            .collect())
+    }
+
+    /// The statistics of `array`, per live dataset that recorded them, in
+    /// write order.
+    ///
+    /// One open of that variable's segment covers the whole collection, and
+    /// one pass over its table indexes it. `array_stats` on the segment scans
+    /// that table per call, so a lookup per dataset would be quadratic.
+    ///
+    /// A dataset that declares the name with another dtype stays out, because
+    /// two dtypes do not compare.
+    async fn stats_of(&self, array: &str) -> Result<Vec<(&str, &ArrayStats)>> {
+        let Some(positions) = self.footer.array_positions(array) else {
+            return Ok(Vec::new());
+        };
+        let live: Vec<(u32, u32)> = {
+            let deleted = self.deleted.read();
+            self.footer
+                .datasets
+                .values()
+                .enumerate()
+                .filter(|(ordinal, _)| !deleted.contains(&(*ordinal as u32)))
+                .filter(|(_, schema)| positions[**schema as usize].is_some())
+                .map(|(ordinal, schema)| (ordinal as u32, *schema))
+                .collect()
+        };
+        if live.is_empty() {
+            return Ok(Vec::new());
         }
-        out
+
+        let file = self.segment(array).await?;
+        let Some(table) = file.stats() else {
+            return Ok(Vec::new());
+        };
+        let by_dataset: std::collections::HashMap<&str, &ArrayStats> = table
+            .entries()
+            .iter()
+            .map(|a| (a.name.as_str(), a))
+            .collect();
+
+        // The pool holds each dtype once, so equal indices mean equal types.
+        let mut dtype: Option<u32> = None;
+        let mut out = Vec::with_capacity(live.len());
+        for (ordinal, schema) in live {
+            let position = positions[schema as usize].expect("filtered above") as usize;
+            let found = self.footer.schema_of(schema).arrays[position].1;
+            match dtype {
+                None => dtype = Some(found),
+                Some(first) if first != found => continue,
+                Some(_) => {}
+            }
+            let (name, _) = self
+                .footer
+                .datasets
+                .get_index(ordinal as usize)
+                .expect("the ordinal came from the map");
+            if let Some(stats) = by_dataset.get(name.as_str()) {
+                out.push((name.as_str(), *stats));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One dataset-level attribute, as a column over the live datasets.
+    ///
+    /// The result lines up with [`list_datasets`](Self::list_datasets) index
+    /// for index. Both walk the datasets in write order and both drop what
+    /// the deletion mask hides, so entry `i` belongs to dataset `i`. The
+    /// value is `None` where that dataset does not carry the key.
+    ///
+    /// The values live in the reserved `_datasets` segment, so this opens it
+    /// once and reads the key for every dataset. One open covers the whole
+    /// collection. Asking each dataset in turn costs the same open, but a
+    /// lookup per call.
+    ///
+    /// A key no schema names answers with no I/O at all, and so does a
+    /// collection where no live dataset carries it.
+    ///
+    /// Call it once per key to build a table of what every dataset holds. The
+    /// shape matches a Parquet row group index:
+    ///
+    /// ```no_run
+    /// # async fn f(atlas: &atlas::Atlas) -> atlas::Result<()> {
+    /// let names = atlas.list_datasets();
+    /// let months = atlas.attribute_by_dataset("month").await?;
+    /// let sources = atlas.attribute_by_dataset("source").await?;
+    ///
+    /// for ((name, month), source) in names.iter().zip(months).zip(sources) {
+    ///     println!("{name} {month:?} {source:?}");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// [`array_stats_by_dataset`](Self::array_stats_by_dataset) does not
+    /// align with this. It leaves out a dataset that does not declare the
+    /// array, so join that one by name.
+    pub async fn attribute_by_dataset(&self, key: &str) -> Result<Vec<Option<Attr>>> {
+        // The schema names the keys, so one pass over the pool gives the type
+        // each schema declares for this one. A key no schema names cannot
+        // appear on any dataset, and answers the whole collection at once.
+        let dtypes = self.footer.attr_dtypes(key);
+        let live: Vec<(u32, u32)> = {
+            let deleted = self.deleted.read();
+            self.footer
+                .datasets
+                .values()
+                .enumerate()
+                .filter(|(ordinal, _)| !deleted.contains(&(*ordinal as u32)))
+                .map(|(ordinal, schema)| (ordinal as u32, *schema))
+                .collect()
+        };
+        let Some(dtypes) = dtypes else {
+            return Ok(vec![None; live.len()]);
+        };
+        if live
+            .iter()
+            .all(|(_, schema)| dtypes[*schema as usize].is_none())
+        {
+            return Ok(vec![None; live.len()]);
+        }
+
+        // One open covers the key for every dataset.
+        let file = self.segment(DATASET_ATTRS_VARIABLE).await?;
+        let mut out = Vec::with_capacity(live.len());
+        for (ordinal, schema) in live {
+            let Some(dtype) = dtypes[schema as usize] else {
+                out.push(None);
+                continue;
+            };
+            let (name, _) = self
+                .footer
+                .datasets
+                .get_index(ordinal as usize)
+                .expect("the ordinal came from the map");
+            let declared = self.footer.dtype(dtype).expect("validate checked it");
+            out.push(
+                file.get_attribute(name.as_str(), key)
+                    .ok()
+                    .flatten()
+                    .map(|v| Attr::from_stored(v, declared)),
+            );
+        }
+        Ok(out)
     }
 
     /// When the collection was written, in milliseconds since the Unix epoch.
@@ -304,8 +437,23 @@ impl Atlas {
         self.footer.schema_pool.len()
     }
 
-    /// A view of one dataset. This costs no I/O. The view answers metadata
-    /// from the footer. It opens the segment only for a data read.
+    /// Opens the segment that holds `array`. This runs once per collection
+    /// handle, however many datasets ask for the same variable.
+    async fn segment(&self, array: &str) -> Result<&Arc<ArrayFile>> {
+        open_segment(
+            &self.store,
+            &self.data_path,
+            &self.footer,
+            &self.segments,
+            &self.cache,
+            array,
+        )
+        .await
+    }
+
+    /// A view of one dataset. This costs no I/O. The view answers names,
+    /// types, and statistics from the footer. It opens a segment for a data
+    /// read, for a layout, and for an attribute value.
     pub fn dataset(&self, name: &str) -> Result<DatasetView> {
         let ordinal = self
             .ordinal_of(name)
@@ -364,10 +512,10 @@ impl Atlas {
         let mut found: BTreeSet<&str> = BTreeSet::new();
         {
             let deleted = self.deleted.read();
-            for (ordinal, ds) in self.footer.datasets.iter().enumerate() {
-                if wanted.contains(ds.name.as_str()) && !deleted.contains(&(ordinal as u32)) {
+            for (ordinal, name) in self.footer.datasets.keys().enumerate() {
+                if wanted.contains(name.as_str()) && !deleted.contains(&(ordinal as u32)) {
                     ordinals.insert(ordinal as u32);
-                    found.insert(ds.name.as_str());
+                    found.insert(name.as_str());
                 }
             }
         }
@@ -393,10 +541,11 @@ impl Atlas {
 
     fn ordinal_of(&self, name: &str) -> Option<u32> {
         let deleted = self.deleted.read();
+        // The footer keys its datasets by name, so this is one hash lookup
+        // whether the collection holds ten datasets or a million.
         self.footer
             .datasets
-            .iter()
-            .position(|d| d.name == name)
+            .get_index_of(name)
             .map(|i| i as u32)
             .filter(|i| !deleted.contains(i))
     }
@@ -419,19 +568,31 @@ pub struct DatasetView {
     store: Arc<dyn ObjectStore>,
     data_path: OsPath,
     footer: Arc<CollectionFooter>,
+    /// One `ArrayFile` per variable, shared with every other view.
     segments: Arc<Vec<tokio::sync::OnceCell<Arc<ArrayFile>>>>,
     cache: Arc<DeltaCache>,
     ordinal: u32,
 }
 
 impl DatasetView {
-    fn entry(&self) -> &DatasetEntry {
-        &self.footer.datasets[self.ordinal as usize]
+    /// Which interned schema this dataset declares.
+    fn schema_index(&self) -> u32 {
+        let (_, schema) = self
+            .footer
+            .datasets
+            .get_index(self.ordinal as usize)
+            .expect("the view holds a live ordinal");
+        *schema
     }
 
-    /// The dataset's name.
+    /// The dataset's name. Every variable segment stores this dataset's
+    /// array under it.
     pub fn name(&self) -> &str {
-        &self.entry().name
+        self.footer
+            .datasets
+            .get_index(self.ordinal as usize)
+            .map(|(name, _)| name.as_str())
+            .expect("the view holds a live ordinal")
     }
 
     /// The dataset's position in the collection. It is stable for the life of
@@ -440,63 +601,124 @@ impl DatasetView {
         self.ordinal
     }
 
-    /// Where this dataset's segment sits in `data.atlas`.
+    /// What the dataset declares: every array name and element type, in
+    /// definition order, and the same for its attributes.
     ///
-    /// The range holds a complete `array-format` file. Copy those bytes out,
-    /// and they open on their own. Atlas plays no part.
-    pub fn segment_range(&self) -> std::ops::Range<u64> {
-        let entry = self.entry();
-        entry.seg_offset..(entry.seg_offset + entry.seg_len)
-    }
-
-    /// The dataset's schema. Every array it declares, in definition order.
-    pub fn schema(&self) -> &DatasetSchema {
-        self.footer.schema_of(self.entry())
+    /// The view borrows from the footer and copies no name. Call
+    /// [`SchemaView::to_owned_schema`] for an owned copy.
+    pub fn schema(&self) -> SchemaView<'_> {
+        self.footer.schema_view(self.schema_index())
     }
 
     /// Array names, in definition order.
     pub fn list_arrays(&self) -> Vec<String> {
-        self.schema().arrays.keys().cloned().collect()
+        self.schema().names().map(str::to_string).collect()
     }
 
-    /// The schema of one array. `None` if this dataset does not declare it.
-    pub fn array_meta(&self, array: &str) -> Option<&ArraySchema> {
-        self.schema().arrays.get(array)
+    /// The name and element type of one array. `None` if this dataset does
+    /// not declare it.
+    ///
+    /// Shape and chunking are not here, because the footer does not hold
+    /// them. Call [`array_layout`](Self::array_layout) for those.
+    pub fn array_meta(&self, array: &str) -> Option<ArrayMeta<'_>> {
+        self.schema().get(array)
     }
 
-    /// The fill value of one array. A read returns it for every element
-    /// nobody wrote.
-    pub fn array_fill_value(&self, array: &str) -> Option<FillValue> {
-        self.array_meta(array)?.fill_value.clone().map(Into::into)
+    /// The shape, chunking, dimension names, and fill value of one array.
+    ///
+    /// This opens the array's segment, unlike every other metadata call. The
+    /// segment records the layout already, so the footer does not repeat it.
+    ///
+    /// A segment covers one variable across the whole collection, so the open
+    /// happens once however many datasets ask. To sweep every dataset's
+    /// layout therefore costs one open per variable.
+    pub async fn array_layout(&self, array: &str) -> Result<ArrayLayout> {
+        if self.schema().index_of(array).is_none() {
+            return Err(Error::ArrayNotFound(array.to_string()));
+        }
+        let file = self.segment(array).await?;
+        Ok(ArrayLayout::from_stored(file.get_array(self.name())?))
     }
 
     /// Dataset-level attributes, in the order they were set.
-    pub fn attributes(&self) -> IndexMap<String, Attr> {
-        self.footer.attrs_to_map(&self.entry().global_attrs)
+    ///
+    /// The values live in the reserved `_datasets` segment, so this reads it.
+    /// A dataset that declares no attribute costs no I/O, because the schema
+    /// already says so.
+    pub async fn attributes(&self) -> Result<IndexMap<String, Attr>> {
+        let keys: Vec<(String, crate::DType)> = self
+            .schema()
+            .attribute_pairs()
+            .map(|(key, dtype)| (key.to_string(), dtype.clone()))
+            .collect();
+        if keys.is_empty() {
+            return Ok(IndexMap::new());
+        }
+        let file = self.segment(DATASET_ATTRS_VARIABLE).await?;
+        Ok(Self::resolve(file, self.name(), keys))
     }
 
     /// One dataset-level attribute.
-    pub fn get_attribute(&self, key: &str) -> Option<Attr> {
-        self.attributes().shift_remove(key)
+    pub async fn get_attribute(&self, key: &str) -> Result<Option<Attr>> {
+        let Some(declared) = self.schema().attribute_dtype(key).cloned() else {
+            return Ok(None);
+        };
+        let file = self.segment(DATASET_ATTRS_VARIABLE).await?;
+        Ok(file
+            .get_attribute(self.name(), key)
+            .ok()
+            .flatten()
+            .map(|v| Attr::from_stored(v, &declared)))
+    }
+
+    /// Reads `keys` off the array named `array` in `file`.
+    fn resolve(
+        file: &ArrayFile,
+        array: &str,
+        keys: Vec<(String, crate::DType)>,
+    ) -> IndexMap<String, Attr> {
+        keys.into_iter()
+            .filter_map(|(key, declared)| {
+                let value = file.get_attribute(array, &key).ok().flatten()?;
+                Some((key, Attr::from_stored(value, &declared)))
+            })
+            .collect()
     }
 
     /// The attributes of one array, in the order somebody set them. Empty for
     /// an array with none, and for a name this dataset does not declare.
-    pub fn array_attributes(&self, array: &str) -> IndexMap<String, Attr> {
-        let Some(position) = self.schema().arrays.get_index_of(array) else {
-            return IndexMap::new();
+    ///
+    /// The values live on the array's own entry in that variable's segment, so
+    /// this reads it. An array with no attribute costs no I/O.
+    pub async fn array_attributes(&self, array: &str) -> Result<IndexMap<String, Attr>> {
+        let Some(meta) = self.array_meta(array) else {
+            return Ok(IndexMap::new());
         };
-        self.entry()
-            .array_attrs
-            .iter()
-            .find(|(pos, _)| *pos as usize == position)
-            .map(|(_, attrs)| self.footer.attrs_to_map(attrs))
-            .unwrap_or_default()
+        let keys: Vec<(String, crate::DType)> = meta
+            .attribute_pairs()
+            .map(|(key, dtype)| (key.to_string(), dtype.clone()))
+            .collect();
+        if keys.is_empty() {
+            return Ok(IndexMap::new());
+        }
+        let file = self.segment(array).await?;
+        Ok(Self::resolve(file, self.name(), keys))
     }
 
     /// One attribute of one array.
-    pub fn get_array_attribute(&self, array: &str, key: &str) -> Option<Attr> {
-        self.array_attributes(array).shift_remove(key)
+    pub async fn get_array_attribute(&self, array: &str, key: &str) -> Result<Option<Attr>> {
+        let Some(declared) = self
+            .array_meta(array)
+            .and_then(|meta| meta.attribute_dtype(key).cloned())
+        else {
+            return Ok(None);
+        };
+        let file = self.segment(array).await?;
+        Ok(file
+            .get_attribute(self.name(), key)
+            .ok()
+            .flatten()
+            .map(|v| Attr::from_stored(v, &declared)))
     }
 
     /// What the write recorded about one array. The minimum, the maximum, how
@@ -504,13 +726,16 @@ impl DatasetView {
     ///
     /// This comes from the footer, so it costs nothing. Returns `None` for an
     /// array this dataset does not declare, and for one nobody wrote.
-    pub fn array_stats(&self, array: &str) -> Option<ArrayStats> {
-        let position = self.schema().arrays.get_index_of(array)?;
-        self.entry()
-            .array_stats
-            .iter()
-            .find(|(pos, _)| *pos as usize == position)
-            .map(|(_, stats)| stats.to_array_stats(array))
+    pub async fn array_stats(&self, array: &str) -> Result<Option<ArrayStats>> {
+        if self.schema().index_of(array).is_none() {
+            return Ok(None);
+        }
+        let file = self.segment(array).await?;
+        Ok(file.array_stats(self.name()).map(|stats| {
+            let mut owned = stats.clone();
+            owned.name = array.to_string();
+            owned
+        }))
     }
 
     /// Reads a region of `array`.
@@ -524,71 +749,137 @@ impl DatasetView {
         start: Vec<usize>,
         shape: Vec<usize>,
     ) -> Result<ndarray::ArcArray<T, ndarray::IxDyn>> {
-        let schema = self
+        let meta = self
             .array_meta(array)
             .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?;
-        if schema.dtype != T::DTYPE {
+        if *meta.dtype() != T::DTYPE {
             return Err(Error::CorruptCollection(format!(
                 "array '{array}' of dataset '{}' is {:?}, not {:?}",
                 self.name(),
-                schema.dtype,
+                meta.dtype(),
                 T::DTYPE
             )));
         }
-        let expected_shape = schema.shape.clone();
-        let file = self.segment().await?;
-        // The segment addresses the chunks. The footer describes the array.
-        // One write produces both, so a mismatch means a damaged file.
-        let stored = file.get_array(array)?;
-        let stored_shape: Vec<usize> = stored.layout.shape.iter().map(|&s| s as usize).collect();
-        if stored_shape != expected_shape {
-            return Err(Error::CorruptCollection(format!(
-                "array '{array}' of dataset '{}' is {expected_shape:?} in the footer but \
-                 {stored_shape:?} in its segment",
-                self.name()
-            )));
-        }
-        Ok(file.read_array::<T>(array, start, shape).await?)
+        let file = self.segment(array).await?;
+        // The segment keys on the dataset name, because it holds this array
+        // for every dataset in the collection.
+        Ok(file.read_array::<T>(self.name(), start, shape).await?)
     }
 
-    /// Opens this dataset's segment. This runs once per collection handle.
-    async fn segment(&self) -> Result<&Arc<ArrayFile>> {
-        self.segments[self.ordinal as usize]
-            .get_or_try_init(|| async {
-                let entry = self.entry();
-                debug!(
-                    dataset = %entry.name,
-                    seg_offset = entry.seg_offset,
-                    seg_len = entry.seg_len,
-                    "opening segment"
-                );
-                let segment = SegmentStore::new(
-                    Arc::clone(&self.store),
-                    self.data_path.clone(),
-                    self.ordinal,
-                    entry.seg_offset,
-                    entry.seg_len,
-                );
-                let path = segment.path();
-                // A block records its own codec, so the reader never needs
-                // the one the writer used.
-                let file = ArrayFile::open(
-                    Arc::new(segment) as Arc<dyn ObjectStore>,
-                    path,
-                    FileConfig {
-                        codec: NoCompression,
-                        block_target_size: crate::config::DEFAULT_BLOCK_TARGET_SIZE,
-                        // Unused. `cache` below overrides both budgets.
-                        cache_capacity: DEFAULT_CACHE_CAPACITY as usize,
-                        io_cache_capacity: DEFAULT_IO_CACHE_CAPACITY as usize,
-                        cache: Some(Arc::clone(&self.cache)),
-                    },
-                )
-                .await?;
-                Ok::<_, Error>(Arc::new(file))
-            })
-            .await
+    /// Opens the segment that holds `array`. This runs once per collection
+    /// handle, however many datasets ask for the same variable.
+    async fn segment(&self, array: &str) -> Result<&Arc<ArrayFile>> {
+        open_segment(
+            &self.store,
+            &self.data_path,
+            &self.footer,
+            &self.segments,
+            &self.cache,
+            array,
+        )
+        .await
     }
+}
+
+/// Folds one dataset's statistics for an array into the running total.
+///
+/// The counts add up. Each bound takes the wider of the two. A bound that is
+/// absent yields to a bound that is present.
+fn merge_stats(into: &mut ArrayStats, other: &ArrayStats) {
+    into.null_count = into.null_count.saturating_add(other.null_count);
+    into.row_count = into.row_count.saturating_add(other.row_count);
+    into.min = wider(into.min.take(), other.min.clone(), Bound::Min);
+    into.max = wider(into.max.take(), other.max.clone(), Bound::Max);
+}
+
+/// Which end of the range [`wider`] keeps.
+#[derive(Clone, Copy)]
+enum Bound {
+    Min,
+    Max,
+}
+
+/// The smaller or the larger of two bounds. `None` means a dataset recorded no
+/// bound, so the other one stands.
+fn wider(a: Option<StatValue>, b: Option<StatValue>, bound: Bound) -> Option<StatValue> {
+    match (a, b) {
+        (None, x) | (x, None) => x,
+        (Some(a), Some(b)) => {
+            let keep_a = match bound {
+                Bound::Min => is_le(&a, &b),
+                Bound::Max => !is_le(&a, &b),
+            };
+            Some(if keep_a { a } else { b })
+        }
+    }
+}
+
+/// Orders two bounds of one variant. Two variants mean two dtypes, and the
+/// caller excludes those before it merges.
+fn is_le(a: &StatValue, b: &StatValue) -> bool {
+    match (a, b) {
+        (StatValue::Int(a), StatValue::Int(b)) => a <= b,
+        (StatValue::UInt(a), StatValue::UInt(b)) => a <= b,
+        (StatValue::Float(a), StatValue::Float(b)) => a.total_cmp(b).is_le(),
+        (StatValue::Bytes(a), StatValue::Bytes(b)) => a <= b,
+        (StatValue::TimestampNs(a), StatValue::TimestampNs(b)) => a <= b,
+        _ => false,
+    }
+}
+
+/// Opens the segment that holds `array`, once per collection handle.
+///
+/// `Atlas` and `DatasetView` both need it. `Atlas` reads the reserved
+/// attribute segment, and a view reads a variable's own.
+async fn open_segment<'a>(
+    store: &Arc<dyn ObjectStore>,
+    data_path: &OsPath,
+    footer: &CollectionFooter,
+    segments: &'a [tokio::sync::OnceCell<Arc<ArrayFile>>],
+    cache: &Arc<DeltaCache>,
+    array: &str,
+) -> Result<&'a Arc<ArrayFile>> {
+    let index = footer
+        .string_id(array)
+        .and_then(|id| footer.variable_index(id))
+        .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?;
+    segments[index]
+        .get_or_try_init(|| async {
+            let entry = &footer.variables[index];
+            debug!(
+                variable = array,
+                seg_offset = entry.seg_offset,
+                seg_len = entry.seg_len,
+                "opening segment"
+            );
+            let segment = SegmentStore::new(
+                Arc::clone(store),
+                data_path.clone(),
+                index as u32,
+                entry.seg_offset,
+                entry.seg_len,
+                entry.stats_offset,
+                entry.stats_len,
+            );
+            let path = segment.path();
+            // A block records its own codec, so the reader never needs the one
+            // the writer used.
+            let file = ArrayFile::open(
+                Arc::new(segment) as Arc<dyn ObjectStore>,
+                path,
+                FileConfig {
+                    codec: NoCompression,
+                    block_target_size: crate::config::DEFAULT_BLOCK_TARGET_SIZE,
+                    // Unused. `cache` below overrides both budgets.
+                    cache_capacity: DEFAULT_CACHE_CAPACITY as usize,
+                    io_cache_capacity: DEFAULT_IO_CACHE_CAPACITY as usize,
+                    cache: Some(Arc::clone(cache)),
+                },
+            )
+            .await?;
+            Ok::<_, Error>(Arc::new(file))
+        })
+        .await
 }
 
 impl std::fmt::Debug for DatasetView {
@@ -596,7 +887,7 @@ impl std::fmt::Debug for DatasetView {
         f.debug_struct("DatasetView")
             .field("name", &self.name())
             .field("ordinal", &self.ordinal)
-            .field("arrays", &self.schema().arrays.len())
+            .field("arrays", &self.schema().len())
             .finish_non_exhaustive()
     }
 }

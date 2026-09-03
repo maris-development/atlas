@@ -483,7 +483,6 @@ def describe_dataset(source: Any, name: Any, **store_options: Any) -> dict[str, 
     return {
         "name": view.name,
         "ordinal": view.ordinal,
-        "segment_range": list(view.segment_range),
         "dimensions": dimensions,
         "coordinates": sorted(coords),
         "arrays": arrays,
