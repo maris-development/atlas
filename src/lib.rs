@@ -8,12 +8,12 @@
 //!
 //! # The format in one paragraph
 //!
-//! A collection is one write-once file, `data.atlas`. Each dataset occupies one
-//! contiguous segment. A footer at the end records every dataset's name,
-//! schema, attributes, and segment byte range. To open the file, read the
-//! footer. One range read then answers every metadata question, whatever the
-//! size of the collection. Atlas fetches array data chunk by chunk, on
-//! demand.
+//! A collection is one write-once file, `data.atlas`. Each variable occupies
+//! one contiguous segment, which holds that array for every dataset. A footer
+//! at the end records every dataset's name and schema, and every segment's
+//! byte range. To open the file, read the footer. One range read then answers
+//! every metadata question, whatever the size of the collection. Atlas fetches
+//! array data chunk by chunk, on demand.
 //!
 //! ```text
 //! my_collection/
@@ -89,9 +89,9 @@
 //! and the block cache.
 //!
 //! [`AtlasWriter`] is `Send + Sync` too. Several [`DatasetWriter`]s can stage
-//! at once. A dataset touches the shared output only in
-//! [`DatasetWriter::finish`], which holds one lock for the whole append.
-//! Concurrent datasets therefore land in finish order, and never interleave.
+//! at once. Each define and each write takes the shared lock, because the
+//! variable writers are shared. Ordinals follow the [`AtlasWriter::add_dataset`]
+//! order, not the order the datasets finish in.
 
 mod config;
 mod error;

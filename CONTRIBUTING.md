@@ -36,9 +36,10 @@ my_collection/
 └── deleted.mask    optional: ordinals of deleted datasets
 ```
 
-One write-once file. Each dataset is a contiguous segment — itself a complete
-[`array-format`](https://github.com/robinskil/array-format) file — and the
-footer records every dataset's name, segment byte range, schema, and attributes.
+One write-once file. Each variable is a contiguous segment, itself a complete
+[`array-format`](https://github.com/robinskil/array-format) file that holds the
+array for every dataset. The footer records every dataset's name and schema,
+and every segment's byte range.
 
 Byte-level detail is in [docs/format.md](docs/format.md). The rest of
 [docs/](docs/) covers the layers, the data model, and the two paths.
@@ -53,7 +54,7 @@ bug to live. Keep it that way.
 |---|---|
 | [src/lib.rs](src/lib.rs) | Public re-exports, `validate_name`, thread-safety asserts |
 | [src/format/mod.rs](src/format/mod.rs) | Container framing: magic, header, trailer |
-| [src/format/footer.rs](src/format/footer.rs) | `CollectionFooter`, `InternedSchema`, `VariableEntry`, `DatasetEntry`, `AttrS`, the interner |
+| [src/format/footer.rs](src/format/footer.rs) | `CollectionFooter`, `InternedSchema`, `VariableEntry`, the interner |
 | [src/format/mask.rs](src/format/mask.rs) | The deletion mask codec |
 | [src/format/segment_store.rs](src/format/segment_store.rs) | `ObjectStore` adapter over one byte range |
 | [src/writer/mod.rs](src/writer/mod.rs) | `AtlasWriter`, `DatasetWriter` |
@@ -62,9 +63,9 @@ bug to live. Keep it that way.
 | [src/config.rs](src/config.rs) | `Codec`, `WriterConfig` |
 | [src/error.rs](src/error.rs) | `Error` / `Result` |
 
-The API is async (tokio). Reads take no locks — the data is immutable. Writes
-share one `tokio::sync::Mutex` over the output stream, held only for a dataset's
-append.
+The API is async (tokio). Reads take no locks, because the data is immutable.
+Writes share one `tokio::sync::Mutex` over the output stream and the variable
+writers. A dataset takes it for each define and each write.
 
 ### Python bindings
 
@@ -173,7 +174,7 @@ against the previously built binary.
 
 Two committed fixtures pin behaviour that a round-trip test would miss.
 
-**`tests/fixtures/golden_v7/`** — a v7 container, read back by
+**`tests/fixtures/golden_v8/`** — a v8 container, read back by
 [tests/golden.rs](tests/golden.rs) with every value asserted. If a change breaks
 compatibility with an existing container, this catches it. Regenerate only when
 you intend to break the format, which means bumping `FORMAT_VERSION`:

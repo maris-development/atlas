@@ -131,12 +131,12 @@ any number of names, and still writes the mask once.
 
 ```text
 offset 0     b"ATLS"                     4 B   leading magic
-offset 4     format_version u32 LE = 7   4 B
+offset 4     format_version u32 LE = 8   4 B
 offset 8     segment[0]                        one variable, array-format
              segment[1] …                      back to back, no padding
              footer_bytes                      zstd(msgpack(CollectionFooter))
 end - 16     footer_size u64 LE          8 B  ┐
-end - 8      format_version u32 LE = 7   4 B  ├ trailer
+end - 8      format_version u32 LE = 8   4 B  ├ trailer
 end - 4      b"ATLS"                     4 B  ┘
 ```
 
@@ -293,8 +293,9 @@ A read needs no lock. The data is immutable, so `Atlas` and `DatasetView` are
 `Send + Sync`, and two reads never contend. A `OnceCell` opens each segment
 handle once. One block cache serves a whole collection.
 
-A write shares one `tokio::sync::Mutex` over the output stream and the footer.
-A dataset takes that lock for its append alone.
+A write shares one `tokio::sync::Mutex` over the output stream, the variable
+writers, and the footer. A dataset takes that lock for each define and each
+write.
 
 ---
 
@@ -306,7 +307,7 @@ cargo test -p atlas-rust
 
 This covers the format framing, the footer and mask codecs, the segment-store
 adapter, and the whole lifecycle. Two committed fixtures pin compatibility.
-`tests/fixtures/golden_v7/` is a v7 container, read back with every value
+`tests/fixtures/golden_v8/` is a v8 container, read back with every value
 asserted. The Python xarray layer writes `tests/fixtures/from_python/`, and
 Rust checks it. That keeps the two in agreement, because Python reads no array.
 

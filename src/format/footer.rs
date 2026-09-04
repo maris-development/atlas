@@ -47,11 +47,8 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 /// Arrays a schema holds inline. A NetCDF convention rarely passes this, and
-/// a schema that does spills to the heap once.
-///
-/// Inline storage pays here and not on [`DatasetEntry`]. The pool holds a
-/// handful of schemas, so the bytes cost nothing. A dataset entry exists once
-/// per dataset, and there the size decides.
+/// a schema that does spills to the heap once. The pool holds a handful of
+/// schemas, so the inline bytes cost nothing.
 const INLINE_ARRAYS: usize = 8;
 
 /// Attribute keys a schema holds inline.
@@ -72,10 +69,10 @@ pub(crate) struct InternedSchema {
     /// `(array name, element dtype)`, in definition order.
     pub arrays: SmallVec<[(u32, u32); INLINE_ARRAYS]>,
     /// `(attribute key, value dtype)` at the dataset level, in the order
-    /// somebody set them. [`DatasetEntry::global_attrs`] holds the values.
+    /// somebody set them. The reserved `_datasets` segment holds the values.
     pub attrs: AttrKeys,
-    /// Per-array attributes as `(array position, [(key, value dtype)])`.
-    /// [`DatasetEntry::array_attrs`] holds the values.
+    /// Per-array attributes as `(array position, [(key, value dtype)])`. The
+    /// array's own segment holds the values.
     pub array_attrs: Vec<(u32, AttrKeys)>,
 }
 
@@ -101,8 +98,6 @@ pub(crate) struct CollectionFooter {
     /// Footer schema version. It matches the trailer. The check runs again
     /// here, so a truncated read cannot pass as a valid footer.
     pub version: u32,
-    /// `array-format` footer version of the embedded segments.
-    pub segment_format: u32,
     /// Block codec the writer used. For information only. Every block records
     /// its own codec, so a reader never needs this field.
     pub codec: crate::Codec,
@@ -115,7 +110,7 @@ pub(crate) struct CollectionFooter {
     /// Interned types, for both array elements and attribute values.
     #[serde(with = "crate::schema::dtype::dtype_pool_serde")]
     pub dtype_pool: Vec<DType>,
-    /// Interned schemas. [`DatasetEntry::schema`] indexes this.
+    /// Interned schemas. Each entry of [`datasets`](Self::datasets) indexes this.
     pub schema_pool: Vec<InternedSchema>,
     /// One segment per distinct array name, in the order the writer first saw
     /// each name. Every dataset that declares the array reads from here.
@@ -463,7 +458,6 @@ mod tests {
             .collect();
         CollectionFooter {
             version: super::super::FORMAT_VERSION,
-            segment_format: super::super::SEGMENT_FORMAT,
             codec: crate::Codec::Zstd,
             created_unix_ms: 1_700_000_000_000,
             string_pool,
@@ -635,7 +629,6 @@ mod tests {
     #[derive(Serialize)]
     struct RawFooter {
         version: u32,
-        segment_format: u32,
         codec: crate::Codec,
         created_unix_ms: i64,
         string_pool: Vec<SmolStr>,
@@ -654,7 +647,6 @@ mod tests {
         let valid = footer_with(vec![("a", 0)], one_schema(DType::Float32), &["temperature"]);
         let raw = RawFooter {
             version: valid.version,
-            segment_format: valid.segment_format,
             codec: valid.codec,
             created_unix_ms: valid.created_unix_ms,
             string_pool: valid.string_pool.clone(),
@@ -676,7 +668,6 @@ mod tests {
         let f = footer_with(vec![("a", 0)], one_schema(DType::Float32), &["temperature"]);
         let raw = RawFooter {
             version: f.version,
-            segment_format: f.segment_format,
             codec: f.codec,
             created_unix_ms: f.created_unix_ms,
             string_pool: f.string_pool.clone(),

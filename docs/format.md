@@ -16,13 +16,13 @@ crate produces or parses these bytes.
 
 ```text
 offset 0     b"ATLS"                     4 B   leading magic
-offset 4     format_version u32 LE = 7   4 B
+offset 4     format_version u32 LE = 8   4 B
 offset 8     segment[0]                        one variable, array-format
              segment[1]                        back to back, no padding
              …
              footer_bytes                      zstd(msgpack(CollectionFooter))
 end - 16     footer_size u64 LE          8 B  ┐
-end - 8      format_version u32 LE = 7   4 B  ├ trailer
+end - 8      format_version u32 LE = 8   4 B  ├ trailer
 end - 4      b"ATLS"                     4 B  ┘
 ```
 
@@ -85,15 +85,14 @@ a format change.
 
 ```rust
 struct CollectionFooter {
-    version: u32,                    // = 7, re-checked after decode
-    segment_format: u32,             // = 6, the array-format footer version
+    version: u32,                    // = 8, re-checked after decode
     codec: Codec,                    // for information. Each block names its own
     created_unix_ms: i64,
     string_pool: Vec<String>,        // array names and attribute keys
     dtype_pool: Vec<DType>,          // element and attribute types
     schema_pool: Vec<InternedSchema>,
     variables: Vec<VariableEntry>,   // one segment per array name
-    datasets: IndexMap<SmolStr, DatasetEntry>,   // position == ordinal
+    datasets: IndexMap<SmolStr, u32>,            // name to schema index. Position == ordinal
 }
 
 struct InternedSchema {
@@ -171,11 +170,8 @@ longer than that allocates as before.
 **A schema holds its index lists inline.** The pool holds a handful of
 schemas, so the bytes cost nothing.
 
-**A dataset entry does not.** `global_attrs` and `array_attrs` stay `Vec`.
-`AttrS` is 32 bytes, so four inline would add 128 to every dataset entry. That
-was measured too: it grew `DatasetEntry` from 104 bytes to 336, and the memory
-traffic of the larger entry cost more than the allocation it saved. A decode
-went to 105.1 ms, slower than the `Vec` it replaced.
+**A dataset has nothing to inline.** It is one `u32` into the schema pool, so
+the per-dataset cost is the name and that index.
 
 The rule that follows: inline storage pays where a structure is rare and its
 contents are small. It loses where the structure exists once per dataset.
@@ -233,10 +229,6 @@ every write is exact. Store the nanoseconds as `Attr::Int64` and name the unit
 in a second attribute. An array element type still has `DType::TimestampNs`. A
 date-shaped string is unaffected: a string keeps its own tag, so an RFC 3339
 string is still a string.
-
-A container written before this still opens. Its footer may declare an
-attribute as `TimestampNs`, and the value reads back as the `i64` it always
-was, because the footer decodes nothing.
 
 What this costs: `DatasetView::attributes`, `get_attribute`,
 `array_attributes`, `get_array_attribute` and `Atlas::attributes_by_dataset`
@@ -306,11 +298,10 @@ this where a backend offers one. Version 1 does not do that.
 | Name | Value |
 |---|---|
 | Container magic | `ATLS`, at both ends |
-| Container version | 7 |
+| Container version | 8 |
 | Header size | 8 bytes |
 | Trailer size | 16 bytes |
 | Tail probe | 64 KiB |
-| Embedded segment format | `array-format` footer v6 |
 | Mask magic | `ATLM` |
 | Mask version | 1 |
 

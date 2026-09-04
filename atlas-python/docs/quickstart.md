@@ -46,7 +46,7 @@ $ atlas ls /data/collection
 ```bash
 $ atlas info /data/collection
 collection /data/collection
-  format version    7
+  format version    8
   created           2026-08-31T08:32:57Z
   codec             zstd
   container size    5.4 KiB

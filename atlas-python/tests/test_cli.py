@@ -181,10 +181,6 @@ def test_create_descends_by_default_and_no_recursive_opts_out(capsys, tmp_path):
     code, out, _ = run(capsys, "ls", str(tmp_path / "flat"))
     assert out.split() == ["top.nc"]
 
-    # -r still parses, so an existing script keeps working.
-    code, _, err = run(capsys, "create", str(src), str(tmp_path / "r"), "-q", "-r")
-    assert code == 0, err
-
 
 def test_create_counts_progress_and_what_is_left(capsys, netcdf_dir, tmp_path):
     code, _, err = run(capsys, "create", str(netcdf_dir), str(tmp_path / "c"))
@@ -329,7 +325,7 @@ def test_show_of_a_missing_dataset_fails(capsys, collection):
 def test_info_summarises(capsys, collection):
     code, out, _ = run(capsys, "info", str(collection))
     assert code == 0
-    assert "format version    7" in out
+    assert "format version    8" in out
     assert "codec             zstd" in out
     assert "datasets          3" in out
     assert "interned schemas  1" in out
@@ -356,7 +352,7 @@ def test_info_json(capsys, collection):
     code, out, _ = run(capsys, "info", str(collection), "--json")
     i = json.loads(out)
     assert i["dataset_count"] == 3
-    assert i["format_version"] == 7
+    assert i["format_version"] == 8
 
 
 # ── entry points ─────────────────────────────────────────────────────

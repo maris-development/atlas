@@ -306,7 +306,6 @@ impl AtlasWriter {
 
         let footer = CollectionFooter {
             version: format::FORMAT_VERSION,
-            segment_format: format::SEGMENT_FORMAT,
             codec: state.config.codec,
             created_unix_ms: chrono::Utc::now().timestamp_millis(),
             string_pool,

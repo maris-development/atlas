@@ -336,12 +336,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="scan the top directory alone. The scan descends by default",
     )
     p.add_argument(
-        "-r",
-        "--recursive",
-        action="store_true",
-        help="accepted for compatibility. The scan already descends",
-    )
-    p.add_argument(
         "--codec",
         default="zstd",
         choices=["zstd", "lz4", "none"],

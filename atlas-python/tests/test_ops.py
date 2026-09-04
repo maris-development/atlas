@@ -904,7 +904,7 @@ def test_describing_a_removed_dataset_is_an_error(collection):
 def test_info_summarises_the_collection(collection):
     i = atlas.info(str(collection))
 
-    assert i["format_version"] == 7
+    assert i["format_version"] == 8
     assert i["codec"] == "zstd"
     assert i["dataset_count"] == 3
     assert i["total_datasets"] == 3

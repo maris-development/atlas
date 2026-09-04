@@ -1,8 +1,8 @@
 //! Compatibility test against committed bytes.
 //!
-//! `tests/fixtures/golden_v7/` holds one container, written by hand and
+//! `tests/fixtures/golden_v8/` holds one container, written by hand and
 //! committed. The test below opens it and asserts every value. A change to the
-//! format or the reader that breaks a v7 container fails here. No round-trip
+//! format or the reader that breaks a v8 container fails here. No round-trip
 //! test catches that.
 //!
 //! This test does *not* compare the writer's output byte for byte. Zstd
@@ -22,7 +22,7 @@ use atlas::{Atlas, AtlasWriter, Attr, Codec, FillValue, StatValue, WriterConfig}
 use ndarray::{Array1, ArrayD, IxDyn};
 
 fn fixture_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_v7")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/golden_v8")
 }
 
 /// Writes the fixture. Keep it in step with the assertions below.
@@ -82,7 +82,7 @@ async fn write_golden(dir: &Path) {
 }
 
 #[tokio::test]
-#[ignore = "run explicitly to regenerate tests/fixtures/golden_v7"]
+#[ignore = "run explicitly to regenerate tests/fixtures/golden_v8"]
 async fn regenerate() {
     let dir = fixture_dir();
     let _ = std::fs::remove_dir_all(&dir);
@@ -92,7 +92,7 @@ async fn regenerate() {
 }
 
 #[tokio::test]
-async fn the_committed_v7_container_still_opens() {
+async fn the_committed_v8_container_still_opens() {
     let atlas = Atlas::open_path(fixture_dir()).await.unwrap();
 
     assert_eq!(atlas.list_datasets(), vec!["grid", "labels"]);
@@ -204,20 +204,20 @@ async fn the_committed_v7_container_still_opens() {
 }
 
 #[tokio::test]
-async fn the_committed_container_has_the_v7_framing() {
+async fn the_committed_container_has_the_v8_framing() {
     let bytes = std::fs::read(fixture_dir().join("data.atlas")).unwrap();
     let len = bytes.len();
 
     assert_eq!(&bytes[0..4], b"ATLS", "leading magic");
     assert_eq!(
         u32::from_le_bytes(bytes[4..8].try_into().unwrap()),
-        7,
+        8,
         "header version"
     );
     assert_eq!(&bytes[len - 4..], b"ATLS", "trailing magic");
     assert_eq!(
         u32::from_le_bytes(bytes[len - 8..len - 4].try_into().unwrap()),
-        7,
+        8,
         "trailer version"
     );
     let footer_size = u64::from_le_bytes(bytes[len - 16..len - 8].try_into().unwrap()) as usize;

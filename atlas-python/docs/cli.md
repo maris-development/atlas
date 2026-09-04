@@ -68,7 +68,6 @@ A failure part-way leaves no collection, and not a partial one.
 | Flag | Effect |
 |---|---|
 | `--no-recursive` | Scan the top directory alone. The scan descends by default |
-| `-r`, `--recursive` | Accepted for compatibility. The scan already descends |
 | `--codec {zstd,lz4,none}` | Block compression. Default `zstd` |
 | `--chunk-size SIZE` | Block size to aim for. Default `128MiB` |
 | `--open-chunks MODE` | How files are read: `auto`, `native`, `none`, or a JSON dict |
@@ -246,7 +245,7 @@ and any `array-format` reader opens the result.
 ```bash
 $ atlas info /data/collection
 collection /data/collection
-  format version    7
+  format version    8
   created           2026-08-31T08:32:57Z
   codec             zstd
   container size    5.4 KiB

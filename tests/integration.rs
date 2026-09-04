@@ -1744,7 +1744,7 @@ async fn a_container_from_a_future_version_is_rejected_clearly() {
         Atlas::open_path(tmp.path()).await,
         Err(Error::UnsupportedVersion {
             found: 99,
-            expected: 7
+            expected: 8
         })
     ));
 }
@@ -1759,14 +1759,14 @@ async fn the_container_carries_the_documented_framing() {
 
     // Header: magic then version.
     assert_eq!(&bytes[0..4], b"ATLS");
-    assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 7);
+    assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 8);
 
     // Trailer: footer size, version, magic.
     let len = bytes.len();
     assert_eq!(&bytes[len - 4..], b"ATLS");
     assert_eq!(
         u32::from_le_bytes(bytes[len - 8..len - 4].try_into().unwrap()),
-        7
+        8
     );
     let footer_size = u64::from_le_bytes(bytes[len - 16..len - 8].try_into().unwrap()) as usize;
     assert!(footer_size > 0 && footer_size < len - 24);
