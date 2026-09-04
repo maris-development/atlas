@@ -224,20 +224,27 @@ def _is_missing_str(x: Any) -> bool:
 
 
 def _fill_missing_strings(block: np.ndarray, fill: str) -> tuple[np.ndarray, int]:
-    """Replaces every `None` or `NaN` cell of an object-dtype `block` with `fill`.
+    """Replaces every missing cell of an object-dtype `block` with `fill`.
 
     Atlas cannot store a missing string as null, because the `.af` format has
     no string null sentinel. A masked string cell therefore takes a real
     string. Returns ``(block, n_filled)``. A block that is not object dtype
-    (`\\|S` or `\\|U`) holds no `None` and no `NaN`, so it returns unchanged
-    with ``n_filled == 0``.
+    (`\\|S` or `\\|U`) holds no missing cell, so it returns unchanged with
+    ``n_filled == 0``.
+
+    `pandas.isna` tests the whole block in C. The scan is the hot path of a
+    string-heavy ingest: an Argo profile carries a dozen QC arrays, and a cell
+    at a time in Python costs about five times as much. It also catches
+    `pd.NA` and `NaT`, which a `None`-or-`NaN` test misses and which the
+    bindings would reject as a non-string.
     """
     if block.dtype.kind != "O":
         return block, 0
-    flat = block.reshape(-1)
-    mask = np.fromiter(
-        (_is_missing_str(x) for x in flat), dtype=bool, count=flat.size
-    ).reshape(block.shape)
+    # xarray requires pandas, so this import is always satisfied. It stays
+    # local to keep `import atlas` off it, as the dask and cftime ones do.
+    import pandas as pd
+
+    mask = np.asarray(pd.isna(block), dtype=bool)
     n = int(mask.sum())
     if not n:
         return block, 0

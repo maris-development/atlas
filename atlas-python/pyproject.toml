@@ -23,6 +23,9 @@ dependencies = [
     "numpy>=1.23",
     "xarray>=2023.1",
     "dask>=2023.1",
+    # xarray already requires it. Named here because atlas imports it
+    # directly, to test a block of strings for missing cells.
+    "pandas>=1.5",
 ]
 
 [project.urls]
