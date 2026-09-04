@@ -35,10 +35,13 @@ impl ArrayLayout {
     pub(crate) fn from_stored(meta: &StoredMeta) -> Self {
         Self {
             shape: meta.layout.shape.iter().map(|&s| s as usize).collect(),
+            // Not the raw `storage.chunk_shape`. An axis of length 0 carries
+            // a 0 extent in a container written before array-format 0.13, and
+            // grid arithmetic divides by it. `effective_chunk_shape` raises
+            // each 0 to 1, which leaves the grid empty either way.
             chunk_shape: meta
                 .layout
-                .storage
-                .chunk_shape
+                .effective_chunk_shape()
                 .iter()
                 .map(|&s| s as usize)
                 .collect(),
@@ -59,6 +62,10 @@ impl ArrayLayout {
 
     /// On-disk chunk shape, same rank as [`shape`](Self::shape). Equal to
     /// `shape` when the array is stored as one chunk.
+    ///
+    /// An axis of length 0 reports an extent of 1, not 0. The array holds no
+    /// element on that axis, so the chunk grid is empty whichever it is, and
+    /// 1 keeps the value safe to divide by.
     pub fn chunk_shape(&self) -> &[usize] {
         &self.chunk_shape
     }

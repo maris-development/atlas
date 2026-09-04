@@ -247,6 +247,61 @@ def test_workers_below_one_is_refused(netcdf_dir, tmp_path):
         atlas.create(netcdf_dir, str(tmp_path / "c"), workers=0)
 
 
+# ── zero-length dimensions ───────────────────────────────────────────
+
+
+@pytest.fixture
+def netcdf_dir_with_an_empty_dimension(tmp_path):
+    """One file holding a variable with no elements.
+
+    A NetCDF file names a dimension of length zero whenever the records it
+    would hold are absent. An Argo profile does it for `N_HISTORY` whenever
+    the float reports no history, which is the common case.
+    """
+    d = tmp_path / "nc"
+    d.mkdir()
+    xr.Dataset(
+        data_vars={
+            "temperature": xr.DataArray(
+                np.arange(6, dtype=np.float32).reshape(2, 3), dims=["y", "x"]
+            ),
+            # (0, 3). Declared, and holding nothing.
+            "history": xr.DataArray(
+                np.zeros((0, 3), dtype=np.float32), dims=["h", "x"]
+            ),
+            "labels": xr.DataArray(np.array([], dtype=object), dims=["h"]),
+        },
+        attrs={"source": "test"},
+    ).to_netcdf(d / "a.nc")
+    return d
+
+
+def test_a_variable_with_no_elements_lands_as_an_empty_array(
+    netcdf_dir_with_an_empty_dimension, tmp_path
+):
+    dest = tmp_path / "c"
+    atlas.create(netcdf_dir_with_an_empty_dimension, str(dest))
+
+    arrays = {a["name"]: a for a in atlas.describe(str(dest), "a.nc")["arrays"]}
+    # The array is declared at its real shape, and holds nothing.
+    assert arrays["history"]["shape"] == [0, 3]
+    assert arrays["history"]["stats"]["row_count"] == 0
+    assert arrays["history"]["stats"]["min"] is None
+    assert arrays["labels"]["shape"] == [0]
+    assert arrays["labels"]["stats"]["row_count"] == 0
+    # The rest of the file lands as usual.
+    assert arrays["temperature"]["shape"] == [2, 3]
+    assert arrays["temperature"]["stats"]["row_count"] == 6
+
+
+def test_an_empty_dimension_appears_in_the_dataset_dimensions(
+    netcdf_dir_with_an_empty_dimension, tmp_path
+):
+    dest = tmp_path / "c"
+    atlas.create(netcdf_dir_with_an_empty_dimension, str(dest))
+    assert atlas.describe(str(dest), "a.nc")["dimensions"] == {"y": 2, "x": 3, "h": 0}
+
+
 # ── unsupported dtypes ───────────────────────────────────────────────
 
 

@@ -24,7 +24,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dependencies]
 # Exact pin: the container format embeds this crate's files verbatim, so a
 # change to its bytes is a change to the atlas format.
-array-format = "=0.12.0"
+array-format = "=0.13.0"
 object_store = "0.13"
 async-trait = "0.1"
 bytes = "1"

@@ -28,9 +28,9 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "array-format"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7379c3303a9b9f0693ccd040d85da31e302a601efeafae8a6cb69341e42de41"
+checksum = "59562a359dd3d21b4c39081332c02ffd1a2fdeb49295a5082107549193c97fdd"
 dependencies = [
  "bytes",
  "futures",
