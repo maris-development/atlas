@@ -131,13 +131,12 @@ any number of names, and still writes the mask once.
 
 ```text
 offset 0     b"ATLS"                     4 B   leading magic
-offset 4     format_version u32 LE = 3   4 B
+offset 4     format_version u32 LE = 7   4 B
 offset 8     segment[0]                        one variable, array-format
-             segment[0].stats                  its statistics sidecar
              segment[1] …                      back to back, no padding
              footer_bytes                      zstd(msgpack(CollectionFooter))
 end - 16     footer_size u64 LE          8 B  ┐
-end - 8      format_version u32 LE = 3   4 B  ├ trailer
+end - 8      format_version u32 LE = 7   4 B  ├ trailer
 end - 4      b"ATLS"                     4 B  ┘
 ```
 
@@ -147,10 +146,9 @@ the trailing copy. The leading copy lets `file` and `xxd` name the file.
 
 ### Segments
 
-One per variable, each a complete `array-format` file that describes itself,
-followed by the statistics sidecar that crate keeps beside it. Inside, an array
-keys on the **dataset** name, so `temperature` holds `jan_2024`, `feb_2024`,
-and every other dataset that declares it.
+One per variable, each a complete `array-format` file that describes itself.
+Inside, an array keys on the **dataset** name, so `temperature` holds
+`jan_2024`, `feb_2024`, and every other dataset that declares it.
 
 That is what makes a scan cheap. `array-format` packs neighbouring chunks into
 one block, so a block holds `temperature` for a run of datasets. One fetch
@@ -179,8 +177,8 @@ by name, so a name and its ordinal are one structure and a lookup is one hash.
 
 Everything else sits on the array it belongs to, inside that variable's
 segment. Attribute values, because `array-format` attaches an attribute to an
-array. Statistics, because it computes them while writing and stores them in a
-sidecar beside the file. A segment interns each attribute key and value once, so
+array. Statistics, because it computes them while writing and stores them in
+the segment's footer. A segment interns each attribute key and value once, so
 `units = "celsius"` across ten thousand datasets is stored once.
 
 A dataset-level attribute has no array of its own, so the reserved `_datasets`
@@ -240,28 +238,26 @@ nobody wrote comes from the fill value, and costs no I/O.
 
 ## Writing
 
-`AtlasWriter` streams one object. Each **variable** stages as a complete
-`array-format` file on local scratch, and every dataset writes into it under
-its own name:
+`AtlasWriter` streams one object. Each **variable** builds in an
+`array-format` writer, and every dataset writes into it under its own name:
 
 ```text
-add_dataset("jan")  ──▶ scratch/v0/data.af     temperature/jan
-                        scratch/v1/data.af     salinity/jan
-add_dataset("feb")  ──▶ scratch/v0/data.af     temperature/feb
-                        scratch/v1/data.af     salinity/feb
-AtlasWriter::finish ──▶ compact each, copy in, footer, trailer, done
+add_dataset("jan")  ──▶ writer[temperature]    temperature/jan
+                        writer[salinity]       salinity/jan
+add_dataset("feb")  ──▶ writer[temperature]    temperature/feb
+                        writer[salinity]       salinity/feb
+AtlasWriter::finish ──▶ finish each, copy in, footer, trailer, done
 ```
 
 A variable's segment is complete only when every dataset has contributed, so
-nothing reaches the container until `AtlasWriter::finish`. Local scratch
-therefore holds the whole collection once.
+nothing reaches the container until `AtlasWriter::finish`.
 
-Memory stays bounded. `array-format` keeps a pending write in memory until
-`flush`, so a variable past 64 MiB flushes and seals a layer. `compact` merges
-the layers at the end, and the copy streams in 8 MiB pieces.
+Memory stays bounded. The writer packs each chunk into a compressed block as it
+arrives, and spills every full block to a temporary file. At finish each
+variable lands on local scratch, and the copy streams in 8 MiB pieces.
 
 A `DatasetWriter` takes the writer's lock for each define and each write,
-because the variable files are shared. Ordinals do not depend on that order.
+because the variable writers are shared. Ordinals do not depend on that order.
 Each dataset carries the number of its `add_dataset` call, and the footer sorts
 on it.
 
@@ -310,7 +306,7 @@ cargo test -p atlas-rust
 
 This covers the format framing, the footer and mask codecs, the segment-store
 adapter, and the whole lifecycle. Two committed fixtures pin compatibility.
-`tests/fixtures/golden_v6/` is a v6 container, read back with every value
+`tests/fixtures/golden_v7/` is a v7 container, read back with every value
 asserted. The Python xarray layer writes `tests/fixtures/from_python/`, and
 Rust checks it. That keeps the two in agreement, because Python reads no array.
 

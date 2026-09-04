@@ -173,7 +173,7 @@ against the previously built binary.
 
 Two committed fixtures pin behaviour that a round-trip test would miss.
 
-**`tests/fixtures/golden_v6/`** — a v6 container, read back by
+**`tests/fixtures/golden_v7/`** — a v7 container, read back by
 [tests/golden.rs](tests/golden.rs) with every value asserted. If a change breaks
 compatibility with an existing container, this catches it. Regenerate only when
 you intend to break the format, which means bumping `FORMAT_VERSION`:

@@ -16,14 +16,13 @@ crate produces or parses these bytes.
 
 ```text
 offset 0     b"ATLS"                     4 B   leading magic
-offset 4     format_version u32 LE = 6   4 B
+offset 4     format_version u32 LE = 7   4 B
 offset 8     segment[0]                        one variable, array-format
-             segment[0].stats                  its statistics sidecar
              segment[1]                        back to back, no padding
              …
              footer_bytes                      zstd(msgpack(CollectionFooter))
 end - 16     footer_size u64 LE          8 B  ┐
-end - 8      format_version u32 LE = 6   4 B  ├ trailer
+end - 8      format_version u32 LE = 7   4 B  ├ trailer
 end - 4      b"ATLS"                     4 B  ┘
 ```
 
@@ -53,7 +52,9 @@ with no alignment or padding. Byte ranges come from the footer, so nothing has
 to be scanned.
 
 Each segment is a complete `array-format` file. That is a data region of
-compressed blocks, then its own rkyv footer and `ARRF` trailer.
+compressed blocks, then its own rkyv footer and `ARRF` trailer. The footer
+holds every array's chunk table, attributes, and statistics. Nothing sits
+beside the file.
 
 Inside a segment, each array keys on the **dataset** name. So `temperature`
 holds one array called `jan_2024`, one called `feb_2024`, and so on:
@@ -84,8 +85,8 @@ a format change.
 
 ```rust
 struct CollectionFooter {
-    version: u32,                    // = 6, re-checked after decode
-    segment_format: u32,             // = 5, the array-format footer version
+    version: u32,                    // = 7, re-checked after decode
+    segment_format: u32,             // = 6, the array-format footer version
     codec: Codec,                    // for information. Each block names its own
     created_unix_ms: i64,
     string_pool: Vec<String>,        // array names and attribute keys
@@ -105,8 +106,6 @@ struct VariableEntry {
     name: u32,                       // index into string_pool
     seg_offset: u64,                 // the array-format file
     seg_len: u64,
-    stats_offset: u64,               // its statistics sidecar
-    stats_len: u64,                  // 0 when the segment carries none
 }
 ```
 
@@ -129,17 +128,6 @@ A reader hands out `SchemaView` and `ArrayMeta` over the schema. Both borrow
 the footer and resolve an index on demand, so no name is copied.
 `DatasetSchema` is the owned form, built by `to_owned_schema`. `ArrayLayout`
 carries what the segment holds, and `DatasetView::array_layout` reads it.
-
-### A segment is two objects
-
-`array-format` keeps an array's statistics in a sidecar beside its file, not
-inside it, and reads that file once at open. So a variable contributes two byte
-ranges to the container: the `.af` file and its `.stats`.
-
-`SegmentStore` serves both. It presents `seg<n>.af` and `seg<n>.stats`, which
-are the names `array-format` derives, each mapped to its own range. Without the
-sidecar the crate finds no statistics and reports none, which is why the footer
-records where it is.
 
 ### A schema names things and nothing more
 
@@ -195,9 +183,9 @@ contents are small. It loses where the structure exists once per dataset.
 ### Statistics live in the segments too
 
 `array-format` computes a minimum, a maximum, and a null count for every array
-while the dataset stages. It walks the data anyway, to write it. It then stores
-them in the sidecar beside that segment, which is where a reader takes them
-from.
+as it packs each chunk. It walks the data anyway, to write it. It then stores
+them in the segment's own footer, on the array they describe, which is where a
+reader takes them from.
 
 `null_count` counts the elements equal to the fill value. That is how the
 format stores a cell nobody wrote. An array somebody declared and never wrote
@@ -206,9 +194,9 @@ reports `row_count == null_count`. Every element is a hole. `min` and `max` are
 lexicographic order.
 
 `Atlas::array_stats` folds one array over the collection. One open of that
-variable's segment covers every dataset, and its table already holds one row
-per dataset. Reading the table whole is therefore one pass, where a lookup per
-dataset would be quadratic. `array_stats_by_dataset` hands those rows back as
+variable's segment covers every dataset, and its footer already holds one
+entry per dataset. Reading them whole is therefore one pass, where a lookup
+per dataset would be quadratic. `array_stats_by_dataset` hands those rows back as
 they are, each naming its own dataset, and `DatasetView::array_stats` reports
 one dataset.
 
@@ -318,13 +306,13 @@ this where a backend offers one. Version 1 does not do that.
 | Name | Value |
 |---|---|
 | Container magic | `ATLS`, at both ends |
-| Container version | 6 |
+| Container version | 7 |
 | Header size | 8 bytes |
 | Trailer size | 16 bytes |
 | Tail probe | 64 KiB |
-| Embedded segment format | `array-format` footer v5 |
+| Embedded segment format | `array-format` footer v6 |
 | Mask magic | `ATLM` |
 | Mask version | 1 |
 
-`array-format` is pinned to exactly `0.12.0`. The container embeds its files
+`array-format` is pinned to exactly `0.15.0`. The container embeds its files
 verbatim, so a change to its bytes would be a change to the atlas format.

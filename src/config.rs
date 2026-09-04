@@ -22,15 +22,6 @@ pub enum Codec {
 /// size share a block. A larger chunk gets a block of its own.
 pub(crate) const DEFAULT_BLOCK_TARGET_SIZE: usize = 8 * 1024 * 1024;
 
-/// Bytes one variable may hold in memory before its staging file flushes.
-///
-/// `array-format` keeps a pending write in memory until `flush`, and each
-/// flush seals a sidecar layer that `compact` must later merge. A small budget
-/// costs layers, and a large one costs memory. Every dataset stages before any
-/// of it is written out, so without a budget the whole collection would sit in
-/// memory at once.
-pub(crate) const STAGING_FLUSH_BUDGET: usize = 64 * 1024 * 1024;
-
 /// Decompressed-block cache shared by every segment a reader opens.
 pub(crate) const DEFAULT_CACHE_CAPACITY: u64 = 256 * 1024 * 1024;
 

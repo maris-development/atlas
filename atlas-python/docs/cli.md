@@ -38,7 +38,7 @@ The file gets every error and warning, with the reason:
 ```bash
 $ atlas create /data/nc /data/collection --skip-unsupported --log-file ingest.log
 $ cat ingest.log
-2026-09-01 14:30:41 INFO    atlas.cli: atlas 0.16.4: create /data/nc ...
+2026-09-01 14:30:41 INFO    atlas.cli: atlas 0.17.0: create /data/nc ...
 2026-09-01 14:30:41 INFO    atlas.ops: ingesting 2 file(s) into /data/collection
 2026-09-01 14:30:41 WARNING atlas.ops: /data/nc/buoy.nc: skipped array 'flag' of dtype bool: numpy dtype dtype('bool') is not supported by atlas (supported: ...)
 2026-09-01 14:30:41 INFO    atlas.ops: wrote 1 dataset(s); skipped 0 file(s) and 1 array(s)
@@ -246,7 +246,7 @@ and any `array-format` reader opens the result.
 ```bash
 $ atlas info /data/collection
 collection /data/collection
-  format version    1
+  format version    7
   created           2026-08-31T08:32:57Z
   codec             zstd
   container size    5.4 KiB

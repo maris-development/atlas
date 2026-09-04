@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "atlas-python"
-version = "0.16.4"
+version = "0.17.0"
 description = "Python bindings for the ATLAS array store"
 readme = "README.md"
 requires-python = ">=3.10"

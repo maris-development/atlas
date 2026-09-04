@@ -21,59 +21,42 @@ target then opens as a collection.
 
 ## Staging
 
-Each **variable** builds as a complete `array-format` file, in a local scratch
-directory. Every dataset writes into it under the dataset's own name:
+Each **variable** builds in an `array-format` writer. Every dataset writes into
+it under the dataset's own name:
 
 ```text
-add_dataset("jan")  ──▶ scratch/v0/data.af     temperature/jan
-                        scratch/v1/data.af     salinity/jan
+add_dataset("jan")  ──▶ writer[temperature]    temperature/jan
+                        writer[salinity]       salinity/jan
 
-add_dataset("feb")  ──▶ scratch/v0/data.af     temperature/feb
-                        scratch/v1/data.af     salinity/feb
+add_dataset("feb")  ──▶ writer[temperature]    temperature/feb
+                        writer[salinity]       salinity/feb
 
-AtlasWriter::finish ──▶ flush → compact → copy, per variable
+AtlasWriter::finish ──▶ finish → copy, per variable
                     ──▶ footer, trailer, done
 ```
 
 A variable's segment is complete only when every dataset has contributed, so
-nothing reaches the container until `AtlasWriter::finish`. Local scratch
-therefore holds the whole collection once. The scratch directory of each
-variable goes as soon as its segment lands.
+nothing reaches the container until `AtlasWriter::finish`.
 
-Memory stays bounded. `array-format` keeps a pending write in memory until
-`flush`, and each flush seals a sidecar layer that `compact` must later merge.
-A variable past `STAGING_FLUSH_BUDGET`, which is 64 MiB, therefore flushes. A
-small budget costs layers, and a large one costs memory. Per-dataset flushing
-is the wrong end of that trade: it made a 800-dataset write nine times slower,
-and its cost grew faster than the dataset count.
+Memory stays bounded. The writer packs each chunk into a compressed block as it
+arrives, and spills every full block to a temporary file. It keeps one open
+block per variable in memory, and the chunk table beside it. The writer's
+memory therefore does not grow with the number of datasets.
 
-The copy into the container streams in 8 MiB pieces.
+### finish, then copy
 
-### flush, then compact
+`ArrayWriter::finish` writes one self-contained file: the blocks, then a footer
+that holds every array's chunk table, attributes, and statistics. That is what
+a segment must be.
 
-Run both, in that order. The order matters.
+The writer writes a whole object, and a segment is a byte range of one. Each
+variable therefore lands in a scratch directory first, and the copy into the
+container streams it in 8 MiB pieces. The scratch copy goes as soon as its
+segment lands, so local disk holds each variable twice for a moment, and the
+whole collection once.
 
-`flush()` commits the buffered writes into a sidecar layer. `compact()` merges
-every layer into one base file. A `compact()` without a `flush()` first leaves
-the buffered writes behind. It can also produce a dangling attribute index,
-because `compact` builds its attribute dictionary from committed layers only.
-The attribute values matter here now: `DatasetWriter::finish` writes them into
-the staging files, and `AtlasWriter::finish` flushes before it compacts.
-
-The result is one self-contained file, which is what a segment must be.
-
-The flush also computes the minimum, the maximum, and the null count of each
-array, and writes them to the `{stem}.stats` sidecar beside the file. The
-container embeds that sidecar next to the segment, and records where it is. A
-reader then finds the statistics where `array-format` looks for them. See
-[format.md](format.md#a-segment-is-two-objects).
-
-> **Cost.** This pass reads, decompresses, and compresses every chunk again. It
-> also computes the statistics twice. All of it happens on local scratch.
-> Ingest therefore spends about twice the compression CPU of a one-shot
-> builder. The work sits in `create_staging_file` and `DatasetWriter::finish`.
-> An `array-format` API that writes a base directly would replace it as it
-> stands.
+The statistics cost no second pass. The writer computes a partial per chunk as
+it packs the chunk, and merges them at finish.
 
 ## Streaming to the container
 
@@ -104,7 +87,7 @@ for path in files {
 ```
 
 A `DatasetWriter` takes the writer's lock for each define and each write,
-because every dataset writes into the same per-variable files. That is the
+because every dataset writes into the same per-variable writers. That is the
 price of the layout: the writes serialize, and only the work outside the lock
 runs in parallel.
 
@@ -134,12 +117,12 @@ hygiene, not of correctness.
 
 ## Attributes go into the segments
 
-`DatasetWriter::finish` writes them, before anything is compacted.
+`DatasetWriter::finish` writes them into the variable writers.
 
-A per-array value goes on the array's own entry in that variable's staging
-file, under this dataset's name. A dataset-level value has no array to sit on,
-so the reserved `_datasets` staging file gets a rank-0 array per dataset to
-carry it. That file appears only when some dataset has a global attribute.
+A per-array value goes on the array's own entry in that variable's writer,
+under this dataset's name. A dataset-level value has no array to sit on, so the
+reserved `_datasets` writer gets a rank-0 array per dataset to carry it. That
+segment appears only when some dataset has a global attribute.
 
 `array-format` interns each key and each value per file, so `units =
 "celsius"` across ten thousand datasets is stored once per segment.

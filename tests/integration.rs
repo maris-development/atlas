@@ -1744,7 +1744,7 @@ async fn a_container_from_a_future_version_is_rejected_clearly() {
         Atlas::open_path(tmp.path()).await,
         Err(Error::UnsupportedVersion {
             found: 99,
-            expected: 6
+            expected: 7
         })
     ));
 }
@@ -1759,14 +1759,14 @@ async fn the_container_carries_the_documented_framing() {
 
     // Header: magic then version.
     assert_eq!(&bytes[0..4], b"ATLS");
-    assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 6);
+    assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 7);
 
     // Trailer: footer size, version, magic.
     let len = bytes.len();
     assert_eq!(&bytes[len - 4..], b"ATLS");
     assert_eq!(
         u32::from_le_bytes(bytes[len - 8..len - 4].try_into().unwrap()),
-        6
+        7
     );
     let footer_size = u64::from_le_bytes(bytes[len - 16..len - 8].try_into().unwrap()) as usize;
     assert!(footer_size > 0 && footer_size < len - 24);
@@ -1780,17 +1780,11 @@ async fn the_container_carries_the_documented_framing() {
     );
     let segment_bytes = len - 8 - 16 - footer_size;
     assert!(segment_bytes > 0);
-    // Each variable contributes two objects: the array-format file, then the
-    // statistics sidecar that crate keeps beside it. Both end in their own
-    // magic, so the bytes just before the container footer are the last
-    // sidecar's.
+    // Each variable contributes one array-format file, and that file ends in
+    // its own magic. The bytes just before the container footer are therefore
+    // the last segment's trailer.
     let last = len - 16 - footer_size;
-    assert_eq!(&bytes[last - 4..last], b"ARST");
-    // The `.af` file that precedes it ends in its own.
-    assert!(
-        bytes[8..last].windows(4).any(|w| w == b"ARRF"),
-        "no array-format file in the segment region"
-    );
+    assert_eq!(&bytes[last - 4..last], b"ARRF");
 }
 
 // ── type safety ──────────────────────────────────────────────────────
@@ -1813,3 +1807,4 @@ async fn reading_an_array_at_the_wrong_type_is_refused() {
         Err(Error::ArrayNotFound(_))
     ));
 }
+

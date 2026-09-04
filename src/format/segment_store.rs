@@ -1,22 +1,15 @@
 //! An [`ObjectStore`] view of one segment inside the container.
 //!
 //! `array-format` opens a file through an [`ObjectStore`] and a path. A
-//! segment sits inside a larger file. This adapter therefore presents byte
-//! ranges of the container as standalone objects. It translates each range
+//! segment sits inside a larger file. This adapter therefore presents one byte
+//! range of the container as a standalone object. It translates each range
 //! request and forwards it. It buffers nothing.
-//!
-//! A segment is **two** objects. [`segment_path`] is the `array-format` file
-//! itself. [`stats_path`] is its statistics sidecar, which `array-format`
-//! keeps beside the file rather than inside it, and reads once at open. Both
-//! are byte ranges of the container.
 //!
 //! Two behaviours matter as much as the translation:
 //!
-//! - `list` returns nothing. Sidecar discovery therefore finds no delta layers.
-//!   A segment is always one compacted base.
-//! - Any other path is [`NotFound`](object_store::Error::NotFound). So is the
-//!   statistics path when a segment carries no sidecar, which `array-format`
-//!   tolerates.
+//! - Any path but the segment's own is [`NotFound`](object_store::Error::NotFound).
+//! - A range that ends past the object clamps. A range that starts past it is
+//!   an error. Without the clamp, a read reaches the bytes of the next segment.
 //!
 //! Every write method is [`NotSupported`](object_store::Error::NotSupported).
 //! A collection is immutable, so nothing must try.
@@ -39,83 +32,49 @@ use object_store::{
     PutResult,
 };
 
-/// The name `array-format` sees for the segment at `variable`. It must end in
-/// `.af`, because `ArrayFile::open` expects that suffix.
+/// The name `array-format` sees for the segment at `variable`.
 pub(crate) fn segment_path(variable: u32) -> OsPath {
     OsPath::from(format!("seg{variable}.af"))
 }
 
-/// The name `array-format` derives for that segment's statistics sidecar. It
-/// strips `.af` and appends `.stats`, so this must match.
-pub(crate) fn stats_path(variable: u32) -> OsPath {
-    OsPath::from(format!("seg{variable}.stats"))
-}
-
-/// One virtual object: a name and the container range behind it.
+/// Presents one byte range of the container as a small object store.
 #[derive(Debug)]
-struct Part {
+pub(crate) struct SegmentStore {
+    inner: Arc<dyn ObjectStore>,
+    container: OsPath,
     name: OsPath,
     offset: u64,
     len: u64,
 }
 
-/// Presents the byte ranges of one segment as a small object store.
-#[derive(Debug)]
-pub(crate) struct SegmentStore {
-    inner: Arc<dyn ObjectStore>,
-    container: OsPath,
-    data: Part,
-    /// The statistics sidecar, when the segment carries one.
-    stats: Option<Part>,
-}
-
 impl SegmentStore {
-    /// Views the `array-format` file at `offset` and its statistics sidecar at
-    /// `stats_offset` as two objects. A `stats_len` of zero means the segment
-    /// carries no sidecar.
+    /// Views the `array-format` file at `offset` as one object.
     pub(crate) fn new(
         inner: Arc<dyn ObjectStore>,
         container: OsPath,
         variable: u32,
         offset: u64,
         len: u64,
-        stats_offset: u64,
-        stats_len: u64,
     ) -> Self {
         Self {
             inner,
             container,
-            data: Part {
-                name: segment_path(variable),
-                offset,
-                len,
-            },
-            stats: (stats_len > 0).then(|| Part {
-                name: stats_path(variable),
-                offset: stats_offset,
-                len: stats_len,
-            }),
+            name: segment_path(variable),
+            offset,
+            len,
         }
     }
 
     /// The path callers must use to reach this segment.
     pub(crate) fn path(&self) -> OsPath {
-        self.data.name.clone()
-    }
-
-    /// The part `location` names, if this store holds it.
-    fn part(&self, location: &OsPath) -> Option<&Part> {
-        if location == &self.data.name {
-            return Some(&self.data);
-        }
-        self.stats.as_ref().filter(|s| location == &s.name)
+        self.name.clone()
     }
 
     /// Resolves a requested range against the segment, in segment-local
     /// coordinates. A real object store behaves the same way. An end past the
     /// object clamps. A start past the object is an error.
-    fn resolve(part: &Part, range: Option<GetRange>) -> object_store::Result<Range<u64>> {
-        let len = part.len;
+    fn resolve(&self, range: Option<GetRange>) -> object_store::Result<Range<u64>> {
+        let len = self.len;
         let local = match range {
             None => 0..len,
             Some(GetRange::Bounded(r)) => r.start..r.end.min(len),
@@ -135,13 +94,13 @@ impl SegmentStore {
         Ok(local)
     }
 
-    fn meta(part: &Part) -> ObjectMeta {
+    fn meta(&self) -> ObjectMeta {
         ObjectMeta {
-            location: part.name.clone(),
+            location: self.name.clone(),
             // The container holds no per-segment timestamp. `array-format`
             // uses the size only.
             last_modified: chrono::DateTime::UNIX_EPOCH,
-            size: part.len,
+            size: self.len,
             e_tag: None,
             version: None,
         }
@@ -160,8 +119,8 @@ impl fmt::Display for SegmentStore {
             f,
             "SegmentStore({}[{}..{}])",
             self.container,
-            self.data.offset,
-            self.data.offset + self.data.len
+            self.offset,
+            self.offset + self.len
         )
     }
 }
@@ -190,23 +149,23 @@ impl ObjectStore for SegmentStore {
         location: &OsPath,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
-        let Some(part) = self.part(location) else {
+        if location != &self.name {
             return Err(object_store::Error::NotFound {
                 path: location.to_string(),
-                source: format!("a segment store holds only '{}'", self.data.name).into(),
+                source: format!("a segment store holds only '{}'", self.name).into(),
             });
-        };
-        let local = Self::resolve(part, options.range)?;
+        }
+        let local = self.resolve(options.range)?;
         if options.head {
             return Ok(GetResult {
                 payload: GetResultPayload::Stream(Box::pin(futures::stream::empty())),
-                meta: Self::meta(part),
+                meta: self.meta(),
                 range: local,
                 attributes: Default::default(),
             });
         }
-        let meta = Self::meta(part);
-        let absolute = (part.offset + local.start)..(part.offset + local.end);
+        let meta = self.meta();
+        let absolute = (self.offset + local.start)..(self.offset + local.end);
         let bytes = self.inner.get_range(&self.container, absolute).await?;
         Ok(GetResult {
             payload: GetResultPayload::Stream(Box::pin(futures::stream::once(async move {
@@ -218,8 +177,7 @@ impl ObjectStore for SegmentStore {
         })
     }
 
-    /// Always empty. This tells `array-format` the segment has no sidecar
-    /// layers.
+    /// Always empty. A segment is one object, and nothing sits beside it.
     fn list(
         &self,
         _prefix: Option<&OsPath>,
@@ -260,19 +218,14 @@ mod tests {
     use object_store::memory::InMemory;
 
     /// A container whose bytes are `0..200`, with a segment at 50..150.
-    async fn fixture_store() -> Arc<InMemory> {
+    async fn fixture() -> SegmentStore {
         let inner = Arc::new(InMemory::new());
         let body: Vec<u8> = (0..200u32).map(|i| i as u8).collect();
         inner
             .put(&OsPath::from("data.atlas"), Bytes::from(body).into())
             .await
             .unwrap();
-        inner
-    }
-
-    async fn fixture() -> SegmentStore {
-        let inner = fixture_store().await;
-        SegmentStore::new(inner, OsPath::from("data.atlas"), 0, 50, 100, 150, 20)
+        SegmentStore::new(inner, OsPath::from("data.atlas"), 0, 50, 100)
     }
 
     async fn read(store: &SegmentStore, range: Option<GetRange>) -> Vec<u8> {
@@ -353,25 +306,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_statistics_sidecar_is_a_second_object() {
-        // `array-format` probes this path at open. The container embeds it, so
-        // the store serves it out of its own range.
-        let s = fixture().await;
-        let meta = s.head(&OsPath::from("seg0.stats")).await.unwrap();
-        assert_eq!(meta.size, 20);
-    }
-
-    #[tokio::test]
-    async fn a_segment_with_no_sidecar_reports_none() {
-        // A zero length means the segment carries no statistics, which
-        // `array-format` tolerates.
-        let inner = fixture_store().await;
-        let s = SegmentStore::new(inner, OsPath::from("data.atlas"), 0, 50, 100, 0, 0);
-        let r = s.head(&OsPath::from("seg0.stats")).await;
-        assert!(matches!(r, Err(object_store::Error::NotFound { .. })));
-    }
-
-    #[tokio::test]
     async fn any_other_path_is_not_found() {
         let s = fixture().await;
         let r = s.head(&OsPath::from("seg9.af")).await;
@@ -379,7 +313,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn listing_is_empty_so_no_sidecars_are_discovered() {
+    async fn listing_is_empty() {
         use futures::StreamExt;
         let s = fixture().await;
         assert_eq!(s.list(None).collect::<Vec<_>>().await.len(), 0);

@@ -1,6 +1,6 @@
 //! [`Attr`], atlas's public attribute value.
 
-use array_format::{AttributeValue, DType};
+use array_format::{AttributeValue, DType, EcoString};
 
 /// A typed attribute value.
 ///
@@ -127,21 +127,25 @@ impl Attr {
             Attr::UInt64(v) => AttributeValue::UInt64(v),
             Attr::Float32(v) => AttributeValue::Float32(v),
             Attr::Float64(v) => AttributeValue::Float64(v),
-            Attr::String(v) => AttributeValue::String(v),
-            Attr::Binary(v) => AttributeValue::Binary(v),
-            Attr::BoolList(v) => AttributeValue::BoolList(v),
-            Attr::Int8List(v) => AttributeValue::Int8List(v),
-            Attr::Int16List(v) => AttributeValue::Int16List(v),
-            Attr::Int32List(v) => AttributeValue::Int32List(v),
-            Attr::Int64List(v) => AttributeValue::Int64List(v),
-            Attr::UInt8List(v) => AttributeValue::UInt8List(v),
-            Attr::UInt16List(v) => AttributeValue::UInt16List(v),
-            Attr::UInt32List(v) => AttributeValue::UInt32List(v),
-            Attr::UInt64List(v) => AttributeValue::UInt64List(v),
-            Attr::Float32List(v) => AttributeValue::Float32List(v),
-            Attr::Float64List(v) => AttributeValue::Float64List(v),
-            Attr::StringList(v) => AttributeValue::StringList(v),
-            Attr::BinaryList(v) => AttributeValue::BinaryList(v),
+            Attr::String(v) => AttributeValue::String(v.into()),
+            Attr::Binary(v) => AttributeValue::Binary(v.into()),
+            Attr::BoolList(v) => AttributeValue::BoolList(v.into()),
+            Attr::Int8List(v) => AttributeValue::Int8List(v.into()),
+            Attr::Int16List(v) => AttributeValue::Int16List(v.into()),
+            Attr::Int32List(v) => AttributeValue::Int32List(v.into()),
+            Attr::Int64List(v) => AttributeValue::Int64List(v.into()),
+            Attr::UInt8List(v) => AttributeValue::UInt8List(v.into()),
+            Attr::UInt16List(v) => AttributeValue::UInt16List(v.into()),
+            Attr::UInt32List(v) => AttributeValue::UInt32List(v.into()),
+            Attr::UInt64List(v) => AttributeValue::UInt64List(v.into()),
+            Attr::Float32List(v) => AttributeValue::Float32List(v.into()),
+            Attr::Float64List(v) => AttributeValue::Float64List(v.into()),
+            Attr::StringList(v) => {
+                AttributeValue::StringList(v.into_iter().map(EcoString::from).collect())
+            }
+            Attr::BinaryList(v) => {
+                AttributeValue::BinaryList(v.into_iter().map(Box::from).collect())
+            }
         }
     }
 
@@ -162,21 +166,25 @@ impl Attr {
             AttributeValue::UInt64(v) => Attr::UInt64(*v),
             AttributeValue::Float32(v) => Attr::Float32(*v),
             AttributeValue::Float64(v) => Attr::Float64(*v),
-            AttributeValue::String(v) => Attr::String(v.clone()),
-            AttributeValue::Binary(v) => Attr::Binary(v.clone()),
-            AttributeValue::BoolList(v) => Attr::BoolList(v.clone()),
-            AttributeValue::Int8List(v) => Attr::Int8List(v.clone()),
-            AttributeValue::Int16List(v) => Attr::Int16List(v.clone()),
-            AttributeValue::Int32List(v) => Attr::Int32List(v.clone()),
-            AttributeValue::Int64List(v) => Attr::Int64List(v.clone()),
-            AttributeValue::UInt8List(v) => Attr::UInt8List(v.clone()),
-            AttributeValue::UInt16List(v) => Attr::UInt16List(v.clone()),
-            AttributeValue::UInt32List(v) => Attr::UInt32List(v.clone()),
-            AttributeValue::UInt64List(v) => Attr::UInt64List(v.clone()),
-            AttributeValue::Float32List(v) => Attr::Float32List(v.clone()),
-            AttributeValue::Float64List(v) => Attr::Float64List(v.clone()),
-            AttributeValue::StringList(v) => Attr::StringList(v.clone()),
-            AttributeValue::BinaryList(v) => Attr::BinaryList(v.clone()),
+            AttributeValue::String(v) => Attr::String(v.to_string()),
+            AttributeValue::Binary(v) => Attr::Binary(v.to_vec()),
+            AttributeValue::BoolList(v) => Attr::BoolList(v.to_vec()),
+            AttributeValue::Int8List(v) => Attr::Int8List(v.to_vec()),
+            AttributeValue::Int16List(v) => Attr::Int16List(v.to_vec()),
+            AttributeValue::Int32List(v) => Attr::Int32List(v.to_vec()),
+            AttributeValue::Int64List(v) => Attr::Int64List(v.to_vec()),
+            AttributeValue::UInt8List(v) => Attr::UInt8List(v.to_vec()),
+            AttributeValue::UInt16List(v) => Attr::UInt16List(v.to_vec()),
+            AttributeValue::UInt32List(v) => Attr::UInt32List(v.to_vec()),
+            AttributeValue::UInt64List(v) => Attr::UInt64List(v.to_vec()),
+            AttributeValue::Float32List(v) => Attr::Float32List(v.to_vec()),
+            AttributeValue::Float64List(v) => Attr::Float64List(v.to_vec()),
+            AttributeValue::StringList(v) => {
+                Attr::StringList(v.iter().map(|s| s.to_string()).collect())
+            }
+            AttributeValue::BinaryList(v) => {
+                Attr::BinaryList(v.iter().map(|b| b.to_vec()).collect())
+            }
         }
     }
 }

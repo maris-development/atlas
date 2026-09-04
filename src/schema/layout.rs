@@ -1,7 +1,6 @@
 //! [`ArrayLayout`]: where one array's elements sit, read from its segment.
 
-use array_format::FillValue;
-use array_format::layout::ArrayMeta as StoredMeta;
+use array_format::{ArrayInfo as StoredInfo, FillValue};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
@@ -32,26 +31,12 @@ pub struct ArrayLayout {
 
 impl ArrayLayout {
     /// Reads the layout `array-format` recorded for one array.
-    pub(crate) fn from_stored(meta: &StoredMeta) -> Self {
+    pub(crate) fn from_stored(info: &StoredInfo) -> Self {
         Self {
-            shape: meta.layout.shape.iter().map(|&s| s as usize).collect(),
-            // Not the raw `storage.chunk_shape`. An axis of length 0 carries
-            // a 0 extent in a container written before array-format 0.13, and
-            // grid arithmetic divides by it. `effective_chunk_shape` raises
-            // each 0 to 1, which leaves the grid empty either way.
-            chunk_shape: meta
-                .layout
-                .effective_chunk_shape()
-                .iter()
-                .map(|&s| s as usize)
-                .collect(),
-            dimension_names: meta
-                .layout
-                .dimension_names
-                .iter()
-                .map(SmolStr::new)
-                .collect(),
-            fill_value: meta.fill_value.clone(),
+            shape: info.shape.iter().map(|&s| s as usize).collect(),
+            chunk_shape: info.chunk_shape.iter().map(|&s| s as usize).collect(),
+            dimension_names: info.dimension_names.iter().map(SmolStr::new).collect(),
+            fill_value: info.fill_value.clone(),
         }
     }
 

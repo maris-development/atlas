@@ -28,11 +28,12 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "array-format"
-version = "0.13.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59562a359dd3d21b4c39081332c02ffd1a2fdeb49295a5082107549193c97fdd"
+checksum = "672b40e04f7c403e9322972c476414f8847e5e0aed0006b80128977d39138ab9"
 dependencies = [
  "bytes",
+ "ecow",
  "futures",
  "indexmap",
  "lz4_flex",
@@ -71,7 +72,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-python"
-version = "0.16.4"
+version = "0.17.0"
 dependencies = [
  "atlas-rust",
  "ndarray",
@@ -86,7 +87,7 @@ dependencies = [
 
 [[package]]
 name = "atlas-rust"
-version = "0.16.4"
+version = "0.17.0"
 dependencies = [
  "array-format",
  "async-trait",
@@ -323,6 +324,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "ecow"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78e4f79b296fbaab6ce2e22d52cb4c7f010fe0ebe7a32e34fa25885fd797bd02"
 
 [[package]]
 name = "either"

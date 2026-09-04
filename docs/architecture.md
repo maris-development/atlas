@@ -15,7 +15,7 @@
 │   writer/  builds a collection, once                        │  Rust (core)
 │   reader/  opens one, reads lazily                          │
 ├─────────────────────────────────────────────────────────────┤
-│ array-format (crates.io, pinned =0.12.0)                    │
+│ array-format (crates.io, pinned =0.15.0)                    │
 │   one segment: chunked arrays, blocks, codecs, fill values  │  Rust (dep)
 ├─────────────────────────────────────────────────────────────┤
 │ object_store                                                │
@@ -45,10 +45,10 @@ place to live.
 ```text
 AtlasWriter ──add_dataset()──▶ DatasetWriter ──write_array()──┐
      │                              │                          │
-     │                              │ writes into the          │ one staging
-     │                              │ variable's file, under   │ file per
+     │                              │ writes into the          │ one array-format
+     │                              │ variable's writer, under │ writer per
      │                              │ the dataset name         │ variable
-     └──finish()──▶ compact each, append, footer + trailer ◀───┘
+     └──finish()──▶ finish each, append, footer + trailer ◀────┘
 
 Atlas ──dataset()──▶ DatasetView ──read_array()──▶ ndarray
   │                       │
@@ -57,9 +57,9 @@ Atlas ──dataset()──▶ DatasetView ──read_array()──▶ ndarray
 ```
 
 - **`AtlasWriter`** owns the output stream, the interner, the scratch area, and
-  one staging file per variable.
+  one `array-format` writer per variable.
 - **`DatasetWriter`** records what one dataset declares. Each define and each
-  write takes the shared lock, because the variable files are shared.
+  write takes the shared lock, because the variable writers are shared.
 - **`Atlas`** holds the decoded footer and the deletion mask.
 - **`DatasetView`** answers names, types, and statistics from the footer with
   no I/O. It opens a variable's segment for `read_array`, for `array_layout`,
@@ -96,9 +96,10 @@ each segment handle once. Every segment in a collection shares the block cache,
 which keys on `(segment path, block id)`. The virtual path carries the variable
 index, so the blocks of one variable can never answer the read of another.
 
-**A write** shares one `tokio::sync::Mutex` over the output stream, the staging
-files, and the footer. A `DatasetWriter` takes that lock for each define and
-each write, because every dataset writes into the same per-variable files.
+**A write** shares one `tokio::sync::Mutex` over the output stream, the
+variable writers, and the footer. A `DatasetWriter` takes that lock for each
+define and each write, because every dataset writes into the same per-variable
+writers.
 Ordinals do not depend on that order. Each dataset carries the number of its
 `add_dataset` call, and the footer sorts on it.
 

@@ -329,7 +329,7 @@ def test_show_of_a_missing_dataset_fails(capsys, collection):
 def test_info_summarises(capsys, collection):
     code, out, _ = run(capsys, "info", str(collection))
     assert code == 0
-    assert "format version    6" in out
+    assert "format version    7" in out
     assert "codec             zstd" in out
     assert "datasets          3" in out
     assert "interned schemas  1" in out
@@ -356,7 +356,7 @@ def test_info_json(capsys, collection):
     code, out, _ = run(capsys, "info", str(collection), "--json")
     i = json.loads(out)
     assert i["dataset_count"] == 3
-    assert i["format_version"] == 6
+    assert i["format_version"] == 7
 
 
 # ── entry points ─────────────────────────────────────────────────────

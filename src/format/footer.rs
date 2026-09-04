@@ -93,15 +93,6 @@ pub(crate) struct VariableEntry {
     pub seg_offset: u64,
     /// Segment length in bytes.
     pub seg_len: u64,
-    /// Absolute offset of the segment's statistics sidecar.
-    ///
-    /// `array-format` keeps the statistics beside its file, not inside it, and
-    /// reads them once at open. The container embeds both, and
-    /// [`SegmentStore`](super::segment_store::SegmentStore) serves each under
-    /// the name that crate expects.
-    pub stats_offset: u64,
-    /// Sidecar length in bytes. Zero when the segment carries none.
-    pub stats_len: u64,
 }
 
 /// The complete metadata of one collection.
@@ -468,8 +459,6 @@ mod tests {
                     .expect("the interner holds every variable name") as u32,
                 seg_offset: 8 + (i as u64) * 160,
                 seg_len: 128,
-                stats_offset: 8 + (i as u64) * 160 + 128,
-                stats_len: 32,
             })
             .collect();
         CollectionFooter {
@@ -569,20 +558,6 @@ mod tests {
         assert_eq!(*position, 0);
         assert_eq!(f.string(keys[0].0), Some("units"));
         assert_eq!(f.dtype(keys[0].1), Some(&DType::String));
-    }
-
-    #[test]
-    fn a_variable_records_its_statistics_sidecar() {
-        // `array-format` keeps the statistics beside its file, so the
-        // container embeds both ranges and the reader serves both.
-        let f = footer_with(vec![("a", 0)], one_schema(DType::Float32), &["temperature"]);
-        let v = &f.variables[0];
-        assert_eq!(v.seg_offset, 8);
-        assert_eq!(v.seg_len, 128);
-        assert_eq!(v.stats_offset, 136);
-        assert_eq!(v.stats_len, 32);
-        let bytes = f.encode().unwrap();
-        assert_eq!(CollectionFooter::decode(&bytes).unwrap(), f);
     }
 
     #[test]

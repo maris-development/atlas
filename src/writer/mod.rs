@@ -9,11 +9,11 @@
 //! dataset's own name:
 //!
 //! ```text
-//! add_dataset("jan") -> scratch/v0/data.af   temperature/jan
-//!                       scratch/v1/data.af   precipitation/jan
-//! add_dataset("feb") -> scratch/v0/data.af   temperature/feb
-//!                       scratch/v1/data.af   precipitation/feb
-//! AtlasWriter::finish -> compact each, copy in, footer, trailer, done
+//! add_dataset("jan") -> writer[temperature]    temperature/jan
+//!                       writer[precipitation]  precipitation/jan
+//! add_dataset("feb") -> writer[temperature]    temperature/feb
+//!                       writer[precipitation]  precipitation/feb
+//! AtlasWriter::finish -> finish each, copy in, footer, trailer, done
 //! ```
 //!
 //! That is what makes a scan of one variable cheap. `array-format` packs
@@ -23,23 +23,22 @@
 //!
 //! # Staging
 //!
-//! Each variable stages as a local `array-format` file. Nothing reaches the
+//! Each variable builds in an `array-format` writer. Nothing reaches the
 //! container until [`AtlasWriter::finish`], because a variable's segment is
 //! complete only when every dataset has contributed.
 //!
-//! `array-format` holds a pending write in memory until `flush`, and each
-//! flush seals a sidecar layer. A write past
-//! [`STAGING_FLUSH_BUDGET`](crate::config::STAGING_FLUSH_BUDGET) therefore
-//! flushes that variable. Memory stays bounded, and the layer count stays low
-//! enough for `compact` to stay linear.
+//! Memory stays bounded. The writer packs each chunk into a compressed block
+//! as it arrives, and spills every full block to a temporary file. It keeps
+//! one open block per variable in memory, and the chunk table beside it.
 //!
-//! Local disk holds the whole collection once, because every dataset stages
-//! before any of it is written out.
+//! At finish, each writer lands its file in a scratch directory, and the
+//! container takes a copy. Local disk therefore holds each variable twice for
+//! a moment, and the whole collection once.
 //!
 //! # Order
 //!
 //! A [`DatasetWriter`] takes the writer's lock for each define and each write,
-//! because the variable files are shared. Ordinals do not depend on that
+//! because the variable writers are shared. Ordinals do not depend on that
 //! order. Each dataset carries the number of the [`AtlasWriter::add_dataset`]
 //! call that opened it, and the footer sorts on that at the end. Stage a
 //! directory twice and every dataset lands at the same ordinal.
@@ -54,7 +53,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use array_format::{
-    ArrayElement, ArrayFile, DType, FileConfig, FillValue, Lz4Codec, NoCompression, ZstdCodec,
+    ArrayElement, ArrayWriter, DType, FillValue, Lz4Codec, NoCompression, ZstdCodec,
+    WriterConfig as SegmentConfig,
 };
 use bytes::Bytes;
 use indexmap::IndexMap;
@@ -67,26 +67,20 @@ use tracing::debug;
 
 use smol_str::SmolStr;
 
-use crate::config::{Codec, STAGING_FLUSH_BUDGET, WriterConfig};
+use crate::config::{Codec, WriterConfig};
 use crate::format::footer::{CollectionFooter, Interner, VariableEntry};
 use crate::format::{self, DATA_FILE, DATASET_ATTRS_VARIABLE, child};
 use crate::schema::Attr;
 use crate::{Error, Result, validate_name};
 
-/// Bytes the copy moves per turn, from a staged segment into the container.
+/// Bytes the copy moves per turn, from a finished segment into the container.
 const COPY_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
-/// One variable's staging file.
-struct Staging {
-    file: ArrayFile,
-    dir: std::path::PathBuf,
-    /// Bytes written since the last flush. `array-format` holds a pending
-    /// write in memory until then.
-    pending: usize,
-}
+/// Name of a finished segment inside its scratch directory.
+const SEGMENT_FILE: &str = "data.af";
 
-/// The half of a writer the datasets share. The output stream, the staging
-/// files, and the footer under construction.
+/// The half of a writer the datasets share. The output stream, the variable
+/// writers, and the footer under construction.
 struct WriterState {
     out: Option<BufWriter>,
     prefix: OsPath,
@@ -94,9 +88,9 @@ struct WriterState {
     /// Bytes written so far. This is also the offset of the next segment.
     offset: u64,
     interner: Interner,
-    /// One staging file per variable, created when a dataset first declares
-    /// the array. The insertion order fixes the segment order.
-    variables: IndexMap<String, Staging>,
+    /// One writer per variable, created when a dataset first declares the
+    /// array. The insertion order fixes the segment order.
+    variables: IndexMap<String, ArrayWriter>,
     /// Each committed dataset: the number of the `add_dataset` call that
     /// opened it, its name, and the schema it interned. Sorting by that number
     /// at the end restores call order, which is what fixes the ordinals.
@@ -104,36 +98,24 @@ struct WriterState {
     /// Every name handed to `add_dataset`. It refuses a repeat, and the hash
     /// keeps that check flat as the collection grows.
     names: HashSet<String>,
+    /// Where each finished segment lands before the container takes it.
     scratch: tempfile::TempDir,
     dataset_seq: u64,
 }
 
 impl WriterState {
-    /// The staging file for `array`, created on first use.
-    async fn staging(&mut self, array: &str) -> Result<&mut Staging> {
+    /// The writer for `array`, created on first use.
+    fn variable(&mut self, array: &str) -> &mut ArrayWriter {
         if !self.variables.contains_key(array) {
-            let dir = self
-                .scratch
-                .path()
-                .join(format!("v{}", self.variables.len()));
-            std::fs::create_dir_all(&dir)?;
-            let file = create_staging_file(&dir, &self.config).await?;
-            self.variables.insert(
-                array.to_string(),
-                Staging {
-                    file,
-                    dir,
-                    pending: 0,
-                },
-            );
+            self.variables
+                .insert(array.to_string(), new_variable_writer(&self.config));
         }
-        Ok(self
-            .variables
+        self.variables
             .get_mut(array)
-            .expect("inserted above when absent"))
+            .expect("inserted above when absent")
     }
 
-    /// Appends a staged segment file to the container, and returns its byte
+    /// Appends a finished segment file to the container, and returns its byte
     /// range. It streams in [`COPY_CHUNK_SIZE`] pieces, so a large variable
     /// never needs to fit in memory.
     async fn append_segment(&mut self, file: &std::path::Path) -> Result<(u64, u64)> {
@@ -152,7 +134,7 @@ impl WriterState {
         }
         if written == 0 {
             return Err(Error::Internal(format!(
-                "staged segment {} is empty",
+                "finished segment {} is empty",
                 file.display()
             )));
         }
@@ -263,7 +245,7 @@ impl AtlasWriter {
         self.state.lock().await.entries.len()
     }
 
-    /// Compacts every variable, writes the segments, then the footer and the
+    /// Finishes every variable, writes the segments, then the footer and the
     /// trailer, and completes the upload.
     ///
     /// After this the collection is readable, and fixed for good. A
@@ -295,42 +277,30 @@ impl AtlasWriter {
 
         let staged = std::mem::take(&mut state.variables);
         let mut variables = Vec::with_capacity(staged.len());
-        for (array, mut staging) in staged {
-            staging.file.flush().await?;
-            staging.file.compact().await?;
-
+        for (index, (array, writer)) in staged.into_iter().enumerate() {
             let name = string_pool
                 .iter()
                 .position(|s| *s == array)
                 .ok_or_else(|| Error::Internal(format!("variable '{array}' was never interned")))?
                 as u32;
 
-            let dir = staging.dir.clone();
-            drop(staging.file);
+            // The writer lands its file on local disk first. It writes a whole
+            // object, and a segment is a byte range of one.
+            let dir = state.scratch.path().join(format!("v{index}"));
+            std::fs::create_dir_all(&dir)?;
+            let store: Arc<dyn ObjectStore> =
+                Arc::new(object_store::local::LocalFileSystem::new_with_prefix(&dir)?);
+            let finished = writer.finish(store, OsPath::from(SEGMENT_FILE)).await?;
+            drop(finished);
 
-            // The file, then the statistics `array-format` wrote beside it.
-            // The reader serves both out of the container, so it finds the
-            // statistics where that crate looks for them.
-            let (seg_offset, seg_len) = state.append_segment(&dir.join("data.af")).await?;
-            let sidecar = dir.join("data.stats");
-            let (stats_offset, stats_len) = if sidecar.exists() {
-                state.append_segment(&sidecar).await?
-            } else {
-                (0, 0)
-            };
-            debug!(
-                variable = %array,
-                seg_offset, seg_len, stats_len,
-                "appended variable segment"
-            );
+            let (seg_offset, seg_len) = state.append_segment(&dir.join(SEGMENT_FILE)).await?;
+            debug!(variable = %array, seg_offset, seg_len, "appended variable segment");
             variables.push(VariableEntry {
                 name,
                 seg_offset,
                 seg_len,
-                stats_offset,
-                stats_len,
             });
-            // The staging area is large. Reclaim it now, not at the end.
+            // The scratch copy is large. Reclaim it now, not at the end.
             let _ = std::fs::remove_dir_all(&dir);
         }
 
@@ -380,8 +350,8 @@ impl Drop for WriterState {
 ///
 /// Declare an array with [`define_array`](Self::define_array). Fill it with
 /// [`write_array`](Self::write_array), in any order and in any number of
-/// slabs. Each call writes into that variable's shared staging file, under
-/// this dataset's name. Nothing reaches the container until
+/// slabs. Each call writes into that variable's shared writer, under this
+/// dataset's name. Nothing reaches the container until
 /// [`AtlasWriter::finish`].
 pub struct DatasetWriter {
     state: Arc<Mutex<WriterState>>,
@@ -440,7 +410,7 @@ impl DatasetWriter {
         }
         // The segment keys on the dataset name, so one file holds this array
         // for every dataset in the collection.
-        state.staging(array).await?.file.define_array::<T>(
+        state.variable(array).define_array::<T>(
             self.name.clone(),
             dimension_names,
             shape,
@@ -465,20 +435,11 @@ impl DatasetWriter {
         if !self.arrays.contains_key(array) {
             return Err(Error::ArrayNotFound(array.to_string()));
         }
-        // An estimate. A variable-width element reports the size of its
-        // handle, not its payload, which only shifts when the flush lands.
-        let written = data.len() * std::mem::size_of::<T>();
         let mut state = self.state.lock().await;
         if state.out.is_none() {
             return Err(Error::WriterFinished);
         }
-        let staging = state.staging(array).await?;
-        staging.file.write_array(&self.name, start, data).await?;
-        staging.pending += written;
-        if staging.pending >= STAGING_FLUSH_BUDGET {
-            staging.file.flush().await?;
-            staging.pending = 0;
-        }
+        state.variable(array).write_array(&self.name, start, data)?;
         Ok(())
     }
 
@@ -503,9 +464,9 @@ impl DatasetWriter {
 
     /// Commits the dataset into the collection.
     ///
-    /// The array data already sits in the variable staging files. This writes
-    /// the attribute values into those same files, and records what the
-    /// dataset declares in the footer. [`AtlasWriter::finish`] does the rest.
+    /// The array data already sits in the variable writers. This writes the
+    /// attribute values into those same writers, and records what the dataset
+    /// declares in the footer. [`AtlasWriter::finish`] does the rest.
     ///
     /// A dataset-level value goes on this dataset's array in the reserved
     /// `_datasets` segment. A per-array value goes on the array's own entry in
@@ -531,30 +492,19 @@ impl DatasetWriter {
         // segment gets a rank-0 one per dataset. It appears only when some
         // dataset carries a global attribute.
         if !global_attrs.is_empty() {
-            let marker = state.staging(DATASET_ATTRS_VARIABLE).await?;
-            marker.file.define_array::<u8>(
-                self.name.clone(),
-                Vec::new(),
-                Vec::new(),
-                None,
-                None,
-            )?;
+            let marker = state.variable(DATASET_ATTRS_VARIABLE);
+            marker.define_array::<u8>(self.name.clone(), Vec::new(), Vec::new(), None, None)?;
             for (key, value) in &global_attrs {
-                marker
-                    .file
-                    .set_attribute(&self.name, key, value.clone().into_stored())?;
+                marker.set_attribute(&self.name, key, value.clone().into_stored())?;
             }
         }
         for (position, keyed) in &array_attrs {
             let (array, _) = arrays
                 .get_index(*position as usize)
                 .expect("the position came from this map");
-            let array = array.clone();
-            let staging = state.staging(&array).await?;
+            let writer = state.variable(array);
             for (key, value) in keyed {
-                staging
-                    .file
-                    .set_attribute(&self.name, key, value.clone().into_stored())?;
+                writer.set_attribute(&self.name, key, value.clone().into_stored())?;
             }
         }
 
@@ -569,41 +519,29 @@ impl DatasetWriter {
     }
 }
 
-/// Creates one variable's staging file under `dir`.
-async fn create_staging_file(dir: &std::path::Path, config: &WriterConfig) -> Result<ArrayFile> {
-    let store: Arc<dyn ObjectStore> =
-        Arc::new(object_store::local::LocalFileSystem::new_with_prefix(dir)?);
-    let path = OsPath::from("data.af");
+/// Creates one variable's writer.
+fn new_variable_writer(config: &WriterConfig) -> ArrayWriter {
     let target = config.block_target_size;
-    Ok(match config.codec {
-        Codec::Zstd => {
-            ArrayFile::create(store, path, staging_config(ZstdCodec::default(), target)).await?
-        }
-        Codec::Lz4 => ArrayFile::create(store, path, staging_config(Lz4Codec, target)).await?,
-        Codec::Uncompressed => {
-            ArrayFile::create(store, path, staging_config(NoCompression, target)).await?
-        }
-    })
+    match config.codec {
+        Codec::Zstd => ArrayWriter::new(segment_config(ZstdCodec::default(), target)),
+        Codec::Lz4 => ArrayWriter::new(segment_config(Lz4Codec, target)),
+        Codec::Uncompressed => ArrayWriter::new(segment_config(NoCompression, target)),
+    }
+}
+
+fn segment_config<C: array_format::CompressionCodec>(
+    codec: C,
+    block_target_size: usize,
+) -> SegmentConfig<C> {
+    SegmentConfig {
+        codec,
+        block_target_size,
+    }
 }
 
 fn upsert(list: &mut Vec<(String, Attr)>, key: &str, value: Attr) {
     match list.iter_mut().find(|(k, _)| k == key) {
         Some(slot) => slot.1 = value,
         None => list.push((key.to_string(), value)),
-    }
-}
-
-fn staging_config<C: array_format::CompressionCodec>(
-    codec: C,
-    block_target_size: usize,
-) -> FileConfig<C> {
-    FileConfig {
-        codec,
-        block_target_size,
-        // One write and one read, by compact, cover the staging file. A large
-        // cache would only duplicate the page cache.
-        cache_capacity: 16 * 1024 * 1024,
-        io_cache_capacity: 8 * 1024 * 1024,
-        cache: None,
     }
 }

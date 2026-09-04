@@ -212,17 +212,10 @@ byte range inside a larger file. `SegmentStore` closes that gap. It implements
 
 It translates each range request and forwards it. It buffers nothing.
 
-A segment is **two** objects. `array-format` keeps an array's statistics in a
-sidecar beside its file, so the store serves `seg<n>.af` and `seg<n>.stats`,
-each mapped to its own range of the container. Those are the names that crate
-derives.
+Two behaviours matter as much as the translation:
 
-Three behaviours matter as much as the translation:
-
-- **`list` returns nothing.** Sidecar discovery therefore finds no delta layer.
-  A segment is always one compacted base.
-- **Any other path is `NotFound`.** So is `seg<n>.stats` for a segment that
-  carries no sidecar, which `array-format` tolerates.
+- **Any other path is `NotFound`.** A segment is one object, and nothing sits
+  beside it.
 - **A range that ends past the object clamps.** A range that starts past it is
   an error. Without the clamp, a read reaches the bytes of the next object.
 
@@ -238,7 +231,7 @@ read of block 0 of another. The tests catch that.
 
 ## Caching
 
-One `DeltaCache` serves each `Atlas` handle, and every segment shares it. It
+One `BlockCache` serves each `Atlas` handle, and every segment shares it. It
 holds 256 MiB of decompressed blocks and 64 MiB of raw I/O slabs. The second
 dataset to read a variable with an open segment costs fewer requests than the
 first. `tests/integration.rs` asserts that too.

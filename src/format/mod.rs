@@ -12,12 +12,12 @@
 //!
 //! ```text
 //! offset 0    b"ATLS"                     4 B   leading magic
-//! offset 4    format_version u32 LE = 1    4 B
-//! offset 8    segment[0]                         one array-format file per dataset
+//! offset 4    format_version u32 LE = 7    4 B
+//! offset 8    segment[0]                         one array-format file per variable
 //!             segment[1] ...                     back to back, no padding
 //!             footer_bytes                       zstd(msgpack(CollectionFooter))
 //! end - 16    footer_size u64 LE           8 B  ┐
-//! end - 8     format_version u32 LE = 1    4 B  ├ trailer
+//! end - 8     format_version u32 LE = 7    4 B  ├ trailer
 //! end - 4     b"ATLS"                      4 B  ┘
 //! ```
 //!
@@ -37,7 +37,7 @@ pub(crate) const MAGIC: [u8; 4] = *b"ATLS";
 
 /// Version of the container framing and of the footer schema. The two move
 /// together. A change to one footer field is a format change.
-pub(crate) const FORMAT_VERSION: u32 = 6;
+pub(crate) const FORMAT_VERSION: u32 = 7;
 
 /// Bytes before the first segment: magic + version.
 pub(crate) const HEADER_SIZE: u64 = 8;
@@ -47,7 +47,7 @@ pub(crate) const TRAILER_SIZE: u64 = 16;
 
 /// `array-format` footer version inside every segment. The container footer
 /// records it, so a future reader can dispatch on it.
-pub(crate) const SEGMENT_FORMAT: u32 = 5;
+pub(crate) const SEGMENT_FORMAT: u32 = 6;
 
 /// Segment that carries the dataset-level attributes.
 ///

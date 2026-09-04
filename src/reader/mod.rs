@@ -24,9 +24,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
-use array_format::{
-    ArrayElement, ArrayFile, ArrayStats, DeltaCache, FileConfig, NoCompression, StatValue,
-};
+use array_format::{ArrayElement, ArrayFile, ArrayStats, BlockCache, ReadConfig, StatValue};
 use indexmap::IndexMap;
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStore, ObjectStoreExt};
@@ -55,7 +53,7 @@ pub struct Atlas {
     /// One `ArrayFile` per variable, in footer order. Each opens on demand,
     /// and every dataset that declares the array shares it.
     segments: Arc<Vec<tokio::sync::OnceCell<Arc<ArrayFile>>>>,
-    cache: Arc<DeltaCache>,
+    cache: Arc<BlockCache>,
     /// Size of `data.atlas`. The head request that opened it reports this.
     container_bytes: u64,
 }
@@ -92,7 +90,7 @@ impl Atlas {
             footer: Arc::new(footer),
             deleted: Arc::new(RwLock::new(deleted)),
             segments: Arc::new(segments),
-            cache: Arc::new(DeltaCache::new(
+            cache: Arc::new(BlockCache::new(
                 DEFAULT_CACHE_CAPACITY,
                 DEFAULT_IO_CACHE_CAPACITY,
             )),
@@ -247,23 +245,14 @@ impl Atlas {
         self.stats_of(array).await
     }
 
-    /// The statistics of `array`, per live dataset that recorded them, in
-    /// write order.
-    ///
-    /// One open of that variable's segment covers the whole collection, and
-    /// its table already holds one row per dataset. Reading it whole is
-    /// therefore one pass, where a lookup per dataset would be quadratic.
+    /// The statistics of `array`, per live dataset.
     async fn stats_of(&self, array: &str) -> Result<Vec<ArrayStats>> {
         let Some(file) = self.try_segment(array).await? else {
             return Ok(Vec::new());
         };
-        let Some(table) = file.stats() else {
-            return Ok(Vec::new());
-        };
         let hidden = self.deleted_names();
-        Ok(table
-            .entries()
-            .iter()
+        Ok(file
+            .stats()
             .filter(|stats| !hidden.contains(stats.name.as_str()))
             .cloned()
             .collect())
@@ -274,35 +263,6 @@ impl Atlas {
     /// `array` names the array the attribute annotates. `None` reads the
     /// dataset-level attribute instead, out of the reserved `_datasets`
     /// segment.
-    ///
-    /// The map keys on the dataset name, so it joins to
-    /// [`list_datasets`](Self::list_datasets) and to
-    /// [`array_stats_by_dataset`](Self::array_stats_by_dataset) by that name.
-    /// A dataset that does not carry the key has no entry, so the map is
-    /// empty when nobody carries it. It therefore holds no placeholder, and
-    /// is shorter than [`list_datasets`](Self::list_datasets) whenever some
-    /// dataset lacks the key. Do not read it position by position against
-    /// that list. Walk the names and look each one up.
-    ///
-    /// The keys keep write order: they are the datasets that carry the key,
-    /// in the order `list_datasets` gives them.
-    ///
-    /// One open covers the whole collection, whatever the number of datasets.
-    /// Call it once per key to build a table of what every dataset holds:
-    ///
-    /// ```no_run
-    /// # async fn f(atlas: &atlas::Atlas) -> atlas::Result<()> {
-    /// let months = atlas.attributes_by_dataset(None, "month").await?;
-    /// let sources = atlas.attributes_by_dataset(None, "source").await?;
-    ///
-    /// // `list_datasets` gives the rows. Each column is a lookup, because a
-    /// // column leaves out the datasets that do not carry its key.
-    /// for name in atlas.list_datasets() {
-    ///     println!("{name} {:?} {:?}", months.get(&name), sources.get(&name));
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
     pub async fn attributes_by_dataset(
         &self,
         array: Option<&str>,
@@ -509,7 +469,7 @@ pub struct DatasetView {
     footer: Arc<CollectionFooter>,
     /// One `ArrayFile` per variable, shared with every other view.
     segments: Arc<Vec<tokio::sync::OnceCell<Arc<ArrayFile>>>>,
-    cache: Arc<DeltaCache>,
+    cache: Arc<BlockCache>,
     ordinal: u32,
 }
 
@@ -576,7 +536,10 @@ impl DatasetView {
             return Err(Error::ArrayNotFound(array.to_string()));
         }
         let file = self.segment(array).await?;
-        Ok(ArrayLayout::from_stored(file.get_array(self.name())?))
+        let info = file
+            .array(self.name())
+            .ok_or_else(|| Error::ArrayNotFound(array.to_string()))?;
+        Ok(ArrayLayout::from_stored(info))
     }
 
     /// Dataset-level attributes, in the order they were set.
@@ -698,8 +661,6 @@ impl DatasetView {
 fn read_attribute(segment: &ArrayFile, attr: &str, dataset: &str) -> Option<Attr> {
     segment
         .get_attribute(dataset, attr)
-        .ok()
-        .flatten()
         .map(Attr::from_stored)
 }
 
@@ -758,7 +719,7 @@ async fn open_segment<'a>(
     data_path: &OsPath,
     footer: &CollectionFooter,
     segments: &'a [tokio::sync::OnceCell<Arc<ArrayFile>>],
-    cache: &Arc<DeltaCache>,
+    cache: &Arc<BlockCache>,
     array: &str,
 ) -> Result<&'a Arc<ArrayFile>> {
     let index = footer
@@ -780,22 +741,16 @@ async fn open_segment<'a>(
                 index as u32,
                 entry.seg_offset,
                 entry.seg_len,
-                entry.stats_offset,
-                entry.stats_len,
             );
             let path = segment.path();
-            // A block records its own codec, so the reader never needs the one
-            // the writer used.
+            // Every segment shares the collection's cache, so the per-file
+            // budgets do not apply.
             let file = ArrayFile::open(
                 Arc::new(segment) as Arc<dyn ObjectStore>,
                 path,
-                FileConfig {
-                    codec: NoCompression,
-                    block_target_size: crate::config::DEFAULT_BLOCK_TARGET_SIZE,
-                    // Unused. `cache` below overrides both budgets.
-                    cache_capacity: DEFAULT_CACHE_CAPACITY as usize,
-                    io_cache_capacity: DEFAULT_IO_CACHE_CAPACITY as usize,
+                ReadConfig {
                     cache: Some(Arc::clone(cache)),
+                    ..ReadConfig::default()
                 },
             )
             .await?;
