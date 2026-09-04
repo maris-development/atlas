@@ -419,54 +419,6 @@ impl CollectionFooter {
     pub(crate) fn variable_index(&self, name: u32) -> Option<usize> {
         self.variables.iter().position(|v| v.name == name)
     }
-
-    /// Where `array` sits in each interned schema, by pool index.
-    ///
-    /// `None` when no schema declares the name. Otherwise entry `i` is the
-    /// position of `array` in schema `i`, or `None` if that schema omits it.
-    ///
-    /// One pass over the pool answers every dataset. Datasets that share a
-    /// schema therefore resolve the name once between them, not once each.
-    pub(crate) fn array_positions(&self, array: &str) -> Option<Vec<Option<u32>>> {
-        let wanted = self.string_id(array)?;
-        Some(
-            self.schema_pool
-                .iter()
-                .map(|schema| {
-                    schema
-                        .arrays
-                        .iter()
-                        .position(|&(name, _)| name == wanted)
-                        .map(|p| p as u32)
-                })
-                .collect(),
-        )
-    }
-
-    /// The declared type of the dataset-level attribute `key` in each
-    /// interned schema, as a `dtype_pool` index.
-    ///
-    /// `None` when no schema names the key. Otherwise entry `i` is the type
-    /// schema `i` declares for it, or `None` if that schema omits it.
-    ///
-    /// One pass over the pool answers every dataset. A segment stores the
-    /// value, and this says how to read it back: an `i64` is a timestamp when
-    /// the schema says so.
-    pub(crate) fn attr_dtypes(&self, key: &str) -> Option<Vec<Option<u32>>> {
-        let wanted = self.string_id(key)?;
-        Some(
-            self.schema_pool
-                .iter()
-                .map(|schema| {
-                    schema
-                        .attrs
-                        .iter()
-                        .find(|&&(k, _)| k == wanted)
-                        .map(|&(_, dtype)| dtype)
-                })
-                .collect(),
-        )
-    }
 }
 
 #[cfg(test)]
@@ -617,37 +569,6 @@ mod tests {
         assert_eq!(*position, 0);
         assert_eq!(f.string(keys[0].0), Some("units"));
         assert_eq!(f.dtype(keys[0].1), Some(&DType::String));
-    }
-
-    #[test]
-    fn positions_answer_the_pool_not_the_datasets() {
-        let mut interner = Interner::default();
-        let (arrays, attrs, array_attrs) = declarations(DType::Float32);
-        interner.intern_schema(&arrays, &attrs, &array_attrs);
-        let mut two = arrays.clone();
-        two.insert("salinity".to_string(), DType::Float32);
-        interner.intern_schema(&two, &attrs, &array_attrs);
-        let f = footer_with(
-            vec![("a", 0), ("b", 1)],
-            interner,
-            &["temperature", "salinity"],
-        );
-
-        // One entry per pool schema, whatever the dataset count.
-        assert_eq!(
-            f.array_positions("temperature"),
-            Some(vec![Some(0), Some(0)])
-        );
-        assert_eq!(f.array_positions("salinity"), Some(vec![None, Some(1)]));
-        assert_eq!(f.array_positions("missing"), None);
-
-        // The type of `month` in each schema, as a dtype pool index.
-        let months = f.attr_dtypes("month").unwrap();
-        assert_eq!(months.len(), f.schema_pool.len());
-        for dtype in months {
-            assert_eq!(f.dtype(dtype.unwrap()), Some(&DType::Int64));
-        }
-        assert_eq!(f.attr_dtypes("missing"), None);
     }
 
     #[test]

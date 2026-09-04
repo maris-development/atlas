@@ -61,10 +61,12 @@ async fn write_golden(dir: &Path) {
         ds.set_attribute("month", Attr::Int64(1));
         ds.set_attribute("scale", Attr::Float64(0.5));
         ds.set_attribute("tags", Attr::StringList(vec!["a".into(), "b".into()]));
-        ds.set_attribute(
-            "created",
-            Attr::TimestampNanoseconds(1_700_000_000_000_000_000),
-        );
+        // The committed fixture predates the removal of the timestamp
+        // attribute, so its footer still declares `created` as TimestampNs.
+        // A regenerate writes Int64 there instead, and the collection loses
+        // its one case of an old container whose schema names a type no
+        // writer can produce. The container bytes are otherwise identical.
+        ds.set_attribute("created", Attr::Int64(1_700_000_000_000_000_000));
         ds.set_array_attribute("temperature", "units", Attr::String("celsius".into()))
             .unwrap();
         ds.finish().await.unwrap();
@@ -128,9 +130,14 @@ async fn the_committed_v6_container_still_opens() {
         grid.get_attribute("tags").await.unwrap(),
         Some(Attr::StringList(vec!["a".into(), "b".into()]))
     );
+    // This fixture was written when `Attr` still had a timestamp variant, so
+    // its footer declares `created` as TimestampNs. A read consults no
+    // schema, and the stored form is an i64, so it comes back as one. That is
+    // the point: an old container still opens, and its footer decodes
+    // nothing.
     assert_eq!(
         grid.get_attribute("created").await.unwrap(),
-        Some(Attr::TimestampNanoseconds(1_700_000_000_000_000_000))
+        Some(Attr::Int64(1_700_000_000_000_000_000))
     );
     assert_eq!(
         grid.get_array_attribute("temperature", "units")

@@ -206,14 +206,14 @@ reports `row_count == null_count`. Every element is a hole. `min` and `max` are
 lexicographic order.
 
 `Atlas::array_stats` folds one array over the collection. One open of that
-variable's segment covers every dataset, and one pass over its table indexes
-them. `array_stats` on the segment scans that table per call, so a lookup per
-dataset would be quadratic. `array_stats_by_dataset` hands the entries back one
-by one, and `DatasetView::array_stats` reports one dataset.
+variable's segment covers every dataset, and its table already holds one row
+per dataset. Reading the table whole is therefore one pass, where a lookup per
+dataset would be quadratic. `array_stats_by_dataset` hands those rows back as
+they are, each naming its own dataset, and `DatasetView::array_stats` reports
+one dataset.
 
 The deletion mask applies to all three, as it does to everything else. A hidden
-dataset counts toward no statistic. So does a dataset that declares the name
-with another dtype, because two dtypes do not compare.
+dataset counts toward no statistic.
 
 ### Attributes live in the segments, not here
 
@@ -235,21 +235,26 @@ dataset, carrying that dataset's global attributes and no data. It appears only
 when some dataset has one. `validate_name` refuses a leading underscore, so no
 user array can take that name.
 
-**A timestamp needs the schema.** `AttributeValue` has no timestamp variant, so
-a timestamp stores as its `i64`. The schema records the key as `TimestampNs`,
-and the reader reads the tag back from there. That is the one case where the
-schema is load-bearing for decoding, not just describing. Without it a
-timestamp would come back as an integer.
+**A read consults no schema.** Every stored value carries its own tag, so
+`Attr::from_stored` rebuilds it from the value alone. The schema stays a
+description of the collection, and never decodes anything.
+
+**There is no timestamp attribute.** `AttributeValue` has no timestamp
+variant, so one could not read back. `Attr` therefore has none either, and
+every write is exact. Store the nanoseconds as `Attr::Int64` and name the unit
+in a second attribute. An array element type still has `DType::TimestampNs`. A
+date-shaped string is unaffected: a string keeps its own tag, so an RFC 3339
+string is still a string.
+
+A container written before this still opens. Its footer may declare an
+attribute as `TimestampNs`, and the value reads back as the `i64` it always
+was, because the footer decodes nothing.
 
 What this costs: `DatasetView::attributes`, `get_attribute`,
-`array_attributes`, `get_array_attribute` and `Atlas::attribute_by_dataset` are
-async, and open one segment. A dataset or array that declares no key still
+`array_attributes`, `get_array_attribute` and `Atlas::attributes_by_dataset`
+are async, and open one segment. A dataset or array that declares no key still
 costs nothing, because the schema settles it. One open then covers every
 dataset, because a segment spans the collection.
-
-A timestamp also keeps its own tag. `AttrS` has a `TimestampNanoseconds`
-variant, so nothing guesses at a date-shaped string. An RFC 3339 string is a
-string, and a timestamp is a timestamp.
 
 ### Schema is recorded twice
 

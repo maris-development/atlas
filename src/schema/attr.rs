@@ -4,12 +4,16 @@ use array_format::{AttributeValue, DType};
 
 /// A typed attribute value.
 ///
-/// An attribute annotates a dataset or one of its arrays. Values live in the
-/// container footer. One range read therefore lists the datasets and gives
-/// their attributes.
+/// An attribute annotates a dataset or one of its arrays. Every variant
+/// carries its own tag to disk and back, so a value says what it is and the
+/// schema settles nothing. A write and a read give the same variant.
 ///
-/// A timestamp has its own variant and its own wire tag. A string that looks
-/// like a date stays a string.
+/// There is no timestamp variant, because `array-format` has no timestamp
+/// attribute: one would have to store as an `i64` and could not come back.
+/// Store the number as [`Int64`](Self::Int64) and name the unit in a second
+/// attribute. An array element type still has
+/// [`DType::TimestampNs`](array_format::DType::TimestampNs); this is about
+/// attributes alone. A string that looks like a date stays a string.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Attr {
     /// Boolean.
@@ -38,8 +42,6 @@ pub enum Attr {
     String(String),
     /// Variable-length binary.
     Binary(Vec<u8>),
-    /// Nanosecond-precision UTC timestamp.
-    TimestampNanoseconds(i64),
     /// List of booleans.
     BoolList(Vec<bool>),
     /// List of signed 8-bit integers.
@@ -91,7 +93,6 @@ impl Attr {
             Attr::Float64(_) => DType::Float64,
             Attr::String(_) => DType::String,
             Attr::Binary(_) => DType::Binary,
-            Attr::TimestampNanoseconds(_) => DType::TimestampNs,
             Attr::BoolList(_) => list(DType::Bool),
             Attr::Int8List(_) => list(DType::Int8),
             Attr::Int16List(_) => list(DType::Int16),
@@ -110,9 +111,9 @@ impl Attr {
 
     /// The form a segment stores.
     ///
-    /// `array-format` has no timestamp attribute, so a timestamp goes in as
-    /// its `i64`. [`from_stored`](Self::from_stored) reads the tag back from
-    /// the schema, which records the declared type of every key.
+    /// One variant of `AttributeValue` per variant here, so the mapping is
+    /// total and loses nothing. [`from_stored`](Self::from_stored) inverts
+    /// it.
     pub(crate) fn into_stored(self) -> AttributeValue {
         match self {
             Attr::Bool(v) => AttributeValue::Bool(v),
@@ -128,8 +129,6 @@ impl Attr {
             Attr::Float64(v) => AttributeValue::Float64(v),
             Attr::String(v) => AttributeValue::String(v),
             Attr::Binary(v) => AttributeValue::Binary(v),
-            // The one lossy step. The schema carries the tag.
-            Attr::TimestampNanoseconds(v) => AttributeValue::Int64(v),
             Attr::BoolList(v) => AttributeValue::BoolList(v),
             Attr::Int8List(v) => AttributeValue::Int8List(v),
             Attr::Int16List(v) => AttributeValue::Int16List(v),
@@ -146,21 +145,16 @@ impl Attr {
         }
     }
 
-    /// Rebuilds a value a segment stored, given the type the schema declared
-    /// for that key.
+    /// Rebuilds a value a segment stored.
     ///
-    /// `declared` settles the one case the segment cannot: an `i64` is a
-    /// timestamp when the schema says [`DType::TimestampNs`], and a plain
-    /// integer otherwise. Every other variant carries its own tag.
-    pub(crate) fn from_stored(value: &AttributeValue, declared: &DType) -> Self {
+    /// The stored value carries its own tag, so this reads no schema. It is
+    /// the exact inverse of [`into_stored`](Self::into_stored).
+    pub(crate) fn from_stored(value: &AttributeValue) -> Self {
         match value {
             AttributeValue::Bool(v) => Attr::Bool(*v),
             AttributeValue::Int8(v) => Attr::Int8(*v),
             AttributeValue::Int16(v) => Attr::Int16(*v),
             AttributeValue::Int32(v) => Attr::Int32(*v),
-            AttributeValue::Int64(v) if *declared == DType::TimestampNs => {
-                Attr::TimestampNanoseconds(*v)
-            }
             AttributeValue::Int64(v) => Attr::Int64(*v),
             AttributeValue::UInt8(v) => Attr::UInt8(*v),
             AttributeValue::UInt16(v) => Attr::UInt16(*v),
@@ -193,6 +187,8 @@ mod tests {
 
     #[test]
     fn every_value_survives_a_round_trip_through_a_segment() {
+        // Every variant. The list is exhaustive on purpose: a new variant
+        // that `into_stored` cannot invert must fail here.
         let cases = vec![
             Attr::Bool(true),
             Attr::Int8(-3),
@@ -207,7 +203,6 @@ mod tests {
             Attr::Float64(-0.125),
             Attr::String("hello".into()),
             Attr::Binary(vec![0xde, 0xad]),
-            Attr::TimestampNanoseconds(1_700_000_000_000_000_000),
             Attr::BoolList(vec![true, false]),
             Attr::Int8List(vec![1, -1]),
             Attr::Int16List(vec![2]),
@@ -223,41 +218,21 @@ mod tests {
             Attr::BinaryList(vec![vec![1], vec![2]]),
         ];
         for v in cases {
-            let declared = v.dtype();
             let stored = v.clone().into_stored();
-            assert_eq!(Attr::from_stored(&stored, &declared), v, "{v:?}");
+            assert_eq!(Attr::from_stored(&stored), v, "{v:?}");
         }
-    }
-
-    #[test]
-    fn a_timestamp_and_an_integer_share_a_stored_form_and_stay_distinct() {
-        // `array-format` has no timestamp attribute, so both store as i64.
-        // Only the declared type tells them apart.
-        let when = Attr::TimestampNanoseconds(1_700_000_000_000_000_000);
-        let count = Attr::Int64(1_700_000_000_000_000_000);
-        assert_eq!(when.clone().into_stored(), count.clone().into_stored());
-
-        assert_eq!(
-            Attr::from_stored(&when.clone().into_stored(), &DType::TimestampNs),
-            when
-        );
-        assert_eq!(
-            Attr::from_stored(&count.clone().into_stored(), &DType::Int64),
-            count
-        );
     }
 
     #[test]
     fn a_date_shaped_string_stays_a_string() {
         let v = Attr::String("2023-11-14T22:13:20Z".into());
-        let declared = v.dtype();
-        assert_eq!(Attr::from_stored(&v.clone().into_stored(), &declared), v);
+        assert_eq!(Attr::from_stored(&v.clone().into_stored()), v);
     }
 
     #[test]
     fn scalars_and_lists_report_their_dtype() {
         assert_eq!(Attr::Int32(1).dtype(), DType::Int32);
-        assert_eq!(Attr::TimestampNanoseconds(0).dtype(), DType::TimestampNs);
+        assert_eq!(Attr::Int64(0).dtype(), DType::Int64);
         assert_eq!(
             Attr::StringList(vec![]).dtype(),
             DType::List {

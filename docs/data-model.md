@@ -112,12 +112,17 @@ A dataset-level value has no array of its own, so the reserved `_datasets`
 segment gives it one: a rank-0 array per dataset, carrying that dataset's
 global attributes and no data.
 
-### Timestamps are a real type
+### An attribute carries its own type
 
-`Attr::TimestampNanoseconds` stays distinct from an integer. A segment stores
-both as an `i64`, because `array-format` has no timestamp attribute, so the
-schema carries the tag. An RFC 3339 string round-trips as a string. A timestamp
-round-trips as a timestamp.
+Every `Attr` variant writes its tag and reads it back, so a value round-trips
+to the same variant and a read consults no schema. A `u16` stays a `u16`. An
+RFC 3339 string stays a string, and nothing guesses at a date-shaped one.
+
+There is no timestamp attribute. `array-format` stores none, so one would have
+to go in as an `i64` and could not come back. Store the nanoseconds as
+`Attr::Int64` and name the unit in a second attribute. This is about attributes
+alone: an *array* element type still has `DType::TimestampNs`, and a time axis
+keeps it.
 
 ## What a collection cannot do
 

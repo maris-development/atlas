@@ -35,7 +35,7 @@ ds.array_attributes("temperature").await?;      // one array's values
 ds.array_stats("temperature").await?;           // min, max, nulls, rows
 atlas.array_stats("temperature").await?;        // the same, over every dataset
 atlas.array_stats_by_dataset("temperature").await?;
-atlas.attribute_by_dataset("month").await?;     // one key, every dataset
+atlas.attributes_by_dataset(None, "month").await?;  // one key, every dataset
 ```
 
 Each opens one segment, and one open serves every dataset in the collection.
@@ -102,46 +102,58 @@ per variable, not one per dataset.
 `Atlas::array_stats` combines the statistics of one array over the whole
 collection. It opens that variable's segment and reads its statistics table in
 one pass. The counts add up. The minimum is the smallest of the minimums. The
-maximum is the largest of the maximums. The call skips deleted datasets. It
-also skips a dataset that declares the same name with a different dtype,
-because two dtypes do not compare.
+maximum is the largest of the maximums. The call skips deleted datasets.
 
 `Atlas::array_stats_by_dataset` returns the same numbers, split per dataset:
 
 ```rust
-for (dataset, stats) in atlas.array_stats_by_dataset("temperature") {
-    println!("{dataset}: {:?}..{:?}", stats.min, stats.max);
+for stats in atlas.array_stats_by_dataset("temperature").await? {
+    println!("{}: {:?}..{:?}", stats.name, stats.min, stats.max);
 }
 ```
 
 One entry per live dataset that holds statistics for the array, in write order.
-The deletion mask applies here too, so a hidden dataset never appears. A
-dataset that does not declare the array does not appear either. Both calls
-share the one open, so asking for the combined and the split view costs the
-same as either.
+Every entry names its own dataset in `ArrayStats::name`, so a row identifies
+itself and needs no second list to read. The deletion mask applies here too, so
+a hidden dataset never appears. A dataset that does not declare the array does
+not appear either. Both calls share the one open, so asking for the combined
+and the split view costs the same as either.
 
-Nothing merges in that call, so two dtypes never have to compare. It therefore
-keeps a dataset the combined call skips.
-
-`DatasetView::array_stats` reports one dataset on its own.
+`DatasetView::array_stats` reports one dataset on its own. It names the array
+instead, because there the dataset is already known.
 
 ## A table of what the collection holds
 
-`Atlas::attribute_by_dataset` reads one dataset-level attribute as a column
-over the live datasets. It opens the reserved `_datasets` segment once. It returns `Vec<Option<Attr>>`, which lines up with
-`list_datasets` index for index. Both walk the datasets in write order, and
-both drop what the mask hides, so entry `i` belongs to dataset `i`. The value
-is `None` where a dataset does not carry the key.
+`Atlas::attributes_by_dataset` reads one attribute over the live datasets. The
+first argument names the array the attribute annotates, and `None` reads a
+dataset-level attribute out of the reserved `_datasets` segment.
 
-Call it once per key and zip the columns:
+It returns `IndexMap<String, Attr>`, keyed by dataset name and held in write
+order. A dataset that does not carry the key has no entry, and the map holds
+no placeholder for it. A column is therefore shorter than `list_datasets`
+whenever some dataset lacks the key, and the two do not line up position for
+position. `list_datasets` gives the rows. Every column is a lookup on the
+name.
+
+Call it once per key and join the columns by name:
 
 ```rust
-let names = atlas.list_datasets();
-let months = atlas.attribute_by_dataset("month");
-let sources = atlas.attribute_by_dataset("source");
+let months = atlas.attributes_by_dataset(None, "month").await?;
+let sources = atlas.attributes_by_dataset(None, "source").await?;
+let temperature: HashMap<String, ArrayStats> = atlas
+    .array_stats_by_dataset("temperature")
+    .await?
+    .into_iter()
+    .map(|stats| (stats.name.clone(), stats))
+    .collect();
 
-for ((name, month), source) in names.iter().zip(months).zip(sources) {
-    println!("{name} {month:?} {source:?}");
+for name in atlas.list_datasets() {
+    println!(
+        "{name} {:?} {:?} {:?}",
+        months.get(&name),
+        sources.get(&name),
+        temperature.get(&name).and_then(|s| s.max.clone()),
+    );
 }
 ```
 
@@ -151,18 +163,14 @@ f0000.nc          1    test     1.0    24.0     24
 f0001.nc          2    test     2.0    25.0     24
 ```
 
+Every column keys on the dataset name, so the join is a lookup and never an
+alignment by position. A dataset missing from a column simply has no entry, and
+`get` answers `None` for it. Columns differ in length, because the keys a
+dataset carries differ from dataset to dataset.
+
 The first call opens the `_datasets` segment, and every later one reuses the
 handle. A table over ten thousand datasets therefore costs one open, whatever
 the number of keys. Each call walks the collection once.
-
-`array_stats_by_dataset` is the exception to the alignment. It leaves out a
-dataset that does not declare the array, so join that one by name:
-
-```rust
-let temperature: HashMap<_, _> =
-    atlas.array_stats_by_dataset("temperature").into_iter().collect();
-let bounds = temperature.get(&names[i]);
-```
 
 `tests/integration.rs` asserts this with a request-counting `ObjectStore`. An
 open of a collection above the 64 KiB tail probe issues at most two reads, and

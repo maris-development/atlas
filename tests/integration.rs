@@ -112,10 +112,10 @@ async fn build_fixture(path: &std::path::Path) {
         ds.write_array("observed", vec![0], times.view())
             .await
             .unwrap();
-        ds.set_attribute(
-            "installed",
-            Attr::TimestampNanoseconds(1_600_000_000_000_000_000),
-        );
+        // An attribute has no timestamp type, so the epoch nanoseconds go in
+        // as an integer and a second key names the unit.
+        ds.set_attribute("installed", Attr::Int64(1_600_000_000_000_000_000));
+        ds.set_attribute("installed_units", Attr::String("ns since epoch".into()));
         ds.finish().await.unwrap();
     }
 
@@ -339,129 +339,183 @@ async fn collection_stats_fold_every_dataset_that_holds_the_array() {
 }
 
 #[tokio::test]
-async fn one_attribute_across_every_dataset_lines_up_with_the_list() {
+async fn one_attribute_over_the_collection_keys_on_the_dataset_name() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
 
-    let names = atlas.list_datasets();
-    let months = atlas.attribute_by_dataset("month").await.unwrap();
-    assert_eq!(months.len(), names.len(), "one entry per live dataset");
+    let months = atlas.attributes_by_dataset(None, "month").await.unwrap();
+    // stations carries no month, so it has no entry at all.
+    assert_eq!(months.len(), 2);
+    assert_eq!(months["jan_2024"], Attr::Int64(1));
+    assert_eq!(months["feb_2024"], Attr::Int64(2));
+    assert!(!months.contains_key("stations"));
 
-    assert_eq!(months[0], Some(Attr::Int64(1)));
-    assert_eq!(months[1], Some(Attr::Int64(2)));
-    // stations carries no month, so the entry is present and empty.
-    assert_eq!(months[2], None);
+    // The map holds the datasets in write order, as `list_datasets` does.
+    assert_eq!(
+        months.keys().collect::<Vec<_>>(),
+        vec!["jan_2024", "feb_2024"]
+    );
 
-    // Index for index, it equals what each dataset reports on its own.
-    for (name, value) in names.iter().zip(&months) {
-        assert_eq!(
-            &atlas
-                .dataset(name)
-                .unwrap()
-                .get_attribute("month")
-                .await
-                .unwrap(),
-            value
-        );
+    // Name for name, it equals what each dataset reports on its own.
+    for name in atlas.list_datasets() {
+        let own = atlas
+            .dataset(&name)
+            .unwrap()
+            .get_attribute("month")
+            .await
+            .unwrap();
+        assert_eq!(months.get(&name), own.as_ref(), "{name}");
     }
 
-    // A key no dataset carries still gives a full column of None.
-    let missing = atlas.attribute_by_dataset("nope").await.unwrap();
-    assert_eq!(missing.len(), 3);
-    assert!(missing.iter().all(Option::is_none));
+    // A key no dataset carries gives an empty map.
+    assert!(
+        atlas
+            .attributes_by_dataset(None, "nope")
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
-async fn the_mask_hides_a_dataset_from_the_attribute_column() {
+async fn one_array_attribute_over_the_collection_keys_on_the_dataset_name() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
-    assert_eq!(atlas.attribute_by_dataset("month").await.unwrap().len(), 3);
+
+    // jan_2024 is the only dataset that annotates temperature.
+    let units = atlas
+        .attributes_by_dataset(Some("temperature"), "units")
+        .await
+        .unwrap();
+    assert_eq!(units.len(), 1);
+    assert_eq!(units["jan_2024"], Attr::String("celsius".into()));
+
+    // A key the array does not carry, and an array no dataset declares.
+    assert!(
+        atlas
+            .attributes_by_dataset(Some("temperature"), "nope")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        atlas
+            .attributes_by_dataset(Some("missing"), "units")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn the_mask_hides_a_dataset_from_the_attribute_map() {
+    let tmp = tempfile::tempdir().unwrap();
+    build_fixture(tmp.path()).await;
+    let atlas = Atlas::open_path(tmp.path()).await.unwrap();
+    assert_eq!(
+        atlas
+            .attributes_by_dataset(None, "month")
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 
     atlas.delete_dataset("jan_2024").await.unwrap();
-    let names = atlas.list_datasets();
-    let months = atlas.attribute_by_dataset("month").await.unwrap();
+    let months = atlas.attributes_by_dataset(None, "month").await.unwrap();
 
-    // The mask shortens both, so index 0 still means the same dataset.
-    assert_eq!(names, vec!["feb_2024", "stations"]);
-    assert_eq!(months.len(), names.len());
-    assert_eq!(months[0], Some(Attr::Int64(2)));
-    assert_eq!(months[1], None);
+    assert_eq!(atlas.list_datasets(), vec!["feb_2024", "stations"]);
+    assert_eq!(months.len(), 1);
+    assert_eq!(months.keys().collect::<Vec<_>>(), vec!["feb_2024"]);
+    assert_eq!(months["feb_2024"], Attr::Int64(2));
+    assert!(!months.contains_key("jan_2024"));
 }
 
 #[tokio::test]
 async fn attributes_and_stats_join_into_one_table() {
     // The shape a Parquet row group index has: one row per dataset, with the
-    // attributes beside the bounds.
+    // attributes beside the bounds. Every column keys on the dataset name, so
+    // the join is a lookup and never an alignment by position. Every column
+    // also keeps write order, so a walk of one gives the rows in order.
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
 
-    // Every attribute column lines up with the dataset names by index.
-    let names = atlas.list_datasets();
-    let months = atlas.attribute_by_dataset("month").await.unwrap();
-    let sources = atlas.attribute_by_dataset("source").await.unwrap();
-
-    // Array statistics leave out a dataset that lacks the array, so that one
-    // joins by name.
+    let months = atlas.attributes_by_dataset(None, "month").await.unwrap();
+    let sources = atlas.attributes_by_dataset(None, "source").await.unwrap();
     let temperature: std::collections::HashMap<String, atlas::ArrayStats> = atlas
         .array_stats_by_dataset("temperature")
         .await
         .unwrap()
         .into_iter()
+        .map(|stats| (stats.name.clone(), stats))
         .collect();
 
-    let table: Vec<_> = names
-        .iter()
-        .zip(&months)
-        .zip(&sources)
-        .map(|((name, month), source)| {
+    let table: Vec<_> = atlas
+        .list_datasets()
+        .into_iter()
+        .map(|name| {
             let bounds = temperature
-                .get(name)
+                .get(&name)
                 .map(|s| (s.min.clone(), s.max.clone()));
-            (name.as_str(), month.clone(), source.clone(), bounds)
+            let row = (
+                months.get(&name).cloned(),
+                sources.get(&name).cloned(),
+                bounds,
+            );
+            (name, row)
         })
         .collect();
 
     assert_eq!(table.len(), 3);
-    assert_eq!(table[0].1, Some(Attr::Int64(1)));
-    assert_eq!(table[0].2, Some(Attr::String("buoy".into())));
+    assert_eq!(table[0].0, "jan_2024");
+    assert_eq!(table[0].1.0, Some(Attr::Int64(1)));
+    assert_eq!(table[0].1.1, Some(Attr::String("buoy".into())));
     assert_eq!(
-        table[0].3,
+        table[0].1.2,
         Some((Some(StatValue::Float(0.0)), Some(StatValue::Float(31.0))))
     );
     // stations holds neither the attributes nor the array.
     assert_eq!(table[2].0, "stations");
-    assert_eq!(table[2].1, None);
-    assert_eq!(table[2].3, None);
+    assert_eq!(table[2].1.0, None);
+    assert_eq!(table[2].1.2, None);
 }
 
 #[tokio::test]
-async fn per_dataset_stats_list_every_live_dataset_in_write_order() {
+async fn per_dataset_stats_name_their_dataset_and_keep_write_order() {
     let tmp = tempfile::tempdir().unwrap();
     build_fixture(tmp.path()).await;
     let atlas = Atlas::open_path(tmp.path()).await.unwrap();
 
     let per = atlas.array_stats_by_dataset("temperature").await.unwrap();
-    let names: Vec<&str> = per.iter().map(|(n, _)| n.as_str()).collect();
+    // Every row names its own dataset, so a row identifies itself.
+    let names: Vec<&str> = per.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, vec!["jan_2024", "feb_2024"]);
-    assert_eq!(per[0].1.max, Some(StatValue::Float(31.0)));
-    assert_eq!(per[1].1.max, Some(StatValue::Float(-1.5)));
+    assert_eq!(per[0].max, Some(StatValue::Float(31.0)));
+    assert_eq!(per[1].max, Some(StatValue::Float(-1.5)));
 
-    // Each entry equals what that dataset reports on its own.
-    for (name, stats) in &per {
-        let view = atlas.dataset(name).unwrap();
-        assert_eq!(
-            view.array_stats("temperature").await.unwrap().as_ref(),
-            Some(stats)
-        );
+    // Each row holds the numbers that dataset reports on its own. Only the
+    // name differs: a view names the array, and a row names the dataset.
+    for stats in &per {
+        let own = atlas
+            .dataset(&stats.name)
+            .unwrap()
+            .array_stats("temperature")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(own.name, "temperature");
+        assert_eq!((&own.min, &own.max), (&stats.min, &stats.max));
+        assert_eq!(own.row_count, stats.row_count);
+        assert_eq!(own.null_count, stats.null_count);
     }
 
-    // stations declares neither, so it stays out of both lists.
+    // stations is the only dataset that declares name.
     let per_name = atlas.array_stats_by_dataset("name").await.unwrap();
     assert_eq!(per_name.len(), 1);
-    assert_eq!(per_name[0].0, "stations");
+    assert_eq!(per_name[0].name, "stations");
 
     // A name no dataset declares gives an empty list.
     assert!(
@@ -490,7 +544,7 @@ async fn the_mask_hides_a_dataset_from_the_per_dataset_stats() {
     atlas.delete_dataset("jan_2024").await.unwrap();
     let per = atlas.array_stats_by_dataset("temperature").await.unwrap();
     assert_eq!(per.len(), 1);
-    assert_eq!(per[0].0, "feb_2024");
+    assert_eq!(per[0].name, "feb_2024");
 
     // The mask on disk hides it for a fresh handle too.
     let reopened = Atlas::open_path(tmp.path()).await.unwrap();
@@ -813,10 +867,10 @@ async fn one_array_resolves_to_its_own_position_in_each_schema() {
     // a holds 1.0..=2.0 and b holds 110.0..=111.0.
     let per = atlas.array_stats_by_dataset("temperature").await.unwrap();
     assert_eq!(per.len(), 2);
-    assert_eq!(per[0].0, "a");
-    assert_eq!(per[0].1.min, Some(StatValue::Float(1.0)));
-    assert_eq!(per[1].0, "b");
-    assert_eq!(per[1].1.min, Some(StatValue::Float(110.0)));
+    assert_eq!(per[0].name, "a");
+    assert_eq!(per[0].min, Some(StatValue::Float(1.0)));
+    assert_eq!(per[1].name, "b");
+    assert_eq!(per[1].min, Some(StatValue::Float(110.0)));
 
     let merged = atlas.array_stats("temperature").await.unwrap().unwrap();
     assert_eq!(merged.min, Some(StatValue::Float(1.0)));
@@ -825,17 +879,19 @@ async fn one_array_resolves_to_its_own_position_in_each_schema() {
 }
 
 #[tokio::test]
-async fn timestamps_and_date_shaped_strings_stay_distinct() {
+async fn an_attribute_reads_back_the_type_it_stores() {
+    // A read rebuilds the value from its stored tag alone, and never from the
+    // schema. Every type therefore returns itself. There is no timestamp
+    // attribute to lose, and a string that looks like a date is still a
+    // string.
     let tmp = tempfile::tempdir().unwrap();
     {
         let w = AtlasWriter::create_path(tmp.path(), WriterConfig::default())
             .await
             .unwrap();
         let mut ds = w.add_dataset("d").await.unwrap();
-        ds.set_attribute(
-            "when",
-            Attr::TimestampNanoseconds(1_700_000_000_000_000_000),
-        );
+        ds.set_attribute("when", Attr::Int64(1_700_000_000_000_000_000));
+        ds.set_attribute("count", Attr::Int32(7));
         ds.set_attribute("looks_like", Attr::String("2023-11-14T22:13:20Z".into()));
         ds.finish().await.unwrap();
         w.finish().await.unwrap();
@@ -844,11 +900,23 @@ async fn timestamps_and_date_shaped_strings_stay_distinct() {
     let ds = atlas.dataset("d").unwrap();
     assert_eq!(
         ds.get_attribute("when").await.unwrap(),
-        Some(Attr::TimestampNanoseconds(1_700_000_000_000_000_000))
+        Some(Attr::Int64(1_700_000_000_000_000_000))
+    );
+    // A narrower integer keeps its width, because the stored form carries it.
+    assert_eq!(
+        ds.get_attribute("count").await.unwrap(),
+        Some(Attr::Int32(7))
     );
     assert_eq!(
         ds.get_attribute("looks_like").await.unwrap(),
         Some(Attr::String("2023-11-14T22:13:20Z".into()))
+    );
+
+    // The schema records the same type the value carries, because there is
+    // now nothing an attribute can declare that its value cannot hold.
+    assert_eq!(
+        ds.schema().attribute_dtype("when"),
+        Some(&atlas::DType::Int64)
     );
 }
 

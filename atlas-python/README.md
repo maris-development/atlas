@@ -127,7 +127,9 @@ warning to a file, each with its reason and the file it came from.
 | `object` / `S` / `U` | `string` |
 
 `bool`, `binary`, and the list types work as an *attribute* value. No one of
-them works yet as an array element type.
+them works yet as an array element type. `timestamp_nanoseconds` goes the other
+way: it is an array element type, and no attribute takes it. Store the
+nanoseconds as `int64` and name the unit beside it.
 
 ## Documentation
 

@@ -210,8 +210,8 @@ ds.array_stats("temperature").await?;        // min, max, null count, row count
 ds.attributes().await?;                      // dataset-level values
 ds.array_attributes("temperature").await?;   // one array's values
 atlas.array_stats("temperature").await?;     // every live dataset, combined
-atlas.array_stats_by_dataset("temperature").await?;
-atlas.attribute_by_dataset("month").await?;  // one attribute, one per dataset
+atlas.array_stats_by_dataset("temperature").await?;   // keyed by dataset name
+atlas.attributes_by_dataset(None, "month").await?;   // one key, every dataset
 ```
 
 `schema()` and `array_meta()` borrow the footer and copy no name. Call

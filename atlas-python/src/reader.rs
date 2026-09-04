@@ -56,9 +56,7 @@ impl PyAtlas {
     /// `{"min", "max", "null_count", "row_count"}` for `array`, over every
     /// live dataset that holds it. `None` if no live dataset does.
     ///
-    /// The counts add up. Each bound takes the wider of the two. A dataset
-    /// that declares the name with another dtype stays out, because two dtypes
-    /// do not compare.
+    /// The counts add up. Each bound takes the wider of the two.
     ///
     /// `array-format` keeps the statistics beside the data, so this reads that
     /// variable's segment. One open covers every dataset.
@@ -79,11 +77,10 @@ impl PyAtlas {
     /// over every live dataset that holds statistics for it, in write order.
     ///
     /// The deletion mask applies, so a hidden dataset never appears. A dataset
-    /// that does not declare the array does not appear either.
+    /// that does not declare the array does not appear either. An array no
+    /// dataset declares gives an empty dict.
     ///
-    /// Unlike `array_stats`, this keeps a dataset that declares the name with
-    /// another dtype. Nothing merges here, so two dtypes never have to
-    /// compare.
+    /// The keys join to `list_datasets` and to `attributes_by_dataset`.
     fn array_stats_by_dataset<'py>(
         &self,
         py: Python<'py>,
@@ -93,8 +90,43 @@ impl PyAtlas {
             .detach(|| runtime().block_on(self.inner.array_stats_by_dataset(array)))
             .map_err(to_py_err)?;
         let dict = PyDict::new(py);
-        for (name, stats) in per_dataset {
-            dict.set_item(name, stats_to_py(py, &stats)?)?;
+        for stats in per_dataset {
+            // Every row names its own dataset.
+            dict.set_item(stats.name.clone(), stats_to_py(py, &stats)?)?;
+        }
+        Ok(dict)
+    }
+
+    /// `{dataset: value}` for one attribute, over every live dataset that
+    /// carries it.
+    ///
+    /// `array` names the array the attribute annotates. Leave it out for a
+    /// dataset-level attribute.
+    ///
+    /// A dataset that does not carry the key has no entry, so the dict is
+    /// empty when nobody carries it. It holds no placeholder, and is shorter
+    /// than `list_datasets` whenever some dataset lacks the key. Walk
+    /// `list_datasets` for the rows, and look each name up here.
+    ///
+    /// The keys keep write order: the datasets that carry the key, in the
+    /// order `list_datasets` gives them. The deletion mask applies.
+    ///
+    /// One open covers the whole collection, whatever the dataset count. Call
+    /// it once per key to build a table of what every dataset holds. The keys
+    /// join to `list_datasets` and to `array_stats_by_dataset`.
+    #[pyo3(signature = (attr, array=None))]
+    fn attributes_by_dataset<'py>(
+        &self,
+        py: Python<'py>,
+        attr: &str,
+        array: Option<&str>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        let attrs = py
+            .detach(|| runtime().block_on(self.inner.attributes_by_dataset(array, attr)))
+            .map_err(to_py_err)?;
+        let dict = PyDict::new(py);
+        for (name, value) in &attrs {
+            dict.set_item(name, attr_to_py(py, value)?)?;
         }
         Ok(dict)
     }

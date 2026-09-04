@@ -1,12 +1,13 @@
 //! How a collection is read.
 //!
 //! An open reads the container's tail, and the deletion mask if one exists.
-//! Nothing else. That one read answers which datasets exist, what arrays they
-//! declare, the type of each, and every attribute value. None of it costs more
+//! Nothing else. That one read answers which datasets exist, what arrays and
+//! attribute keys they declare, and the type of each. None of it costs more
 //! I/O.
 //!
-//! Shape and chunking are the exception. The segment that holds the data
-//! records them, so the footer does not.
+//! The footer therefore describes the collection, and nothing more. It decodes
+//! no value. Shape, chunking, attribute values, and statistics all live in the
+//! segment that holds the data, and each carries its own type tag.
 //! [`DatasetView::array_layout`] opens that segment to answer.
 //!
 //! A segment holds one **variable** across the whole collection, keyed by
@@ -20,7 +21,7 @@
 //! [`Atlas::delete_dataset`] is the one exception. It rewrites the mask
 //! sidecar, and never touches the container.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 
 use array_format::{
@@ -212,21 +213,20 @@ impl Atlas {
     /// the minimum, the maximum, how many elements equal the fill value, and
     /// how many elements there are.
     ///
-    /// This comes from the footer, so it costs nothing. A deleted dataset
-    /// stays out. So does a dataset that declares the name with another dtype,
-    /// because two dtypes do not compare. Returns `None` when no live dataset
-    /// holds statistics for the array.
+    /// The bytes come from that variable's segment, so the first call opens
+    /// it. Every later call on the same handle is free. A deleted dataset
+    /// stays out. Returns `None` when no live dataset holds the array.
     ///
     /// Use [`array_stats_by_dataset`](Self::array_stats_by_dataset) for the
     /// same numbers split per dataset, and [`DatasetView::array_stats`] for
     /// one dataset on its own.
     pub async fn array_stats(&self, array: &str) -> Result<Option<ArrayStats>> {
         let mut merged: Option<ArrayStats> = None;
-        for (_, stats) in self.stats_of(array).await? {
+        for stats in self.stats_of(array).await? {
             match &mut merged {
-                Some(acc) => merge_stats(acc, stats),
+                Some(acc) => merge_stats(acc, &stats),
                 None => {
-                    let mut first = stats.clone();
+                    let mut first = stats;
                     first.name = array.to_string();
                     merged = Some(first);
                 }
@@ -237,171 +237,99 @@ impl Atlas {
 
     /// What each live dataset recorded about one array, in write order.
     ///
-    /// One entry per live dataset that holds statistics for `array`. The
-    /// deletion mask applies, so a hidden dataset never appears. A dataset
-    /// that does not declare the array does not appear either. The list is
-    /// empty when no live dataset holds the array.
+    /// Every entry names its dataset in [`ArrayStats::name`], so a row
+    /// identifies itself. Join it to [`list_datasets`](Self::list_datasets)
+    /// by that name. A dataset that does not declare the array has no entry,
+    /// and neither has one the deletion mask hides.
     ///
-    /// This comes from the footer, so it costs nothing.
-    ///
-    /// Unlike [`array_stats`](Self::array_stats), this keeps a dataset that
-    /// declares the name with another dtype. Nothing merges here, so two
-    /// dtypes never have to compare.
-    pub async fn array_stats_by_dataset(&self, array: &str) -> Result<Vec<(String, ArrayStats)>> {
-        Ok(self
-            .stats_of(array)
-            .await?
-            .into_iter()
-            .map(|(name, stats)| {
-                let mut owned = stats.clone();
-                owned.name = array.to_string();
-                (name.to_string(), owned)
-            })
-            .collect())
+    /// The list is empty when no live dataset holds the array.
+    pub async fn array_stats_by_dataset(&self, array: &str) -> Result<Vec<ArrayStats>> {
+        self.stats_of(array).await
     }
 
     /// The statistics of `array`, per live dataset that recorded them, in
     /// write order.
     ///
     /// One open of that variable's segment covers the whole collection, and
-    /// one pass over its table indexes it. `array_stats` on the segment scans
-    /// that table per call, so a lookup per dataset would be quadratic.
-    ///
-    /// A dataset that declares the name with another dtype stays out, because
-    /// two dtypes do not compare.
-    async fn stats_of(&self, array: &str) -> Result<Vec<(&str, &ArrayStats)>> {
-        let Some(positions) = self.footer.array_positions(array) else {
+    /// its table already holds one row per dataset. Reading it whole is
+    /// therefore one pass, where a lookup per dataset would be quadratic.
+    async fn stats_of(&self, array: &str) -> Result<Vec<ArrayStats>> {
+        let Some(file) = self.try_segment(array).await? else {
             return Ok(Vec::new());
         };
-        let live: Vec<(u32, u32)> = {
-            let deleted = self.deleted.read();
-            self.footer
-                .datasets
-                .values()
-                .enumerate()
-                .filter(|(ordinal, _)| !deleted.contains(&(*ordinal as u32)))
-                .filter(|(_, schema)| positions[**schema as usize].is_some())
-                .map(|(ordinal, schema)| (ordinal as u32, *schema))
-                .collect()
-        };
-        if live.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let file = self.segment(array).await?;
         let Some(table) = file.stats() else {
             return Ok(Vec::new());
         };
-        let by_dataset: std::collections::HashMap<&str, &ArrayStats> = table
+        let hidden = self.deleted_names();
+        Ok(table
             .entries()
             .iter()
-            .map(|a| (a.name.as_str(), a))
-            .collect();
+            .filter(|stats| !hidden.contains(stats.name.as_str()))
+            .cloned()
+            .collect())
+    }
 
-        // The pool holds each dtype once, so equal indices mean equal types.
-        let mut dtype: Option<u32> = None;
-        let mut out = Vec::with_capacity(live.len());
-        for (ordinal, schema) in live {
-            let position = positions[schema as usize].expect("filtered above") as usize;
-            let found = self.footer.schema_of(schema).arrays[position].1;
-            match dtype {
-                None => dtype = Some(found),
-                Some(first) if first != found => continue,
-                Some(_) => {}
-            }
-            let (name, _) = self
-                .footer
-                .datasets
-                .get_index(ordinal as usize)
-                .expect("the ordinal came from the map");
-            if let Some(stats) = by_dataset.get(name.as_str()) {
-                out.push((name.as_str(), *stats));
+    /// One attribute, over every live dataset that carries it.
+    ///
+    /// `array` names the array the attribute annotates. `None` reads the
+    /// dataset-level attribute instead, out of the reserved `_datasets`
+    /// segment.
+    ///
+    /// The map keys on the dataset name, so it joins to
+    /// [`list_datasets`](Self::list_datasets) and to
+    /// [`array_stats_by_dataset`](Self::array_stats_by_dataset) by that name.
+    /// A dataset that does not carry the key has no entry, so the map is
+    /// empty when nobody carries it. It therefore holds no placeholder, and
+    /// is shorter than [`list_datasets`](Self::list_datasets) whenever some
+    /// dataset lacks the key. Do not read it position by position against
+    /// that list. Walk the names and look each one up.
+    ///
+    /// The keys keep write order: they are the datasets that carry the key,
+    /// in the order `list_datasets` gives them.
+    ///
+    /// One open covers the whole collection, whatever the number of datasets.
+    /// Call it once per key to build a table of what every dataset holds:
+    ///
+    /// ```no_run
+    /// # async fn f(atlas: &atlas::Atlas) -> atlas::Result<()> {
+    /// let months = atlas.attributes_by_dataset(None, "month").await?;
+    /// let sources = atlas.attributes_by_dataset(None, "source").await?;
+    ///
+    /// // `list_datasets` gives the rows. Each column is a lookup, because a
+    /// // column leaves out the datasets that do not carry its key.
+    /// for name in atlas.list_datasets() {
+    ///     println!("{name} {:?} {:?}", months.get(&name), sources.get(&name));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn attributes_by_dataset(
+        &self,
+        array: Option<&str>,
+        attr: &str,
+    ) -> Result<IndexMap<String, Attr>> {
+        let variable = array.unwrap_or(DATASET_ATTRS_VARIABLE);
+        let Some(segment) = self.try_segment(variable).await? else {
+            return Ok(IndexMap::new());
+        };
+        // `list_datasets` walks the footer in write order, so the map keeps it.
+        let mut out = IndexMap::new();
+        for dataset in self.list_datasets() {
+            if let Some(value) = read_attribute(segment, attr, &dataset) {
+                out.insert(dataset, value);
             }
         }
         Ok(out)
     }
 
-    /// One dataset-level attribute, as a column over the live datasets.
-    ///
-    /// The result lines up with [`list_datasets`](Self::list_datasets) index
-    /// for index. Both walk the datasets in write order and both drop what
-    /// the deletion mask hides, so entry `i` belongs to dataset `i`. The
-    /// value is `None` where that dataset does not carry the key.
-    ///
-    /// The values live in the reserved `_datasets` segment, so this opens it
-    /// once and reads the key for every dataset. One open covers the whole
-    /// collection. Asking each dataset in turn costs the same open, but a
-    /// lookup per call.
-    ///
-    /// A key no schema names answers with no I/O at all, and so does a
-    /// collection where no live dataset carries it.
-    ///
-    /// Call it once per key to build a table of what every dataset holds. The
-    /// shape matches a Parquet row group index:
-    ///
-    /// ```no_run
-    /// # async fn f(atlas: &atlas::Atlas) -> atlas::Result<()> {
-    /// let names = atlas.list_datasets();
-    /// let months = atlas.attribute_by_dataset("month").await?;
-    /// let sources = atlas.attribute_by_dataset("source").await?;
-    ///
-    /// for ((name, month), source) in names.iter().zip(months).zip(sources) {
-    ///     println!("{name} {month:?} {source:?}");
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    ///
-    /// [`array_stats_by_dataset`](Self::array_stats_by_dataset) does not
-    /// align with this. It leaves out a dataset that does not declare the
-    /// array, so join that one by name.
-    pub async fn attribute_by_dataset(&self, key: &str) -> Result<Vec<Option<Attr>>> {
-        // The schema names the keys, so one pass over the pool gives the type
-        // each schema declares for this one. A key no schema names cannot
-        // appear on any dataset, and answers the whole collection at once.
-        let dtypes = self.footer.attr_dtypes(key);
-        let live: Vec<(u32, u32)> = {
-            let deleted = self.deleted.read();
-            self.footer
-                .datasets
-                .values()
-                .enumerate()
-                .filter(|(ordinal, _)| !deleted.contains(&(*ordinal as u32)))
-                .map(|(ordinal, schema)| (ordinal as u32, *schema))
-                .collect()
-        };
-        let Some(dtypes) = dtypes else {
-            return Ok(vec![None; live.len()]);
-        };
-        if live
+    /// Names of the datasets the deletion mask hides.
+    fn deleted_names(&self) -> HashSet<&str> {
+        let deleted = self.deleted.read();
+        deleted
             .iter()
-            .all(|(_, schema)| dtypes[*schema as usize].is_none())
-        {
-            return Ok(vec![None; live.len()]);
-        }
-
-        // One open covers the key for every dataset.
-        let file = self.segment(DATASET_ATTRS_VARIABLE).await?;
-        let mut out = Vec::with_capacity(live.len());
-        for (ordinal, schema) in live {
-            let Some(dtype) = dtypes[schema as usize] else {
-                out.push(None);
-                continue;
-            };
-            let (name, _) = self
-                .footer
-                .datasets
-                .get_index(ordinal as usize)
-                .expect("the ordinal came from the map");
-            let declared = self.footer.dtype(dtype).expect("validate checked it");
-            out.push(
-                file.get_attribute(name.as_str(), key)
-                    .ok()
-                    .flatten()
-                    .map(|v| Attr::from_stored(v, declared)),
-            );
-        }
-        Ok(out)
+            .filter_map(|ordinal| self.footer.datasets.get_index(*ordinal as usize))
+            .map(|(name, _)| name.as_str())
+            .collect()
     }
 
     /// When the collection was written, in milliseconds since the Unix epoch.
@@ -449,6 +377,17 @@ impl Atlas {
             array,
         )
         .await
+    }
+
+    /// The same, but `None` for a variable the collection does not hold. A
+    /// collection-wide call answers about a name nobody declared, instead of
+    /// failing on it.
+    async fn try_segment(&self, array: &str) -> Result<Option<&Arc<ArrayFile>>> {
+        match self.segment(array).await {
+            Ok(file) => Ok(Some(file)),
+            Err(Error::ArrayNotFound(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// A view of one dataset. This costs no I/O. The view answers names,
@@ -646,11 +585,7 @@ impl DatasetView {
     /// A dataset that declares no attribute costs no I/O, because the schema
     /// already says so.
     pub async fn attributes(&self) -> Result<IndexMap<String, Attr>> {
-        let keys: Vec<(String, crate::DType)> = self
-            .schema()
-            .attribute_pairs()
-            .map(|(key, dtype)| (key.to_string(), dtype.clone()))
-            .collect();
+        let keys: Vec<&str> = self.schema().attribute_names().collect();
         if keys.is_empty() {
             return Ok(IndexMap::new());
         }
@@ -660,28 +595,14 @@ impl DatasetView {
 
     /// One dataset-level attribute.
     pub async fn get_attribute(&self, key: &str) -> Result<Option<Attr>> {
-        let Some(declared) = self.schema().attribute_dtype(key).cloned() else {
-            return Ok(None);
-        };
         let file = self.segment(DATASET_ATTRS_VARIABLE).await?;
-        Ok(file
-            .get_attribute(self.name(), key)
-            .ok()
-            .flatten()
-            .map(|v| Attr::from_stored(v, &declared)))
+        Ok(read_attribute(file, key, self.name()))
     }
 
-    /// Reads `keys` off the array named `array` in `file`.
-    fn resolve(
-        file: &ArrayFile,
-        array: &str,
-        keys: Vec<(String, crate::DType)>,
-    ) -> IndexMap<String, Attr> {
+    /// Reads `keys` off the entry named `entry` in `file`.
+    fn resolve(file: &ArrayFile, entry: &str, keys: Vec<&str>) -> IndexMap<String, Attr> {
         keys.into_iter()
-            .filter_map(|(key, declared)| {
-                let value = file.get_attribute(array, &key).ok().flatten()?;
-                Some((key, Attr::from_stored(value, &declared)))
-            })
+            .filter_map(|key| Some((key.to_string(), read_attribute(file, key, entry)?)))
             .collect()
     }
 
@@ -694,10 +615,7 @@ impl DatasetView {
         let Some(meta) = self.array_meta(array) else {
             return Ok(IndexMap::new());
         };
-        let keys: Vec<(String, crate::DType)> = meta
-            .attribute_pairs()
-            .map(|(key, dtype)| (key.to_string(), dtype.clone()))
-            .collect();
+        let keys: Vec<&str> = meta.attribute_names();
         if keys.is_empty() {
             return Ok(IndexMap::new());
         }
@@ -707,18 +625,8 @@ impl DatasetView {
 
     /// One attribute of one array.
     pub async fn get_array_attribute(&self, array: &str, key: &str) -> Result<Option<Attr>> {
-        let Some(declared) = self
-            .array_meta(array)
-            .and_then(|meta| meta.attribute_dtype(key).cloned())
-        else {
-            return Ok(None);
-        };
         let file = self.segment(array).await?;
-        Ok(file
-            .get_attribute(self.name(), key)
-            .ok()
-            .flatten()
-            .map(|v| Attr::from_stored(v, &declared)))
+        Ok(read_attribute(file, key, self.name()))
     }
 
     /// What the write recorded about one array. The minimum, the maximum, how
@@ -779,6 +687,20 @@ impl DatasetView {
         )
         .await
     }
+}
+
+/// One attribute off one entry of a segment, or `None`.
+///
+/// A segment keys its entries by dataset name, so `dataset` names the entry.
+/// An entry the segment does not hold reads as `None`, exactly as a key it
+/// does not carry: neither is an error, because a dataset need not declare
+/// every array of the collection.
+fn read_attribute(segment: &ArrayFile, attr: &str, dataset: &str) -> Option<Attr> {
+    segment
+        .get_attribute(dataset, attr)
+        .ok()
+        .flatten()
+        .map(Attr::from_stored)
 }
 
 /// Folds one dataset's statistics for an array into the running total.

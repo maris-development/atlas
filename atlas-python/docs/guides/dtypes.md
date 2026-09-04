@@ -161,8 +161,13 @@ All four work as an **attribute** value, which is where they usually appear.
 ## Attribute types
 
 An attribute takes its type apart from an array, and the range is wider. Any
-scalar works: `bool`, the integer widths, a float, a string, bytes, and a
-nanosecond timestamp. A list of one of those works too.
+scalar works: `bool`, the integer widths, a float, a string, and bytes. A list
+of one of those works too.
+
+A timestamp is the one type an array takes and an attribute does not. The
+storage layer below has no timestamp attribute, so the value could not read
+back as one. Store the nanoseconds as `int64`, and name the unit in a second
+attribute. That is what a `timedelta64` variable already does, above.
 
 Some xarray attributes are no scalar. A nested dict, a ragged list, and a numpy
 array each encode as JSON on the way in. `describe` decodes them again:

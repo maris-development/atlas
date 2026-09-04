@@ -127,8 +127,15 @@ fn py_to_attr_typed(value: &Bound<'_, PyAny>, dtype: &str) -> PyResult<Attr> {
         "f64" | "float64" => Attr::Float64(value.extract()?),
         "string" | "str" => Attr::String(value.extract()?),
         "binary" | "bytes" => Attr::Binary(value.extract()?),
+        // An attribute has no timestamp type. `array-format` stores none, so
+        // the value could not read back as one. Reject it rather than store
+        // an integer under a name that promises otherwise. An array element
+        // type still takes `datetime64[ns]`; this is about attributes alone.
         "timestamp_ns" | "timestamp_nanoseconds" | "datetime64[ns]" => {
-            Attr::TimestampNanoseconds(value.extract()?)
+            return Err(PyValueError::new_err(
+                "an attribute cannot hold a timestamp. Store the nanoseconds \
+                 with dtype 'int64', and name the unit in a second attribute",
+            ))
         }
         other => {
             return Err(PyValueError::new_err(format!(
@@ -154,7 +161,6 @@ pub fn attr_to_py(py: Python<'_>, attr: &Attr) -> PyResult<Py<PyAny>> {
         Attr::Float64(v) => (*v).into_py_any(py),
         Attr::String(v) => v.clone().into_py_any(py),
         Attr::Binary(v) => PyBytes::new(py, v).into_py_any(py),
-        Attr::TimestampNanoseconds(v) => (*v).into_py_any(py),
         Attr::BoolList(v) => PyList::new(py, v)?.into_py_any(py),
         Attr::Int8List(v) => PyList::new(py, v)?.into_py_any(py),
         Attr::Int16List(v) => PyList::new(py, v)?.into_py_any(py),
