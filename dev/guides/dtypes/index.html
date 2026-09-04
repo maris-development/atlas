@@ -1241,8 +1241,12 @@ and lands everything else. See
 <p>All four work as an <strong>attribute</strong> value, which is where they usually appear.</p>
 <h2 id="attribute-types">Attribute types</h2>
 <p>An attribute takes its type apart from an array, and the range is wider. Any
-scalar works: <code>bool</code>, the integer widths, a float, a string, bytes, and a
-nanosecond timestamp. A list of one of those works too.</p>
+scalar works: <code>bool</code>, the integer widths, a float, a string, and bytes. A list
+of one of those works too.</p>
+<p>A timestamp is the one type an array takes and an attribute does not. The
+storage layer below has no timestamp attribute, so the value could not read
+back as one. Store the nanoseconds as <code>int64</code>, and name the unit in a second
+attribute. That is what a <code>timedelta64</code> variable already does, above.</p>
 <p>Some xarray attributes are no scalar. A nested dict, a ragged list, and a numpy
 array each encode as JSON on the way in. <code>describe</code> decodes them again:</p>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="s2">"2024-01.nc"</span><span class="p">)[</span><span class="s2">"attributes"</span><span class="p">]</span>

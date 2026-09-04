@@ -600,10 +600,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#segment-range" class="md-nav__link">
+  <a href="#where-the-bytes-are" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Segment range
+        Where the bytes are
       
     </span>
   </a>
@@ -902,10 +902,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#segment-range" class="md-nav__link">
+  <a href="#where-the-bytes-are" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Segment range
+        Where the bytes are
       
     </span>
   </a>
@@ -976,7 +976,7 @@ fetches array data, so a catalogue of ten thousand datasets costs one request.</
 </span></code></pre></div>
 <div class="language-python highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
 </span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    <span class="s2">"source"</span><span class="p">:</span> <span class="s2">"/data/collection"</span><span class="p">,</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="s2">"format_version"</span><span class="p">:</span> <span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    <span class="s2">"format_version"</span><span class="p">:</span> <span class="mi">6</span><span class="p">,</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    <span class="s2">"created_unix_ms"</span><span class="p">:</span> <span class="mi">1788165177965</span><span class="p">,</span>
 </span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    <span class="s2">"codec"</span><span class="p">:</span> <span class="s2">"zstd"</span><span class="p">,</span>
 </span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    <span class="s2">"container_bytes"</span><span class="p">:</span> <span class="mi">5571</span><span class="p">,</span>
@@ -1060,33 +1060,29 @@ back:</p>
 </span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="p">[</span><span class="n">a</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]</span> <span class="k">for</span> <span class="n">a</span> <span class="ow">in</span> <span class="n">detail</span><span class="p">[</span><span class="s2">"arrays"</span><span class="p">]</span> <span class="k">if</span> <span class="n">a</span><span class="p">[</span><span class="s2">"is_coordinate"</span><span class="p">]]</span>
 </span></code></pre></div>
 <p>The CLI marks them with <code>// coordinate</code>.</p>
-<h3 id="segment-range">Segment range</h3>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">detail</span><span class="p">[</span><span class="s2">"segment_range"</span><span class="p">]</span>   <span class="c1"># [8, 1691]</span>
-</span></code></pre></div>
-<p>The bytes this dataset occupies in <code>data.atlas</code>. They are a complete
-<code>array-format</code> file that stands alone:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">start</span><span class="p">,</span> <span class="n">end</span> <span class="o">=</span> <span class="n">detail</span><span class="p">[</span><span class="s2">"segment_range"</span><span class="p">]</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a><span class="n">blob</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="sa">f</span><span class="s2">"</span><span class="si">{</span><span class="n">collection</span><span class="si">}</span><span class="s2">/data.atlas"</span><span class="p">,</span> <span class="s2">"rb"</span><span class="p">)</span><span class="o">.</span><span class="n">read</span><span class="p">()[</span><span class="n">start</span><span class="p">:</span><span class="n">end</span><span class="p">]</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a><span class="nb">open</span><span class="p">(</span><span class="s2">"2024-01.af"</span><span class="p">,</span> <span class="s2">"wb"</span><span class="p">)</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">blob</span><span class="p">)</span>
-</span></code></pre></div>
+<h3 id="where-the-bytes-are">Where the bytes are</h3>
+<p>A dataset occupies no contiguous range. <code>data.atlas</code> stores one segment per
+<strong>variable</strong>, and each dataset's array sits inside it under the dataset's name.
+To read <code>temperature</code> across the collection therefore reads one segment. To
+read one whole dataset touches one segment per variable it declares.</p>
 <h2 id="filtering-a-fleet">Filtering a fleet</h2>
 <p>The footer holds both the attributes and the statistics. To filter across a
 whole collection therefore costs one request:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="n">collection</span> <span class="o">=</span> <span class="s2">"s3://bucket/2024"</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="n">hot</span> <span class="o">=</span> <span class="p">[</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a>    <span class="n">name</span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="n">collection</span><span class="p">)</span>
-</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="k">for</span> <span class="n">array</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="n">name</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]</span>
-</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>    <span class="k">if</span> <span class="n">array</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"temperature"</span> <span class="ow">and</span> <span class="n">array</span><span class="p">[</span><span class="s2">"stats"</span><span class="p">][</span><span class="s2">"max"</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">30</span>
-</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="p">]</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="kn">import</span><span class="w"> </span><span class="nn">atlas</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="n">collection</span> <span class="o">=</span> <span class="s2">"s3://bucket/2024"</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="n">hot</span> <span class="o">=</span> <span class="p">[</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    <span class="n">name</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">list_datasets</span><span class="p">(</span><span class="n">collection</span><span class="p">)</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>    <span class="k">for</span> <span class="n">array</span> <span class="ow">in</span> <span class="n">atlas</span><span class="o">.</span><span class="n">describe</span><span class="p">(</span><span class="n">collection</span><span class="p">,</span> <span class="n">name</span><span class="p">)[</span><span class="s2">"arrays"</span><span class="p">]</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>    <span class="k">if</span> <span class="n">array</span><span class="p">[</span><span class="s2">"name"</span><span class="p">]</span> <span class="o">==</span> <span class="s2">"temperature"</span> <span class="ow">and</span> <span class="n">array</span><span class="p">[</span><span class="s2">"stats"</span><span class="p">][</span><span class="s2">"max"</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">30</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="p">]</span>
 </span></code></pre></div>
 <p>That reads the footer once per <code>describe</code> call. To read it once in total, work
 from the <code>--json</code> output. Or accept the repeat, because each one is a single
 range read.</p>
 <p>A question about the collection as a whole needs no loop at all:</p>
-<div class="language-python highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">collection</span><span class="p">)[</span><span class="s2">"array_stats"</span><span class="p">][</span><span class="s2">"temperature"</span><span class="p">][</span><span class="s2">"max"</span><span class="p">]</span>   <span class="c1"># highest anywhere</span>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="n">atlas</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="n">collection</span><span class="p">)[</span><span class="s2">"array_stats"</span><span class="p">][</span><span class="s2">"temperature"</span><span class="p">][</span><span class="s2">"max"</span><span class="p">]</span>   <span class="c1"># highest anywhere</span>
 </span></code></pre></div>
 <h2 id="reading-array-values">Reading array values</h2>
 <p>Not from here. See <a href="../reading-data/">Reading data</a>.</p>

@@ -1030,7 +1030,7 @@ opened, so it is never a guess:</p>
 <p>The file gets every error and warning, with the reason:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>/data/collection<span class="w"> </span>--skip-unsupported<span class="w"> </span>--log-file<span class="w"> </span>ingest.log
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>$<span class="w"> </span>cat<span class="w"> </span>ingest.log
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.cli:<span class="w"> </span>atlas<span class="w"> </span><span class="m">0</span>.16.4:<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>...
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.cli:<span class="w"> </span>atlas<span class="w"> </span><span class="m">0</span>.17.0:<span class="w"> </span>create<span class="w"> </span>/data/nc<span class="w"> </span>...
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.ops:<span class="w"> </span>ingesting<span class="w"> </span><span class="m">2</span><span class="w"> </span>file<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>into<span class="w"> </span>/data/collection
 </span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>WARNING<span class="w"> </span>atlas.ops:<span class="w"> </span>/data/nc/buoy.nc:<span class="w"> </span>skipped<span class="w"> </span>array<span class="w"> </span><span class="s1">'flag'</span><span class="w"> </span>of<span class="w"> </span>dtype<span class="w"> </span>bool:<span class="w"> </span>numpy<span class="w"> </span>dtype<span class="w"> </span>dtype<span class="o">(</span><span class="s1">'bool'</span><span class="o">)</span><span class="w"> </span>is<span class="w"> </span>not<span class="w"> </span>supported<span class="w"> </span>by<span class="w"> </span>atlas<span class="w"> </span><span class="o">(</span>supported:<span class="w"> </span>...<span class="o">)</span>
 </span><span id="__span-2-6"><a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="m">2026</span>-09-01<span class="w"> </span><span class="m">14</span>:30:41<span class="w"> </span>INFO<span class="w">    </span>atlas.ops:<span class="w"> </span>wrote<span class="w"> </span><span class="m">1</span><span class="w"> </span>dataset<span class="o">(</span>s<span class="o">)</span><span class="p">;</span><span class="w"> </span>skipped<span class="w"> </span><span class="m">0</span><span class="w"> </span>file<span class="o">(</span>s<span class="o">)</span><span class="w"> </span>and<span class="w"> </span><span class="m">1</span><span class="w"> </span>array<span class="o">(</span>s<span class="o">)</span>
@@ -1060,10 +1060,6 @@ A failure part-way leaves no collection, and not a partial one.</p>
 <tr>
 <td><code>--no-recursive</code></td>
 <td>Scan the top directory alone. The scan descends by default</td>
-</tr>
-<tr>
-<td><code>-r</code>, <code>--recursive</code></td>
-<td>Accepted for compatibility. The scan already descends</td>
 </tr>
 <tr>
 <td><code>--codec {zstd,lz4,none}</code></td>
@@ -1251,7 +1247,7 @@ and any <code>array-format</code> reader opens the result.</p>
 <h2 id="info">info</h2>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>$<span class="w"> </span>atlas<span class="w"> </span>info<span class="w"> </span>/data/collection
 </span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>collection<span class="w"> </span>/data/collection
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>format<span class="w"> </span>version<span class="w">    </span><span class="m">1</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a><span class="w">  </span>format<span class="w"> </span>version<span class="w">    </span><span class="m">8</span>
 </span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a><span class="w">  </span>created<span class="w">           </span><span class="m">2026</span>-08-31T08:32:57Z
 </span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a><span class="w">  </span>codec<span class="w">             </span>zstd
 </span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a><span class="w">  </span>container<span class="w"> </span>size<span class="w">    </span><span class="m">5</span>.4<span class="w"> </span>KiB
