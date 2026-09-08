@@ -292,6 +292,15 @@ impl Atlas {
             .collect()
     }
 
+    /// The decoded footer, as the container stores it.
+    ///
+    /// The accessors below answer the common questions. This one opens the
+    /// pools and the segment ranges, for a tool that inspects a container.
+    /// It reports every dataset, and the mask hides none of them.
+    pub fn footer(&self) -> &CollectionFooter {
+        &self.footer
+    }
+
     /// When the collection was written, in milliseconds since the Unix epoch.
     pub fn created_unix_ms(&self) -> i64 {
         self.footer.created_unix_ms

@@ -17,7 +17,7 @@ use crate::schema::DatasetSchema;
 
 /// The index resolved, or a panic. `CollectionFooter::validate` runs at every
 /// decode and proves every index in the footer resolves.
-const VALIDATED: &str = "the footer validated at decode";
+pub(crate) const VALIDATED: &str = "the footer validated at decode";
 
 /// What one dataset declares: its arrays and its attribute keys, with types.
 ///

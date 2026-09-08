@@ -35,6 +35,9 @@
 //!
 //! # Writing
 //!
+//! [`prelude`] carries the whole API, for `use atlas::prelude::*;`. The
+//! example below names what it uses instead.
+//!
 //! ```
 //! use atlas::{Atlas, AtlasWriter, Attr, WriterConfig};
 //! use ndarray::Array2;
@@ -96,14 +99,22 @@
 mod config;
 mod error;
 mod format;
+pub mod prelude;
 mod reader;
 mod schema;
 mod writer;
 
 pub use config::{Codec, WriterConfig};
 pub use error::{Error, Result};
+pub use format::FORMAT_VERSION;
+pub use format::footer::{
+    AttrKeys, CollectionFooter, INLINE_ARRAYS, INLINE_ATTRS, InternedSchema, Interner,
+    VariableEntry,
+};
 pub use reader::{Atlas, DatasetView};
-pub use schema::{ArrayLayout, ArrayMeta, Attr, DatasetSchema, SchemaView};
+pub use schema::{
+    ArrayLayout, ArrayMeta, Attr, CollectionSchema, DTypeSet, DatasetSchema, SchemaView,
+};
 pub use writer::{AtlasWriter, DatasetWriter};
 
 pub use array_format::{ArrayElement, ArrayStats, DType, FillValue, StatValue, TimestampNs};

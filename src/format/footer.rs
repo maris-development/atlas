@@ -49,15 +49,15 @@ use smol_str::SmolStr;
 /// Arrays a schema holds inline. A NetCDF convention rarely passes this, and
 /// a schema that does spills to the heap once. The pool holds a handful of
 /// schemas, so the inline bytes cost nothing.
-const INLINE_ARRAYS: usize = 8;
+pub const INLINE_ARRAYS: usize = 8;
 
 /// Attribute keys a schema holds inline.
-const INLINE_ATTRS: usize = 4;
+pub const INLINE_ATTRS: usize = 4;
 
 /// One array's attribute keys with their value types.
-pub(crate) type AttrKeys = SmallVec<[(u32, u32); INLINE_ATTRS]>;
+pub type AttrKeys = SmallVec<[(u32, u32); INLINE_ATTRS]>;
 
-use crate::schema::{Attr, SchemaView};
+use crate::schema::{Attr, CollectionSchema, SchemaView};
 use crate::{Error, Result};
 
 /// What one dataset declares. Names and types, in definition order.
@@ -65,7 +65,7 @@ use crate::{Error, Result};
 /// Every field is a pool index, so the whole struct is `Hash` and `Eq`. That
 /// is what lets [`Interner`] settle a schema with one map lookup.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub(crate) struct InternedSchema {
+pub struct InternedSchema {
     /// `(array name, element dtype)`, in definition order.
     pub arrays: SmallVec<[(u32, u32); INLINE_ARRAYS]>,
     /// `(attribute key, value dtype)` at the dataset level, in the order
@@ -83,7 +83,7 @@ pub(crate) struct InternedSchema {
 /// read one variable over every dataset therefore opens one file, and reads a
 /// run of neighbouring blocks.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct VariableEntry {
+pub struct VariableEntry {
     /// Array name, as a `string_pool` index.
     pub name: u32,
     /// Absolute offset of this variable's segment in the container.
@@ -94,7 +94,7 @@ pub(crate) struct VariableEntry {
 
 /// The complete metadata of one collection.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct CollectionFooter {
+pub struct CollectionFooter {
     /// Footer schema version. It matches the trailer. The check runs again
     /// here, so a truncated read cannot pass as a valid footer.
     pub version: u32,
@@ -174,7 +174,7 @@ mod dataset_map_serde {
 ///
 /// The writer holds one, and hands out the indices the footer stores.
 #[derive(Debug, Default)]
-pub(crate) struct Interner {
+pub struct Interner {
     strings: Vec<SmolStr>,
     string_index: HashMap<SmolStr, u32>,
     dtypes: Vec<DType>,
@@ -184,7 +184,7 @@ pub(crate) struct Interner {
 
 impl Interner {
     /// Index of `s` in the string pool. Adds it if it is new.
-    pub(crate) fn intern_string(&mut self, s: &str) -> u32 {
+    pub fn intern_string(&mut self, s: &str) -> u32 {
         if let Some(&i) = self.string_index.get(s) {
             return i;
         }
@@ -198,7 +198,7 @@ impl Interner {
     ///
     /// A scan, because a collection holds a handful of types. `DType`
     /// implements neither `Hash` nor `Eq`, so a map is out anyway.
-    pub(crate) fn intern_dtype(&mut self, dtype: &DType) -> u32 {
+    pub fn intern_dtype(&mut self, dtype: &DType) -> u32 {
         if let Some(i) = self.dtypes.iter().position(|d| d == dtype) {
             return i as u32;
         }
@@ -210,7 +210,7 @@ impl Interner {
     ///
     /// `array_attrs` carries the array's position, not its name, because the
     /// caller already holds the arrays in definition order.
-    pub(crate) fn intern_schema(
+    pub fn intern_schema(
         &mut self,
         arrays: &IndexMap<String, DType>,
         attrs: &[(String, Attr)],
@@ -246,7 +246,7 @@ impl Interner {
     }
 
     /// Consumes the interner into the three pools the footer stores.
-    pub(crate) fn into_pools(self) -> (Vec<SmolStr>, Vec<DType>, Vec<InternedSchema>) {
+    pub fn into_pools(self) -> (Vec<SmolStr>, Vec<DType>, Vec<InternedSchema>) {
         (self.strings, self.dtypes, self.schemas)
     }
 }
@@ -254,14 +254,14 @@ impl Interner {
 impl CollectionFooter {
     /// Serializes to the bytes the container stores. Compact MessagePack,
     /// then zstd.
-    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
+    pub fn encode(&self) -> Result<Vec<u8>> {
         let packed = rmp_serde::to_vec(self)?;
         Ok(zstd::stream::encode_all(packed.as_slice(), 0)?)
     }
 
     /// Reverses [`encode`](Self::encode). Then checks the collection agrees
     /// with itself.
-    pub(crate) fn decode(bytes: &[u8]) -> Result<Self> {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
         let packed = zstd::stream::decode_all(bytes)
             .map_err(|e| Error::CorruptCollection(format!("footer is not valid zstd: {e}")))?;
         let footer: Self = rmp_serde::from_slice(&packed)?;
@@ -368,7 +368,7 @@ impl CollectionFooter {
     }
 
     /// The interned string at `idx`.
-    pub(crate) fn string(&self, idx: u32) -> Option<&str> {
+    pub fn string(&self, idx: u32) -> Option<&str> {
         self.string_pool.get(idx as usize).map(SmolStr::as_str)
     }
 
@@ -377,7 +377,7 @@ impl CollectionFooter {
     /// One call turns a per-dataset string compare into an integer compare. A
     /// name the pool never held cannot occur anywhere in the footer, so a
     /// `None` here answers the whole collection at once.
-    pub(crate) fn string_id(&self, s: &str) -> Option<u32> {
+    pub fn string_id(&self, s: &str) -> Option<u32> {
         self.string_pool
             .iter()
             .position(|p| p == s)
@@ -385,24 +385,34 @@ impl CollectionFooter {
     }
 
     /// The interned dtype at `idx`.
-    pub(crate) fn dtype(&self, idx: u32) -> Option<&DType> {
+    pub fn dtype(&self, idx: u32) -> Option<&DType> {
         self.dtype_pool.get(idx as usize)
     }
 
     /// The schema at `index`.
-    pub(crate) fn schema_of(&self, index: u32) -> &InternedSchema {
+    pub fn schema_of(&self, index: u32) -> &InternedSchema {
         // validate() proved the index resolves.
         &self.schema_pool[index as usize]
     }
 
     /// The schema at `index`, as the public borrowed view.
-    pub(crate) fn schema_view(&self, index: u32) -> SchemaView<'_> {
+    pub fn schema_view(&self, index: u32) -> SchemaView<'_> {
         SchemaView::new(self, self.schema_of(index))
+    }
+
+    /// Every name the collection declares, with every type it takes.
+    ///
+    /// [`schema_view`](Self::schema_view) answers for one dataset. This one
+    /// merges the whole schema pool, so a name appears once however many
+    /// datasets declare it. A name with two types is a collection whose
+    /// datasets disagree on it.
+    pub fn collection_schema(&self) -> CollectionSchema<'_> {
+        CollectionSchema::new(self)
     }
 
     /// Which segment holds the array named by `name`, as a
     /// [`variables`](Self::variables) position.
-    pub(crate) fn variable_index(&self, name: u32) -> Option<usize> {
+    pub fn variable_index(&self, name: u32) -> Option<usize> {
         self.variables.iter().position(|v| v.name == name)
     }
 }

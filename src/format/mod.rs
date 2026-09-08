@@ -28,7 +28,7 @@
 //! The container never changes after [`AtlasWriter::finish`](crate::AtlasWriter::finish).
 //! A delete writes the mask sidecar instead. See [`mask`].
 
-pub(crate) mod footer;
+pub mod footer;
 pub(crate) mod mask;
 pub(crate) mod segment_store;
 
@@ -37,7 +37,7 @@ pub(crate) const MAGIC: [u8; 4] = *b"ATLS";
 
 /// Version of the container framing and of the footer schema. The two move
 /// together. A change to one footer field is a format change.
-pub(crate) const FORMAT_VERSION: u32 = 8;
+pub const FORMAT_VERSION: u32 = 8;
 
 /// Bytes before the first segment: magic + version.
 pub(crate) const HEADER_SIZE: u64 = 8;

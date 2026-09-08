@@ -2,10 +2,12 @@
 //!
 //! - [`attr`]: [`Attr`], the public attribute value
 //! - [`view`]: [`SchemaView`] and [`ArrayMeta`], what a dataset declares
+//! - [`collection`]: [`CollectionSchema`], what every dataset declares
 //! - [`layout`]: [`ArrayLayout`], shape and chunking, read from a segment
 //! - [`dtype`]: serde support for `array_format`'s [`DType`](array_format::DType)
 
 mod attr;
+mod collection;
 pub(crate) mod dtype;
 mod layout;
 mod view;
@@ -14,6 +16,7 @@ use array_format::DType;
 use indexmap::IndexMap;
 
 pub use attr::Attr;
+pub use collection::{CollectionSchema, DTypeSet};
 pub use layout::ArrayLayout;
 pub use view::{ArrayMeta, SchemaView};
 
