@@ -117,7 +117,16 @@ pub use schema::{
 };
 pub use writer::{AtlasWriter, DatasetWriter};
 
-pub use array_format::{ArrayElement, ArrayStats, DType, FillValue, StatValue, TimestampNs};
+/// The crate that writes and reads a segment, re-exported whole.
+///
+/// A segment is an `array-format` file, and [`Atlas::segment`] hands out the
+/// open handle. Reach the rest of that crate through here, so a consumer
+/// cannot pin a version the container does not match.
+pub use array_format;
+
+pub use array_format::{
+    ArrayElement, ArrayFile, ArrayStats, DType, FillValue, StatValue, TimestampNs,
+};
 
 /// Rejects names that would be ambiguous or unsafe as path components.
 pub(crate) fn validate_name(name: &str) -> Result<()> {

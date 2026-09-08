@@ -42,6 +42,12 @@ async fn the_prelude_covers_a_write_and_a_read() -> AtlasResult<()> {
     let collection: CollectionSchema = footer.collection_schema();
     assert_eq!(collection.array_dtypes("temperature"), [&DType::Float32]);
 
+    // The segment handle, and the crate that defines it.
+    let segment: &std::sync::Arc<ArrayFile> = atlas.segment("temperature").await?;
+    let cfg: array_format::ReadConfig = array_format::ReadConfig::default();
+    let _ = cfg;
+    assert!(segment.stats().count() > 0);
+
     let stats: Option<ArrayStats> = atlas.array_stats("temperature").await?;
     assert!(stats.is_some());
     assert_eq!(atlas.codec(), Codec::Zstd);

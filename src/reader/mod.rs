@@ -32,7 +32,7 @@ use parking_lot::RwLock;
 use tracing::debug;
 
 use crate::config::{DEFAULT_CACHE_CAPACITY, DEFAULT_IO_CACHE_CAPACITY};
-use crate::format::footer::CollectionFooter;
+use crate::format::footer::{CollectionFooter, VariableEntry};
 use crate::format::segment_store::SegmentStore;
 use crate::format::{self, DATA_FILE, DATASET_ATTRS_VARIABLE, MASK_FILE, child, mask};
 use crate::schema::{ArrayLayout, ArrayMeta, Attr, SchemaView};
@@ -334,9 +334,40 @@ impl Atlas {
         self.footer.schema_pool.len()
     }
 
+    /// Every variable that has a segment, in container order.
+    ///
+    /// This is the container's own list, so it names the reserved
+    /// `_datasets` segment as well. [`list_arrays`](Self::list_arrays) gives
+    /// the arrays the live datasets declare, sorted, and leaves that one out.
+    pub fn segment_names(&self) -> Vec<&str> {
+        self.footer
+            .variables
+            .iter()
+            .filter_map(|v| self.footer.string(v.name))
+            .collect()
+    }
+
+    /// Where one variable's segment sits in `data.atlas`. `None` for a
+    /// variable the collection does not hold.
+    ///
+    /// The entry gives a byte range. A segment is a complete `array-format`
+    /// file, so those bytes open on their own once cut out.
+    pub fn segment_entry(&self, array: &str) -> Option<&VariableEntry> {
+        let index = self
+            .footer
+            .string_id(array)
+            .and_then(|id| self.footer.variable_index(id))?;
+        Some(&self.footer.variables[index])
+    }
+
     /// Opens the segment that holds `array`. This runs once per collection
     /// handle, however many datasets ask for the same variable.
-    async fn segment(&self, array: &str) -> Result<&Arc<ArrayFile>> {
+    ///
+    /// The handle is the `array-format` file itself. It answers layout,
+    /// attributes, and statistics for every dataset in the collection, keyed
+    /// by dataset name, and reads chunks on demand. The deletion mask does
+    /// not reach it, so it still holds a deleted dataset's entry.
+    pub async fn segment(&self, array: &str) -> Result<&Arc<ArrayFile>> {
         open_segment(
             &self.store,
             &self.data_path,
@@ -351,7 +382,7 @@ impl Atlas {
     /// The same, but `None` for a variable the collection does not hold. A
     /// collection-wide call answers about a name nobody declared, instead of
     /// failing on it.
-    async fn try_segment(&self, array: &str) -> Result<Option<&Arc<ArrayFile>>> {
+    pub async fn try_segment(&self, array: &str) -> Result<Option<&Arc<ArrayFile>>> {
         match self.segment(array).await {
             Ok(file) => Ok(Some(file)),
             Err(Error::ArrayNotFound(_)) => Ok(None),
@@ -648,7 +679,11 @@ impl DatasetView {
 
     /// Opens the segment that holds `array`. This runs once per collection
     /// handle, however many datasets ask for the same variable.
-    async fn segment(&self, array: &str) -> Result<&Arc<ArrayFile>> {
+    ///
+    /// The segment holds the array for every dataset, so it keys its entries
+    /// on the dataset name. Pass [`name`](Self::name) to reach this
+    /// dataset's own.
+    pub async fn segment(&self, array: &str) -> Result<&Arc<ArrayFile>> {
         open_segment(
             &self.store,
             &self.data_path,
